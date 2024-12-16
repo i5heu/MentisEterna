@@ -7,9 +7,10 @@ import (
 	"github.com/i5heu/ouroboros-db"
 )
 
-func StartDB() (*ouroboros.OuroborosDB, error) {
+func StartDB(absPath string) (*ouroboros.OuroborosDB, error) {
+	fmt.Println("Starting database at path:", absPath)
 	conf := ouroboros.Config{
-		Paths:                     []string{"./data"},
+		Paths:                     []string{absPath},
 		MinimumFreeGB:             1,
 		GarbageCollectionInterval: 10 * time.Minute,
 	}

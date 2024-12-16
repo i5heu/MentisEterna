@@ -1,6 +1,6 @@
 server:
-  address: "localhost:8088"
-  port: 8088
+  address: "localhost:8188"
+  port: 8188
 
 database:
   host: "localhost"
