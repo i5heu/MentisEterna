@@ -1,0 +1,4 @@
+time="2024-12-16T14:50:54Z" level=error msg="Error finding device and mount point: mount point not found for path: ./data" path=./data
+time="2024-12-16T14:50:54Z" level=fatal msg="mount point not found for path: ./data"
+time="2024-12-16T14:51:07Z" level=error msg="Error finding device and mount point: mount point not found for path: ./data" path=./data
+time="2024-12-16T14:51:07Z" level=fatal msg="mount point not found for path: ./data"
