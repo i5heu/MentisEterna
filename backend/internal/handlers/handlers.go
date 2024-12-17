@@ -57,6 +57,7 @@ func (h *Handler) StoreNoteHandler(w http.ResponseWriter, r *http.Request) {
 		FastMeta:        nil,
 		Metadata:        note,
 		File:            note,
+		FullTextSearch:  true,
 	})
 	if err != nil {
 		http.Error(w, "Failed to store note", http.StatusInternalServerError)
