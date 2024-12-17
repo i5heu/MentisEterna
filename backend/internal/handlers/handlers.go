@@ -14,7 +14,21 @@ type Handler struct {
 	DB *ouroboros.OuroborosDB
 }
 
+// addCORS adds the necessary CORS headers to the response
+func addCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:9000")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
 func (h *Handler) StoreNoteHandler(w http.ResponseWriter, r *http.Request) {
+	addCORS(w)
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Read note from request body
 	note, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -53,6 +67,13 @@ func (h *Handler) StoreNoteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetNoteHandler(w http.ResponseWriter, r *http.Request) {
+	addCORS(w)
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Retrieve the "Notes" root event
 	rootEvents, err := h.DB.DB.GetRootEventsWithTitle("Notes")
 	if err != nil || len(rootEvents) == 0 {
@@ -78,6 +99,13 @@ func (h *Handler) GetNoteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func HelloHandler(w http.ResponseWriter, r *http.Request) {
+	addCORS(w)
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Hello, World!"))
 }
