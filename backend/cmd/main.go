@@ -1,6 +1,7 @@
 package main
 
 import (
+	"backend/internal/handlers"
 	"backend/internal/routes"
 	"backend/internal/setup"
 	"backend/pkg/config"
@@ -29,8 +30,14 @@ func main() {
 	defer db.Close()
 
 	srv := server.NewServer(cfg.Server.Address)
-	router := routes.SetupRoutes() // Setup routes
-	srv.SetHandler(router)         // Set the router as handler
+
+	// Create handler with db
+	handler := &handlers.Handler{DB: db}
+
+	// Setup routes with handler
+	router := routes.SetupRoutes(handler)
+	srv.SetHandler(router)
+
 	if err := srv.Start(); err != nil {
 		log.Fatalf("Error starting the server: %v", err)
 	}
