@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -66,6 +67,13 @@ func (h *Handler) StoreNoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// Define a struct for the note with Content, Hash, and Level
+type Note struct {
+	Content string `json:"content"`
+	Hash    string `json:"hash"`
+	Level   string `json:"level"`
+}
+
 func (h *Handler) GetNoteHandler(w http.ResponseWriter, r *http.Request) {
 	addCORS(w)
 
@@ -88,14 +96,28 @@ func (h *Handler) GetNoteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Retrieve notes from child events
+	var notes []Note
 	for _, event := range childEvents {
-		note, err := h.DB.DB.GetFile(event)
+		noteData, err := h.DB.DB.GetFile(event)
 		if err != nil {
 			continue
 		}
-		w.Write(note)
-		w.Write([]byte("\n"))
+		var note Note
+		note.Content = string(noteData)
+		note.Hash = event.EventHash.String()
+		note.Level = event.Level.String()
+		notes = append(notes, note)
 	}
+
+	// Convert notes to JSON
+	response, err := json.MarshalIndent(notes, "", "  ")
+	if err != nil {
+		http.Error(w, "Failed to marshal notes", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(response)
 }
 
 func HelloHandler(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,14 @@
     let messages: string[] = [];
     let input: string = "";
 
+    type Note = {
+        content: string;
+        hash: string;
+        level: string;
+    };
+
+    let notes: Note[] = [];
+
     async function handleInput() {
         if (input.startsWith("/new ")) {
             const content = input.slice(5);
@@ -17,8 +25,7 @@
         } else if (input.trim() === "/list") {
             // Send GET request to retrieve notes
             const response = await fetch("http://localhost:8188/note");
-            const text = await response.text();
-            messages.push(`Notes:\n${text}`);
+            notes = await response.json();
         } else {
             console.log(`You: ${input}`);
             messages.push(`You: ${input}`);
@@ -32,7 +39,19 @@
 
 <div class="chat-container">
     <div class="messages">
-        LOL
+        {#each notes as note}
+            <div class="note-card">
+                <div class="note-content">{note.content}</div>
+                {#if note.hash || note.level}
+                    <div class="note-meta">
+                        {#if note.hash}<span class="hash">{note.hash}</span
+                            >{/if}
+                        {#if note.level}<span class="level">{note.level}</span
+                            >{/if}
+                    </div>
+                {/if}
+            </div>
+        {/each}
         {#each messages as message}
             <div class="message">{message}</div>
         {/each}
@@ -91,5 +110,68 @@
         border: none;
         color: #ffffff;
         cursor: pointer;
+    }
+    /* pre {
+        background-color: #2e2e2e;
+        padding: 10px;
+        border-radius: 5px;
+        color: #ffffff;
+    } */
+    :root {
+        --dark-bg: #1a1a1a;
+        --dark-card: #2d2d2d;
+        --dark-text: #e1e1e1;
+        --dark-meta: #8a8a8a;
+        --dark-hover: #353535;
+        --dark-hash: #61afef;
+        --dark-level-bg: #2c3c4c;
+    }
+
+    .note-card {
+        background: var(--dark-card);
+        border-radius: 8px;
+        padding: 16px;
+        margin: 12px 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        transition: all 0.2s ease;
+    }
+
+    .note-card:hover {
+        transform: translateY(-2px);
+        background: var(--dark-hover);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+    }
+
+    .note-content {
+        color: var(--dark-text);
+        font-size: 1.1em;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .note-meta {
+        margin-top: 12px;
+        font-size: 0.9em;
+        color: var(--dark-meta);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .hash {
+        color: var(--dark-hash);
+        font-family: monospace;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: rgba(97, 175, 239, 0.1);
+    }
+
+    .level {
+        background: var(--dark-level-bg);
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.8em;
+        color: var(--dark-text);
     }
 </style>
