@@ -34,7 +34,7 @@ func (h *Handler) StoreNoteHandler(w http.ResponseWriter, r *http.Request) {
 		rootEvent = rootEvents[0]
 	}
 
-	fmt.Println("note:", string(note))
+	fmt.Println("note:", string(note), rootEvent.EventHash)
 
 	// Store the note
 	_, err = h.DB.DB.StoreFile(storage.StoreFileOptions{
