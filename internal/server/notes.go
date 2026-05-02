@@ -273,8 +273,11 @@ func (s *Server) syncEmbeddingAfterEdit(noteID int64, title, body string) {
 		return
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
+	// vss0 virtual tables don't support UPDATE/INSERT OR REPLACE.
+	// Must DELETE then INSERT.
+	_, _ = s.db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, noteID)
 	_, err = s.db.Exec(
-		`INSERT OR REPLACE INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
+		`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
 		noteID, vecJSON,
 	)
 	if err != nil {
@@ -321,7 +324,7 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN updates u ON u.id = (
 			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
 		)
-		WHERE vss_match(vss.body_embedding, ?)
+		WHERE vss_search(vss.body_embedding, ?)
 		ORDER BY vss.distance ASC
 		LIMIT 10
 	`, vecJSON)
