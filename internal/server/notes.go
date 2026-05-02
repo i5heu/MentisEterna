@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -314,36 +315,107 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
 
-	rows, err := s.db.Query(`
-		SELECT n.id, n.title, n.parent_id, n.created_at,
-		       COALESCE(u.body, '') AS body,
-		       COALESCE(u.created_at, n.created_at) AS updated_at,
-		       vss.distance
-		FROM vss_notes vss
-		JOIN notes n ON n.id = vss.rowid
-		LEFT JOIN updates u ON u.id = (
-			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
-		)
-		WHERE vss_search(vss.body_embedding, ?)
-		ORDER BY vss.distance ASC
+	// Guard: if vss_notes is empty, vss_search crashes faiss with "k > 0".
+	var vssCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_notes`).Scan(&vssCount); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if vssCount == 0 {
+		writeJSON(w, http.StatusOK, []SearchResult{})
+		return
+	}
+
+	// Step 1: Use vss_search to get matching rowids and distances.
+	// IMPORTANT: vss_search must not be combined with JOINs — sqlite-vss hangs.
+	vssRows, err := s.db.Query(`
+		SELECT rowid, distance
+		FROM vss_notes
+		WHERE vss_search(body_embedding, ?)
+		ORDER BY distance ASC
 		LIMIT 10
 	`, vecJSON)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	defer rows.Close()
+	defer vssRows.Close()
+
+	type vssHit struct {
+		rowid    int64
+		distance float64
+	}
+	var hits []vssHit
+	for vssRows.Next() {
+		var h vssHit
+		if err := vssRows.Scan(&h.rowid, &h.distance); err != nil {
+			writeErr(w, err)
+			return
+		}
+		hits = append(hits, h)
+	}
+	if err := vssRows.Err(); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	if len(hits) == 0 {
+		writeJSON(w, http.StatusOK, []SearchResult{})
+		return
+	}
+
+	// Step 2: Fetch full note data for each hit.
+	// Build a map for O(1) distance lookup.
+	distByID := make(map[int64]float64, len(hits))
+	for _, h := range hits {
+		distByID[h.rowid] = h.distance
+	}
+
+	// Collect IDs in order for the IN clause.
+	ids := make([]any, len(hits))
+	placeholders := make([]string, len(hits))
+	for i, h := range hits {
+		ids[i] = h.rowid
+		placeholders[i] = "?"
+	}
+
+	noteRows, err := s.db.Query(`
+		SELECT n.id, n.title, n.parent_id, n.created_at,
+		       COALESCE(u.body, '') AS body,
+		       COALESCE(u.created_at, n.created_at) AS updated_at
+		FROM notes n
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
+		WHERE n.id IN (`+strings.Join(placeholders, ",")+`)
+	`, ids...)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer noteRows.Close()
 
 	results := []SearchResult{}
-	for rows.Next() {
+	for noteRows.Next() {
 		var sr SearchResult
-		err := rows.Scan(&sr.ID, &sr.Title, &sr.ParentID, &sr.CreatedAt,
-			&sr.Body, &sr.UpdatedAt, &sr.Distance)
+		err := noteRows.Scan(&sr.ID, &sr.Title, &sr.ParentID, &sr.CreatedAt,
+			&sr.Body, &sr.UpdatedAt)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
+		sr.Distance = distByID[sr.ID]
 		results = append(results, sr)
 	}
+	if err := noteRows.Err(); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	// Re-sort by distance since IN clause doesn't preserve order.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Distance < results[j].Distance
+	})
+
 	writeJSON(w, http.StatusOK, results)
 }
