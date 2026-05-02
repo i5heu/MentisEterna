@@ -29,6 +29,25 @@ func Open(path string) (*DB, error) {
 	return d, nil
 }
 
+// OpenInMemory opens a fresh SQLite database entirely in RAM.
+// This is significantly faster than opening on-disk databases.
+// The connection pool is pinned to 1 so all operations share the same in-memory database.
+func OpenInMemory() (*DB, error) {
+	sqlDB, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite in-memory: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	if err := sqlDB.Ping(); err != nil {
+		return nil, fmt.Errorf("ping sqlite: %w", err)
+	}
+	d := &DB{sqlDB}
+	if err := d.migrate(); err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	return d, nil
+}
+
 func (d *DB) migrate() error {
 	if err := d.ensureAuthTables(); err != nil {
 		return err
