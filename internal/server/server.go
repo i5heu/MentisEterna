@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/i5heu/MentisEterna/internal/db"
@@ -39,6 +40,14 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	})
 	mux.HandleFunc("/notes/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/history") {
+			if r.Method == http.MethodGet {
+				s.getNoteHistory(w, r)
+			} else {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			s.getNote(w, r)

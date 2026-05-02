@@ -49,3 +49,7 @@ export async function deleteNote(token, id) {
     headers: authHeaders(token),
   })
 }
+
+export async function fetchNoteHistory(token, id) {
+  return request(`/notes/${id}/history`, { headers: authHeaders(token) })
+}
