@@ -3,6 +3,7 @@
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
+        <img src="../assets/MentisEterna_logo.svg" alt="Logo" class="app-logo" />
         <span class="app-title">MentisEterna</span>
         <button class="btn-ghost icon-btn" title="Logout" @click="$emit('logout')">⏻</button>
       </div>
@@ -239,6 +240,11 @@ function fmtDateFull(iso) {
   justify-content: space-between;
   padding: 1rem 1rem 0.75rem;
   border-bottom: 1px solid var(--border-color);
+}
+
+.app-logo {
+  width: 2rem;
+  height: 2rem;
 }
 
 .app-title {
