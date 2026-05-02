@@ -1,7 +1,6 @@
 package db
 
 import (
-	"path/filepath"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -12,7 +11,7 @@ import (
 // even when invoked inside rapid.Check callbacks.
 func openDB(t *testing.T) *DB {
 	t.Helper()
-	d, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	d, err := OpenInMemory()
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -22,6 +21,7 @@ func openDB(t *testing.T) *DB {
 
 // TestPropPasswordRoundTrip: any non-empty password that is set must be accepted on check.
 func TestPropPasswordRoundTrip(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		d := openDB(t)
 		pw := rapid.StringMatching(`[a-zA-Z0-9!@#$%]{1,80}`).Draw(rt, "password")
@@ -40,6 +40,7 @@ func TestPropPasswordRoundTrip(t *testing.T) {
 
 // TestPropWrongPasswordNeverMatches: a string different from the stored password must never validate.
 func TestPropWrongPasswordNeverMatches(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		d := openDB(t)
 		pw := rapid.StringMatching(`[a-z]{4,40}`).Draw(rt, "password")
@@ -60,6 +61,7 @@ func TestPropWrongPasswordNeverMatches(t *testing.T) {
 
 // TestPropSessionsAlwaysUnique: every session token must be distinct from all previously issued ones.
 func TestPropSessionsAlwaysUnique(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		d := openDB(t)
 		n := rapid.IntRange(2, 12).Draw(rt, "count")
@@ -79,6 +81,7 @@ func TestPropSessionsAlwaysUnique(t *testing.T) {
 
 // TestPropDeleteNoteCascadesToUpdates: deleting a note row must cascade-delete all its updates.
 func TestPropDeleteNoteCascadesToUpdates(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		d := openDB(t)
 		updateCount := rapid.IntRange(0, 10).Draw(rt, "updates")
@@ -112,6 +115,7 @@ func TestPropDeleteNoteCascadesToUpdates(t *testing.T) {
 // TestPropDeleteParentSetsChildParentToNull: deleting a parent note must set the child's
 // parent_id to NULL (ON DELETE SET NULL), not delete the child.
 func TestPropDeleteParentSetsChildParentToNull(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		d := openDB(t)
 		grandChildren := rapid.IntRange(0, 5).Draw(rt, "grandChildren")

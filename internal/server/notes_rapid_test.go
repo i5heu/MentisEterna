@@ -6,19 +6,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"github.com/i5heu/MentisEterna/internal/db"
 	"pgregory.net/rapid"
 )
 
-// newServerRapid opens a fresh Server in the outer test's temp dir.
-// Must use the outer *testing.T so that TempDir and Cleanup work correctly
+// newServerRapid opens a fresh Server with an in-memory database.
+// Must use the outer *testing.T so that Cleanup works correctly
 // even when called inside rapid.Check callbacks.
 func newServerRapid(t *testing.T) *Server {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	d, err := db.OpenInMemory()
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -73,6 +72,7 @@ func rapidUpdateNote(rt *rapid.T, s *Server, id int64, title, body string) Note 
 
 // TestPropCreateAndGetNote: a note retrieved immediately after creation must match title and body.
 func TestPropCreateAndGetNote(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		s := newServerRapid(t)
 		title := rapid.StringMatching(`[a-zA-Z][a-zA-Z0-9 _-]{0,49}`).Draw(rt, "title")
@@ -101,6 +101,7 @@ func TestPropCreateAndGetNote(t *testing.T) {
 
 // TestPropEachUpdateAddsOneHistoryEntry: N updates must grow history to exactly N+1 entries.
 func TestPropEachUpdateAddsOneHistoryEntry(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		s := newServerRapid(t)
 		updateCount := rapid.IntRange(1, 8).Draw(rt, "updates")
@@ -134,6 +135,7 @@ func TestPropEachUpdateAddsOneHistoryEntry(t *testing.T) {
 // TestPropDeleteNoteRemovesUpdatesFromDB: after a note is deleted, its updates must not
 // remain in the database (verifies ON DELETE CASCADE on updates.note_id).
 func TestPropDeleteNoteRemovesUpdatesFromDB(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		s := newServerRapid(t)
 		updateCount := rapid.IntRange(0, 6).Draw(rt, "updates")
@@ -163,6 +165,7 @@ func TestPropDeleteNoteRemovesUpdatesFromDB(t *testing.T) {
 
 // TestPropNoteListCountMatchesCreated: after creating N notes, listing must return exactly N results.
 func TestPropNoteListCountMatchesCreated(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		s := newServerRapid(t)
 		n := rapid.IntRange(1, 10).Draw(rt, "count")
@@ -190,6 +193,7 @@ func TestPropNoteListCountMatchesCreated(t *testing.T) {
 
 // TestPropLatestBodyIsReturned: getting a note must always reflect the body from the most recent update.
 func TestPropLatestBodyIsReturned(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		s := newServerRapid(t)
 		title := rapid.StringMatching(`[a-zA-Z][a-zA-Z0-9]{0,29}`).Draw(rt, "title")
