@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/server"
 )
 
@@ -21,7 +22,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := server.New(database, envOr("ADDR", ":8080")).Start(ctx); err != nil {
+	embeddingClient := llm.NewEmbeddingClient()
+	if err := server.New(database, envOr("ADDR", ":8080"), embeddingClient).Start(ctx); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 	log.Println("server stopped, database closed")
