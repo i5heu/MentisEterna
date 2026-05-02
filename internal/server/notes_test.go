@@ -16,13 +16,13 @@ import (
 // mockEmbedder is a deterministic Embedder for tests.
 // It maps text -> a fixed-dimension vector so we can verify the full
 // search pipeline without relying on a running Ollama instance.
-// Uses dimension 2048 to match the production Qwen3-Embedding-4B model.
+// Uses dimension 2560 to match the production Qwen3-Embedding-4B model.
 type mockEmbedder struct {
 	mu      sync.Mutex
 	vectors map[string][]float64
 }
 
-const mockEmbeddingDim = 2048
+const mockEmbeddingDim = 2560
 
 func newMockEmbedder() *mockEmbedder {
 	return &mockEmbedder{

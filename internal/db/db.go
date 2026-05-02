@@ -14,7 +14,7 @@ import (
 func init() {
 	extPath := os.Getenv("VSS_EXT_PATH")
 	if extPath == "" {
-		extPath = "lib"
+		extPath = findExtPath()
 	}
 	vectorLib := filepath.Join(extPath, "vector0")
 	vssLib := filepath.Join(extPath, "vss0")
@@ -30,6 +30,28 @@ func init() {
 			return nil
 		},
 	})
+}
+
+// findExtPath locates the directory containing vector0.so and vss0.so.
+// It checks VSS_EXT_PATH env, then searches from CWD up to the module root.
+func findExtPath() string {
+	// Walk up from the current working directory looking for "lib/vector0.so".
+	dir, err := os.Getwd()
+	if err != nil {
+		return "lib"
+	}
+	for {
+		candidate := filepath.Join(dir, "lib", "vector0.so")
+		if _, err := os.Stat(candidate); err == nil {
+			return filepath.Join(dir, "lib")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "lib"
 }
 
 var ErrNotFound = errors.New("not found")
@@ -142,11 +164,13 @@ func (d *DB) migrateNotes() error {
 	}
 
 	// Create the VSS virtual table if extensions are loaded.
-	// sqlite-vss requires the embedding dimension, which for Qwen3-Embedding-4B is 2048.
+	// sqlite-vss requires the embedding dimension, which for Qwen3-Embedding-4B is 2560.
 	if d.vssAvailable {
+		// Drop first to handle dimension changes (embeddings are regenerated on note save).
+		_, _ = d.Exec(`DROP TABLE IF EXISTS vss_notes`)
 		_, err = d.Exec(`
 			CREATE VIRTUAL TABLE IF NOT EXISTS vss_notes USING vss0(
-				body_embedding(2048)
+				body_embedding(2560)
 			)
 		`)
 		if err != nil {
