@@ -9,6 +9,12 @@ import (
 	"os"
 )
 
+// Embedder defines the interface for generating text embeddings.
+// This allows mocking in tests without requiring a running Ollama instance.
+type Embedder interface {
+	GenerateEmbedding(text string) ([]float64, error)
+}
+
 // EmbeddingClient communicates with an Ollama instance to generate embeddings.
 type EmbeddingClient struct {
 	BaseURL string

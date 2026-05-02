@@ -16,10 +16,10 @@ import (
 type Server struct {
 	db   *db.DB
 	addr string
-	llm  *llm.EmbeddingClient
+	llm  llm.Embedder
 }
 
-func New(d *db.DB, addr string, embeddingClient *llm.EmbeddingClient) *Server {
+func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
 	return &Server{db: d, addr: addr, llm: embeddingClient}
 }
 
