@@ -4,3 +4,5 @@ data/
 .cache/
 *.db
 *.db-*
+frontend/node_modules/
+FrontEndDist/
