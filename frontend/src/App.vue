@@ -48,9 +48,9 @@ function onLogout() {
   --shadow-color: rgba(0, 0, 0, 0.6);
   --showBorder-color: #01101f;
 
-  /* Supplemental surface tokens */
-  --surface: #071828;
-  --surface2: #0d2438;
+  /* Surface Layers */
+  --panel-bg: #071828;
+  --raised-bg: #0d2438;
   --accent-teal-dim: #4e6e61;
 
   font-size: 15px;
@@ -80,7 +80,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 input, textarea {
   font-family: inherit;
   font-size: 0.95rem;
-  background: var(--surface2);
+  background: var(--raised-bg);
   color: var(--font-color);
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -119,5 +119,5 @@ textarea { resize: vertical; line-height: 1.6; }
   color: var(--font-color-secondary);
   border: 1px solid var(--border-color);
 }
-.btn-ghost:hover:not(:disabled) { background: var(--surface2); color: var(--font-color); }
+.btn-ghost:hover:not(:disabled) { background: var(--raised-bg); color: var(--font-color); }
 </style>

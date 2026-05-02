@@ -170,7 +170,7 @@ function fmtDate(iso) {
 .sidebar {
   width: 260px;
   min-width: 220px;
-  background: var(--surface);
+  background: var(--panel-bg);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
@@ -219,10 +219,10 @@ function fmtDate(iso) {
   gap: 0.2rem;
 }
 
-.note-item:hover { background: var(--surface2); }
+.note-item:hover { background: var(--raised-bg); }
 
 .note-item.active {
-  background: var(--surface2);
+  background: var(--raised-bg);
   border-left-color: var(--accent-teal);
 }
 
@@ -261,7 +261,7 @@ function fmtDate(iso) {
   gap: 0.75rem;
   padding: 0.85rem 1.25rem;
   border-bottom: 1px solid var(--border-color);
-  background: var(--surface);
+  background: var(--panel-bg);
 }
 
 .title-input {
@@ -289,7 +289,7 @@ function fmtDate(iso) {
   padding: 0.4rem 1.25rem;
   font-size: 0.85rem;
   color: var(--heading-color);
-  background: var(--surface);
+  background: var(--panel-bg);
 }
 
 .body-textarea {
@@ -327,7 +327,7 @@ function fmtDate(iso) {
 }
 
 .modal {
-  background: var(--surface2);
+  background: var(--raised-bg);
   border: 1px solid var(--border-color);
   border-radius: 10px;
   padding: 1.75rem 2rem;
