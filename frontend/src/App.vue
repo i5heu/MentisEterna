@@ -25,23 +25,42 @@ function onLogout() {
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --navy:   #01101f;
+  /* Background Foundations */
+  --html-bg: #01101f;
+  --body-bg: #051b2e;
+
+  /* Typography */
+  --font-color: #e0e8e4;
+  --font-color-secondary: #a5b0ad;
+  --header-title-color: #ffbf59;
+  --heading-color: #bf0604;
+  --pre-text-color: #ffcf8a;
+  --date-color: #6d9484;
+
+  /* UI Elements & Accents */
+  --border-color: #1a2c3d;
+  --accent-teal: #6d9484;
+  --category-bg-color: #162a22;
+  --tag-bg-color: #ffbf59;
+  --content-type-bg-color: #960c05;
+
+  /* Effects */
+  --shadow-color: rgba(0, 0, 0, 0.6);
+  --showBorder-color: #01101f;
+
+  /* Supplemental surface tokens */
   --surface: #071828;
   --surface2: #0d2438;
-  --border:  #1a3a52;
-  --teal:   #6d9484;
-  --teal-dim: #4e6e61;
-  --amber:  #ffbf59;
-  --crimson: #bf0604;
-  --garnet: #960c05;
-  --text:   #dce8e0;
-  --text-muted: #7a9a8a;
+  --accent-teal-dim: #4e6e61;
+
   font-size: 15px;
 }
 
+html { background: var(--html-bg); }
+
 body {
-  background: var(--navy);
-  color: var(--text);
+  background: var(--body-bg);
+  color: var(--font-color);
   font-family: 'Segoe UI', system-ui, sans-serif;
   min-height: 100vh;
 }
@@ -62,8 +81,8 @@ input, textarea {
   font-family: inherit;
   font-size: 0.95rem;
   background: var(--surface2);
-  color: var(--text);
-  border: 1px solid var(--border);
+  color: var(--font-color);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 0.5rem 0.75rem;
   outline: none;
@@ -71,34 +90,34 @@ input, textarea {
 }
 
 input:focus, textarea:focus {
-  border-color: var(--teal);
+  border-color: var(--accent-teal);
 }
 
 textarea { resize: vertical; line-height: 1.6; }
 
 .btn-primary {
-  background: var(--teal);
+  background: var(--accent-teal);
   color: #fff;
 }
-.btn-primary:hover:not(:disabled) { background: var(--teal-dim); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-teal-dim); }
 
 .btn-amber {
-  background: var(--amber);
-  color: var(--navy);
+  background: var(--tag-bg-color);
+  color: var(--html-bg);
   font-weight: 600;
 }
 .btn-amber:hover:not(:disabled) { background: #e8ac47; }
 
 .btn-danger {
-  background: var(--crimson);
+  background: var(--heading-color);
   color: #fff;
 }
-.btn-danger:hover:not(:disabled) { background: var(--garnet); }
+.btn-danger:hover:not(:disabled) { background: var(--content-type-bg-color); }
 
 .btn-ghost {
   background: transparent;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
+  color: var(--font-color-secondary);
+  border: 1px solid var(--border-color);
 }
-.btn-ghost:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface2); color: var(--font-color); }
 </style>
