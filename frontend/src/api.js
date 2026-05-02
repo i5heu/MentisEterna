@@ -27,19 +27,19 @@ export async function fetchNotes(token) {
   return request('/notes', { headers: authHeaders(token) })
 }
 
-export async function createNote(token, title, body) {
+export async function createNote(token, title, body, parentId) {
   return request('/notes', {
     method: 'POST',
     headers: authHeaders(token),
-    body: JSON.stringify({ title, body }),
+    body: JSON.stringify({ title, body, parent_id: parentId ?? null }),
   })
 }
 
-export async function updateNote(token, id, title, body) {
+export async function updateNote(token, id, title, body, parentId) {
   return request(`/notes/${id}`, {
     method: 'PUT',
     headers: authHeaders(token),
-    body: JSON.stringify({ title, body }),
+    body: JSON.stringify({ title, body, parent_id: parentId ?? null }),
   })
 }
 
@@ -52,6 +52,10 @@ export async function deleteNote(token, id) {
 
 export async function fetchNoteHistory(token, id) {
   return request(`/notes/${id}/history`, { headers: authHeaders(token) })
+}
+
+export async function fetchChildren(token, id) {
+  return request(`/notes/${id}/children`, { headers: authHeaders(token) })
 }
 
 export async function searchNotes(token, query) {

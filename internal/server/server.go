@@ -57,6 +57,14 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/children") {
+			if r.Method == http.MethodGet {
+				s.getNoteChildren(w, r)
+			} else {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			s.getNote(w, r)
