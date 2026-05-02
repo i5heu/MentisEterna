@@ -4,6 +4,12 @@
     <img width="280" height="280" style="border-radius: 3%; max-width: 100%" alt="Logo of OuroborosDB" src=".media/MentisEterna_logo.svg">
 </p>
 
+
+## Prerequisites
+
+- Ollama: [Installation Guide](https://ollama.com/docs/installation)
+- Qwen/Qwen3-Embedding-4B-GGUF: `ollama pull hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M`
+
 ## Design
 
 Color Palette:

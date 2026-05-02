@@ -10,15 +10,17 @@ import (
 	"time"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/llm"
 )
 
 type Server struct {
 	db   *db.DB
 	addr string
+	llm  *llm.EmbeddingClient
 }
 
-func New(d *db.DB, addr string) *Server {
-	return &Server{db: d, addr: addr}
+func New(d *db.DB, addr string, embeddingClient *llm.EmbeddingClient) *Server {
+	return &Server{db: d, addr: addr, llm: embeddingClient}
 }
 
 func (s *Server) Start(ctx context.Context) error {
@@ -36,6 +38,13 @@ func (s *Server) Start(ctx context.Context) error {
 		case http.MethodPost:
 			s.createNote(w, r)
 		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/notes/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			s.searchNotes(w, r)
+		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})

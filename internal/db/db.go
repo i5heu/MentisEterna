@@ -4,27 +4,51 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	gosqlite3 "github.com/mattn/go-sqlite3"
 )
+
+func init() {
+	extPath := os.Getenv("VSS_EXT_PATH")
+	if extPath == "" {
+		extPath = "lib"
+	}
+	vectorLib := filepath.Join(extPath, "vector0")
+	vssLib := filepath.Join(extPath, "vss0")
+
+	sql.Register("sqlite3-vss", &gosqlite3.SQLiteDriver{
+		ConnectHook: func(conn *gosqlite3.SQLiteConn) error {
+			if err := conn.LoadExtension(vectorLib, "sqlite3_vector_init"); err != nil {
+				return fmt.Errorf("load vector0: %w", err)
+			}
+			if err := conn.LoadExtension(vssLib, "sqlite3_vss_init"); err != nil {
+				return fmt.Errorf("load vss0: %w", err)
+			}
+			return nil
+		},
+	})
+}
 
 var ErrNotFound = errors.New("not found")
 
 type DB struct {
 	*sql.DB
+	vssAvailable bool
 }
 
+func (d *DB) VSSAvailable() bool { return d.vssAvailable }
+
 func Open(path string) (*DB, error) {
-	sqlDB, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=on")
+	d, err := openWithDriver("sqlite3-vss", path+"?_journal_mode=WAL&_foreign_keys=on", true)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-	if err := sqlDB.Ping(); err != nil {
-		return nil, fmt.Errorf("ping sqlite: %w", err)
-	}
-	d := &DB{sqlDB}
-	if err := d.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
+		log.Printf("VSS extensions not available, falling back to standard SQLite: %v", err)
+		d, err = openWithDriver("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=on", false)
+		if err != nil {
+			return nil, fmt.Errorf("open sqlite: %w", err)
+		}
 	}
 	return d, nil
 }
@@ -33,16 +57,29 @@ func Open(path string) (*DB, error) {
 // This is significantly faster than opening on-disk databases.
 // The connection pool is pinned to 1 so all operations share the same in-memory database.
 func OpenInMemory() (*DB, error) {
-	sqlDB, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
+	d, err := openWithDriver("sqlite3-vss", ":memory:?_foreign_keys=on", true)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite in-memory: %w", err)
+		d, err = openWithDriver("sqlite3", ":memory:?_foreign_keys=on", false)
+		if err != nil {
+			return nil, fmt.Errorf("open sqlite in-memory: %w", err)
+		}
 	}
-	sqlDB.SetMaxOpenConns(1)
+	d.SetMaxOpenConns(1)
+	return d, nil
+}
+
+func openWithDriver(driverName, dsn string, useVSS bool) (*DB, error) {
+	sqlDB, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
 	if err := sqlDB.Ping(); err != nil {
+		sqlDB.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
-	d := &DB{sqlDB}
+	d := &DB{DB: sqlDB, vssAvailable: useVSS}
 	if err := d.migrate(); err != nil {
+		sqlDB.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return d, nil
@@ -102,6 +139,19 @@ func (d *DB) migrateNotes() error {
 	`)
 	if err != nil {
 		return err
+	}
+
+	// Create the VSS virtual table if extensions are loaded.
+	// sqlite-vss requires the embedding dimension, which for Qwen3-Embedding-4B is 2048.
+	if d.vssAvailable {
+		_, err = d.Exec(`
+			CREATE VIRTUAL TABLE IF NOT EXISTS vss_notes USING vss0(
+				body_embedding(2048)
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("create vss_notes: %w", err)
+		}
 	}
 
 	// Re-read columns in case table was just created above

@@ -53,3 +53,7 @@ export async function deleteNote(token, id) {
 export async function fetchNoteHistory(token, id) {
   return request(`/notes/${id}/history`, { headers: authHeaders(token) })
 }
+
+export async function searchNotes(token, query) {
+  return request(`/notes/search?q=${encodeURIComponent(query)}`, { headers: authHeaders(token) })
+}

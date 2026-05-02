@@ -7,22 +7,51 @@
         <span class="app-title">MentisEterna</span>
         <button class="btn-ghost icon-btn" title="Logout" @click="$emit('logout')">⏻</button>
       </div>
+      <div class="search-box">
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="Semantic search…"
+          class="search-input"
+          @input="onSearchInput"
+        />
+        <span v-if="searching" class="search-spinner">⟳</span>
+      </div>
       <button class="btn-amber new-btn" @click="newNote">+ New Note</button>
       <div class="note-list">
-        <div
-          v-for="note in notes"
-          :key="note.id"
-          class="note-item"
-          :class="{ active: selected?.id === note.id }"
-          @click="selectNote(note)"
-        >
-          <span class="note-title">{{ note.title || 'Untitled' }}</span>
-          <span class="note-date">{{ fmtDate(note.updated_at) }}</span>
-        </div>
-        <div v-if="notes.length === 0 && !loading" class="empty-list">
-          No notes yet
-        </div>
-        <div v-if="loading" class="empty-list">Loading…</div>
+        <!-- Search results mode -->
+        <template v-if="searchQuery.trim()">
+          <div
+            v-for="sr in searchResults"
+            :key="sr.id"
+            class="note-item"
+            :class="{ active: selected?.id === sr.id }"
+            @click="selectSearchResult(sr)"
+          >
+            <span class="note-title">{{ sr.title || 'Untitled' }}</span>
+            <span class="note-date">{{ fmtDate(sr.updated_at) }} — {{ relevancePct(sr.distance) }}</span>
+          </div>
+          <div v-if="searchResults.length === 0 && !searching" class="empty-list">
+            No results
+          </div>
+        </template>
+        <!-- Standard list mode -->
+        <template v-else>
+          <div
+            v-for="note in notes"
+            :key="note.id"
+            class="note-item"
+            :class="{ active: selected?.id === note.id }"
+            @click="selectNote(note)"
+          >
+            <span class="note-title">{{ note.title || 'Untitled' }}</span>
+            <span class="note-date">{{ fmtDate(note.updated_at) }}</span>
+          </div>
+          <div v-if="notes.length === 0 && !loading" class="empty-list">
+            No notes yet
+          </div>
+        </template>
+        <div v-if="loading || searching" class="empty-list">Loading…</div>
       </div>
     </aside>
 
@@ -92,8 +121,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory } from '../api.js'
+import { ref, onMounted, watch } from 'vue'
+import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, searchNotes } from '../api.js'
 
 const props = defineProps({ token: String })
 const emit = defineEmits(['logout'])
@@ -112,6 +141,12 @@ const showHistory = ref(false)
 const history = ref([])
 const historyLoading = ref(false)
 
+// Search state
+const searchQuery = ref('')
+const searchResults = ref([])
+const searching = ref(false)
+let searchTimeout = null
+
 onMounted(loadNotes)
 
 async function loadNotes() {
@@ -127,6 +162,18 @@ function selectNote(note) {
   selected.value = note
   editTitle.value = note.title
   editBody.value = note.body
+  dirty.value = false
+  saveError.value = ''
+  showHistory.value = false
+  history.value = []
+}
+
+function selectSearchResult(sr) {
+  // sr is a SearchResult (Note + distance). Select it like a normal note.
+  selected.value = { id: sr.id, title: sr.title, parent_id: sr.parent_id,
+    body: sr.body, created_at: sr.created_at, updated_at: sr.updated_at }
+  editTitle.value = sr.title
+  editBody.value = sr.body
   dirty.value = false
   saveError.value = ''
   showHistory.value = false
@@ -214,6 +261,35 @@ function fmtDateFull(iso) {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
 }
+
+function onSearchInput() {
+  clearTimeout(searchTimeout)
+  searchTimeout = setTimeout(doSearch, 300)
+}
+
+async function doSearch() {
+  const q = searchQuery.value.trim()
+  if (!q) {
+    searchResults.value = []
+    return
+  }
+  searching.value = true
+  try {
+    searchResults.value = await searchNotes(props.token, q)
+  } catch (e) {
+    searchResults.value = []
+  } finally {
+    searching.value = false
+  }
+}
+
+function relevancePct(distance) {
+  // sqlite-vss cosine distance ranges [0, 2] where 0 is identical.
+  // Map to percentage: distance 0 → 100%, distance 2 → 0%
+  if (distance == null) return ''
+  const pct = Math.max(0, Math.round((1 - distance / 2) * 100))
+  return pct + '% match'
+}
 </script>
 
 <style scoped>
@@ -259,6 +335,31 @@ function fmtDateFull(iso) {
   padding: 0.3rem 0.5rem;
   font-size: 1rem;
   line-height: 1;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.search-input {
+  flex: 1;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.6rem;
+}
+
+.search-spinner {
+  color: var(--accent-teal);
+  font-size: 1.1rem;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .new-btn {

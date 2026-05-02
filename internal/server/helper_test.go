@@ -14,7 +14,7 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { d.Close() })
-	return New(d, ":0")
+	return New(d, ":0", nil)
 }
 
 func createTestSession(t *testing.T, s *Server) string {
