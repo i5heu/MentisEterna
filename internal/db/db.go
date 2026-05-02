@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	gosqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -166,15 +167,8 @@ func (d *DB) migrateNotes() error {
 	// Create the VSS virtual table if extensions are loaded.
 	// sqlite-vss requires the embedding dimension, which for Qwen3-Embedding-4B is 2560.
 	if d.vssAvailable {
-		// Drop first to handle dimension changes (embeddings are regenerated on note save).
-		_, _ = d.Exec(`DROP TABLE IF EXISTS vss_notes`)
-		_, err = d.Exec(`
-			CREATE VIRTUAL TABLE IF NOT EXISTS vss_notes USING vss0(
-				body_embedding(2560)
-			)
-		`)
-		if err != nil {
-			return fmt.Errorf("create vss_notes: %w", err)
+		if err := d.ensureVSSDimension(2560); err != nil {
+			return fmt.Errorf("vss_notes: %w", err)
 		}
 	}
 
@@ -208,6 +202,58 @@ func (d *DB) migrateNotes() error {
 		}
 	}
 
+	return nil
+}
+
+// ensureVSSDimension ensures the vss_notes virtual table uses the expected
+// embedding dimension. If the table doesn't exist it creates it. If it exists
+// with a different dimension it drops and recreates it (embeddings need to be
+// regenerated via backfill). Otherwise it leaves existing embeddings intact.
+func (d *DB) ensureVSSDimension(expectedDim int) error {
+	// Check whether vss_notes already exists.
+	var name string
+	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='vss_notes'`).Scan(&name)
+	if err != nil {
+		// Table doesn't exist yet — create it.
+		if _, createErr := d.Exec(`
+			CREATE VIRTUAL TABLE IF NOT EXISTS vss_notes USING vss0(
+				body_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
+			)
+		`); createErr != nil {
+			return fmt.Errorf("create vss_notes: %w", createErr)
+		}
+		return nil
+	}
+
+	// Table exists — probe its dimension by inserting a dummy row.
+	// Build a JSON array of expectedDim zeros.
+	parts := make([]string, expectedDim)
+	for i := range parts {
+		parts[i] = "0"
+	}
+	dummyJSON := "[" + strings.Join(parts, ",") + "]"
+
+	// Try inserting a test row. vss0 validates dimension on insert.
+	testRowID := int64(-1) // negative rowid to avoid collision with real notes.
+	_, insertErr := d.Exec(`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`, testRowID, dummyJSON)
+	if insertErr != nil {
+		// Dimension mismatch detected. Drop and recreate.
+		log.Printf("vss_notes dimension mismatch detected, recreating table (run backfill to regenerate embeddings)")
+		if _, dropErr := d.Exec(`DROP TABLE IF EXISTS vss_notes`); dropErr != nil {
+			return fmt.Errorf("drop old vss_notes: %w", dropErr)
+		}
+		if _, createErr := d.Exec(`
+			CREATE VIRTUAL TABLE vss_notes USING vss0(
+				body_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
+			)
+		`); createErr != nil {
+			return fmt.Errorf("recreate vss_notes: %w", createErr)
+		}
+		return nil
+	}
+
+	// Clean up the test row.
+	_, _ = d.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, testRowID)
 	return nil
 }
 
