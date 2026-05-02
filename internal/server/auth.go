@@ -88,9 +88,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func isAPIPath(p string) bool {
+	return p == "/health" || p == "/notes" || strings.HasPrefix(p, "/notes/")
+}
+
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/login" {
+		if r.URL.Path == "/login" || !isAPIPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

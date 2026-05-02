@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -19,7 +20,7 @@ func New(d *db.DB, addr string) *Server {
 	return &Server{db: d, addr: addr}
 }
 
-func (s *Server) Start() error {
+func (s *Server) Start(ctx context.Context) error {
 	initAdminPassword(s.db)
 
 	mux := http.NewServeMux()
@@ -49,6 +50,7 @@ func (s *Server) Start() error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 
 	srv := &http.Server{
 		Addr:         s.addr,
@@ -57,6 +59,15 @@ func (s *Server) Start() error {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+	}()
 
 	log.Printf("listening on http://localhost%s", s.addr)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
