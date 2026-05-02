@@ -79,8 +79,10 @@ func main() {
 			continue
 		}
 		vecJSON := llm.EmbeddingToJSON(vec)
+		// vss0 doesn't support UPDATE/INSERT OR REPLACE; DELETE then INSERT.
+		database.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.id)
 		_, err = database.Exec(
-			`INSERT OR REPLACE INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
+			`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
 			p.id, vecJSON,
 		)
 		if err != nil {
