@@ -212,6 +212,44 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// getNoteChildren returns all notes whose parent_id matches the given note ID.
+// GET /notes/:id/children
+func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
+	id, ok := noteID(w, r)
+	if !ok {
+		return
+	}
+
+	// Verify parent note exists
+	var exists bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?)`, id).Scan(&exists); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !exists {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	rows, err := s.db.Query(noteSelectSQL+` WHERE n.parent_id = ? ORDER BY n.title ASC`, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer rows.Close()
+
+	children := []Note{}
+	for rows.Next() {
+		n, err := scanNote(rows)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		children = append(children, n)
+	}
+	writeJSON(w, http.StatusOK, children)
+}
+
 func (s *Server) getNoteHistory(w http.ResponseWriter, r *http.Request) {
 	id, ok := noteID(w, r)
 	if !ok {
@@ -253,6 +291,7 @@ func (s *Server) getNoteHistory(w http.ResponseWriter, r *http.Request) {
 func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	seg := strings.TrimPrefix(r.URL.Path, "/notes/")
 	seg = strings.TrimSuffix(seg, "/history")
+	seg = strings.TrimSuffix(seg, "/children")
 	id, err := strconv.ParseInt(seg, 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid id", http.StatusBadRequest)

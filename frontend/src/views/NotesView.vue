@@ -59,12 +59,44 @@
     <main class="editor-pane">
       <template v-if="selected">
         <div class="editor-header">
-          <input
-            v-model="editTitle"
-            class="title-input"
-            placeholder="Note title"
-            @input="dirty = true"
-          />
+          <div class="editor-header-left">
+            <input
+              v-model="editTitle"
+              class="title-input"
+              placeholder="Note title"
+              @input="dirty = true"
+            />
+            <div class="parent-row">
+              <span class="parent-label">Parent:</span>
+              <div class="parent-picker-wrapper">
+                <input
+                  v-model="parentSearch"
+                  class="parent-input"
+                  placeholder="Search parent…"
+                  @focus="showParentPicker = true"
+                  @input="onParentSearchInput()"
+                />
+                <button
+                  v-if="selected.parent_id"
+                  class="btn-ghost parent-clear-btn"
+                  title="Remove parent"
+                  @click="clearParent()"
+                >✕</button>
+                <div v-if="showParentPicker && (parentOptions.length > 0 || parentSearching)" class="parent-dropdown">
+                  <div v-if="parentSearching" class="parent-dropdown-item muted">Searching…</div>
+                  <div
+                    v-for="opt in parentOptions"
+                    :key="opt.id"
+                    class="parent-dropdown-item"
+                    @click="selectParent(opt)"
+                  >
+                    {{ opt.title }}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="selectedPath" class="selected-path">{{ selectedPath }}</div>
+          </div>
           <div class="editor-actions">
             <button class="btn-ghost" @click="toggleEdit">
               {{ isEditing ? '🖉 View' : '✎ Edit' }}
@@ -105,6 +137,21 @@
             >
               <span class="history-date">{{ fmtDateFull(entry.created_at) }}</span>
               <pre class="history-preview">{{ entry.body.slice(0, 120) }}{{ entry.body.length > 120 ? '…' : '' }}</pre>
+            </div>
+          </aside>
+          <aside class="children-panel">
+            <div class="children-header">Children</div>
+            <div v-if="childrenLoading" class="children-empty">Loading…</div>
+            <div v-else-if="children.length === 0" class="children-empty">No children</div>
+            <div
+              v-else
+              v-for="child in children"
+              :key="child.id"
+              class="child-item"
+              @click="selectNoteFromChild(child)"
+            >
+              <span class="child-title">{{ childPath(child) }}</span>
+              <span class="child-date">{{ fmtDate(child.updated_at) }}</span>
             </div>
           </aside>
         </div>
@@ -151,7 +198,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { marked } from 'marked'
-import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, searchNotes } from '../api.js'
+import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, fetchChildren, searchNotes } from '../api.js'
 
 const props = defineProps({ token: String })
 const emit = defineEmits(['logout'])
@@ -177,6 +224,17 @@ const searchResults = ref([])
 const searching = ref(false)
 const highlightedIndex = ref(-1)
 let searchTimeout = null
+
+// Children state
+const children = ref([])
+const childrenLoading = ref(false)
+
+// Parent selector state
+const parentSearch = ref('')
+const parentOptions = ref([])
+const parentSearching = ref(false)
+const showParentPicker = ref(false)
+let parentSearchTimeout = null
 
 // The list currently shown in the sidebar (search results or standard notes)
 const sidebarList = computed(() =>
@@ -232,6 +290,8 @@ function selectNote(note) {
   history.value = []
   isEditing.value = false
   highlightedIndex.value = notes.value.indexOf(note)
+  loadChildren(note.id)
+  populateParentSearch(note)
 }
 
 function selectSearchResult(sr) {
@@ -245,10 +305,21 @@ function selectSearchResult(sr) {
   history.value = []
   isEditing.value = false
   highlightedIndex.value = searchResults.value.indexOf(sr)
+  loadChildren(sr.id)
+  populateParentSearch(selected.value)
+}
+
+function populateParentSearch(note) {
+  if (note?.parent_id) {
+    const p = notes.value.find(n => n.id === note.parent_id)
+    parentSearch.value = p ? p.title : ''
+  } else {
+    parentSearch.value = ''
+  }
 }
 
 function newNote() {
-  selected.value = { id: null, title: '', body: '' }
+  selected.value = { id: null, title: '', body: '', parent_id: null }
   editTitle.value = ''
   editBody.value = ''
   dirty.value = true
@@ -256,6 +327,8 @@ function newNote() {
   showHistory.value = false
   history.value = []
   highlightedIndex.value = -1
+  children.value = []
+  parentSearch.value = ''
 }
 
 function confirmDelete() {
@@ -287,24 +360,100 @@ async function toggleHistory() {
   }
 }
 
+async function loadChildren(noteId) {
+  if (!noteId) {
+    children.value = []
+    return
+  }
+  childrenLoading.value = true
+  try {
+    children.value = await fetchChildren(props.token, noteId)
+  } catch {
+    children.value = []
+  } finally {
+    childrenLoading.value = false
+  }
+}
+
+function onParentSearchInput() {
+  clearTimeout(parentSearchTimeout)
+  parentSearchTimeout = setTimeout(doParentSearch, 200)
+}
+
+async function doParentSearch() {
+  const q = parentSearch.value.trim()
+  if (!q) {
+    parentOptions.value = []
+    return
+  }
+  parentSearching.value = true
+  try {
+    const results = await searchNotes(props.token, q)
+    // Filter out the current note so it can't be its own parent
+    parentOptions.value = results
+      .filter(r => r.id !== selected.value?.id)
+      .slice(0, 8)
+  } catch {
+    parentOptions.value = []
+  } finally {
+    parentSearching.value = false
+  }
+}
+
+function selectParent(note) {
+  selected.value = { ...selected.value, parent_id: note.id }
+  parentSearch.value = note.title
+  parentOptions.value = []
+  showParentPicker.value = false
+  dirty.value = true
+}
+
+function clearParent() {
+  selected.value = { ...selected.value, parent_id: null }
+  parentSearch.value = ''
+  parentOptions.value = []
+  dirty.value = true
+}
+
+// Computed: full path for the selected note (own title or [parent]:[self])
+const selectedPath = computed(() => {
+  if (!selected.value) return ''
+  const parentNote = notes.value.find(n => n.id === selected.value.parent_id)
+  if (parentNote) {
+    return parentNote.title + ':' + selected.value.title
+  }
+  return selected.value.title || 'Untitled'
+})
+
+// Child path: [parent title]:[child title]
+function childPath(child) {
+  if (!selected.value) return child.title || 'Untitled'
+  return (selected.value.title || 'Untitled') + ':' + (child.title || 'Untitled')
+}
+
+function selectNoteFromChild(child) {
+  selectNote(child)
+}
+
 async function save() {
   saveError.value = ''
   saving.value = true
   try {
     let updated
     if (selected.value.id) {
-      updated = await updateNote(props.token, selected.value.id, editTitle.value, editBody.value)
+      updated = await updateNote(props.token, selected.value.id, editTitle.value, editBody.value, selected.value.parent_id)
       const idx = notes.value.findIndex(n => n.id === updated.id)
       if (idx !== -1) notes.value[idx] = updated
       if (showHistory.value) {
         history.value = await fetchNoteHistory(props.token, updated.id)
       }
     } else {
-      updated = await createNote(props.token, editTitle.value, editBody.value)
+      updated = await createNote(props.token, editTitle.value, editBody.value, selected.value.parent_id)
       notes.value.unshift(updated)
     }
     selected.value = updated
     dirty.value = false
+    loadChildren(updated.id)
   } catch (e) {
     saveError.value = e.message
   } finally {
@@ -477,11 +626,19 @@ function onKeyDown(e) {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('click', onClickOutside)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('click', onClickOutside)
 })
+
+function onClickOutside(e) {
+  if (!e.target.closest('.parent-picker-wrapper')) {
+    showParentPicker.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -618,11 +775,19 @@ onUnmounted(() => {
 
 .editor-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.75rem;
   padding: 0.85rem 1.25rem;
   border-bottom: 1px solid var(--border-color);
   background: var(--panel-bg);
+}
+
+.editor-header-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 .title-input {
@@ -634,6 +799,7 @@ onUnmounted(() => {
   border-bottom: 1px solid transparent;
   border-radius: 0;
   padding: 0.2rem 0;
+  width: 100%;
 }
 
 .title-input:focus {
@@ -644,6 +810,7 @@ onUnmounted(() => {
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .save-error {
@@ -651,6 +818,86 @@ onUnmounted(() => {
   font-size: 0.85rem;
   color: var(--heading-color);
   background: var(--panel-bg);
+}
+
+/* Parent selector */
+.parent-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.parent-label {
+  font-size: 0.75rem;
+  color: var(--font-color-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.parent-picker-wrapper {
+  position: relative;
+  flex: 1;
+  max-width: 320px;
+}
+
+.parent-input {
+  width: 100%;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.parent-clear-btn {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.15rem 0.35rem;
+  font-size: 0.7rem;
+  border: none;
+  background: transparent;
+  color: var(--font-color-secondary);
+}
+
+.parent-clear-btn:hover { color: var(--heading-color); }
+
+.parent-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  background: var(--raised-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 50;
+  box-shadow: 0 4px 12px var(--shadow-color);
+}
+
+.parent-dropdown-item {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  color: var(--font-color);
+  transition: background 0.1s;
+}
+
+.parent-dropdown-item:hover { background: var(--panel-bg); }
+
+.parent-dropdown-item.muted {
+  color: var(--font-color-secondary);
+  cursor: default;
+}
+
+.selected-path {
+  font-size: 0.78rem;
+  color: var(--accent-teal);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .editor-body {
@@ -854,6 +1101,59 @@ onUnmounted(() => {
   background: var(--raised-bg);
   border-color: var(--accent-teal);
   color: var(--accent-teal);
+}
+
+/* Children panel */
+.children-panel {
+  width: 260px;
+  min-width: 200px;
+  border-left: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.children-header {
+  padding: 0.65rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--font-color-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.children-empty {
+  padding: 1.25rem 1rem;
+  font-size: 0.85rem;
+  color: var(--font-color-secondary);
+  text-align: center;
+}
+
+.child-item {
+  padding: 0.65rem 1rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.1s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.child-item:hover { background: var(--raised-bg); }
+
+.child-title {
+  font-size: 0.85rem;
+  color: var(--accent-teal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.child-date {
+  font-size: 0.7rem;
+  color: var(--date-color);
 }
 
 .no-selection {
