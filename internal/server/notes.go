@@ -10,11 +10,35 @@ import (
 )
 
 type Note struct {
+	ID        int64   `json:"id"`
+	Title     string  `json:"title"`
+	ParentID  *int64  `json:"parent_id"`
+	Body      string  `json:"body"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+type NoteUpdate struct {
 	ID        int64  `json:"id"`
-	Title     string `json:"title"`
+	NoteID    int64  `json:"note_id"`
 	Body      string `json:"body"`
 	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+}
+
+const noteSelectSQL = `
+	SELECT n.id, n.title, n.parent_id, n.created_at,
+	       COALESCE(u.body, '') AS body,
+	       COALESCE(u.created_at, n.created_at) AS updated_at
+	FROM notes n
+	LEFT JOIN updates u ON u.id = (
+		SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+	)
+`
+
+func scanNote(row interface{ Scan(...any) error }) (Note, error) {
+	var n Note
+	err := row.Scan(&n.ID, &n.Title, &n.ParentID, &n.CreatedAt, &n.Body, &n.UpdatedAt)
+	return n, err
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -22,7 +46,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) listNotes(w http.ResponseWriter, _ *http.Request) {
-	rows, err := s.db.Query(`SELECT id, title, body, created_at, updated_at FROM notes ORDER BY id DESC`)
+	rows, err := s.db.Query(noteSelectSQL + ` ORDER BY updated_at DESC`)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -31,8 +55,8 @@ func (s *Server) listNotes(w http.ResponseWriter, _ *http.Request) {
 
 	notes := []Note{}
 	for rows.Next() {
-		var n Note
-		if err := rows.Scan(&n.ID, &n.Title, &n.Body, &n.CreatedAt, &n.UpdatedAt); err != nil {
+		n, err := scanNote(rows)
+		if err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -43,8 +67,9 @@ func (s *Server) listNotes(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Title string `json:"title"`
-		Body  string `json:"body"`
+		Title    string `json:"title"`
+		Body     string `json:"body"`
+		ParentID *int64 `json:"parent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -55,17 +80,32 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.db.Exec(`INSERT INTO notes (title, body) VALUES (?, ?)`, in.Title, in.Body)
+	tx, err := s.db.Begin()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`INSERT INTO notes (title, parent_id) VALUES (?, ?)`, in.Title, in.ParentID)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	id, _ := res.LastInsertId()
 
-	var n Note
-	if err := s.db.QueryRow(
-		`SELECT id, title, body, created_at, updated_at FROM notes WHERE id = ?`, id,
-	).Scan(&n.ID, &n.Title, &n.Body, &n.CreatedAt, &n.UpdatedAt); err != nil {
+	if _, err = tx.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, id, in.Body); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -77,10 +117,7 @@ func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var n Note
-	err := s.db.QueryRow(
-		`SELECT id, title, body, created_at, updated_at FROM notes WHERE id = ?`, id,
-	).Scan(&n.ID, &n.Title, &n.Body, &n.CreatedAt, &n.UpdatedAt)
+	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -98,8 +135,9 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Title string `json:"title"`
-		Body  string `json:"body"`
+		Title    string `json:"title"`
+		Body     string `json:"body"`
+		ParentID *int64 `json:"parent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -110,10 +148,14 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.db.Exec(
-		`UPDATE notes SET title = ?, body = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
-		in.Title, in.Body, id,
-	)
+	tx, err := s.db.Begin()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE notes SET title = ?, parent_id = ? WHERE id = ?`, in.Title, in.ParentID, id)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -123,10 +165,21 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var n Note
-	_ = s.db.QueryRow(
-		`SELECT id, title, body, created_at, updated_at FROM notes WHERE id = ?`, id,
-	).Scan(&n.ID, &n.Title, &n.Body, &n.CreatedAt, &n.UpdatedAt)
+	if _, err = tx.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, id, in.Body); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -147,8 +200,47 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) getNoteHistory(w http.ResponseWriter, r *http.Request) {
+	id, ok := noteID(w, r)
+	if !ok {
+		return
+	}
+
+	// Verify note exists
+	var exists bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?)`, id).Scan(&exists); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !exists {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	rows, err := s.db.Query(
+		`SELECT id, note_id, body, created_at FROM updates WHERE note_id = ? ORDER BY id DESC`, id,
+	)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer rows.Close()
+
+	updates := []NoteUpdate{}
+	for rows.Next() {
+		var u NoteUpdate
+		if err := rows.Scan(&u.ID, &u.NoteID, &u.Body, &u.CreatedAt); err != nil {
+			writeErr(w, err)
+			return
+		}
+		updates = append(updates, u)
+	}
+	writeJSON(w, http.StatusOK, updates)
+}
+
 func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	seg := strings.TrimPrefix(r.URL.Path, "/notes/")
+	seg = strings.TrimSuffix(seg, "/history")
 	id, err := strconv.ParseInt(seg, 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid id", http.StatusBadRequest)

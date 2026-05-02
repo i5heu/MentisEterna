@@ -30,14 +30,14 @@ func Open(path string) (*DB, error) {
 }
 
 func (d *DB) migrate() error {
+	if err := d.ensureAuthTables(); err != nil {
+		return err
+	}
+	return d.migrateNotes()
+}
+
+func (d *DB) ensureAuthTables() error {
 	_, err := d.Exec(`
-		CREATE TABLE IF NOT EXISTS notes (
-			id        INTEGER PRIMARY KEY AUTOINCREMENT,
-			title     TEXT    NOT NULL,
-			body      TEXT    NOT NULL DEFAULT '',
-			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-			updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		);
 		CREATE TABLE IF NOT EXISTS auth (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
 			username      TEXT    NOT NULL UNIQUE,
@@ -50,4 +50,90 @@ func (d *DB) migrate() error {
 		);
 	`)
 	return err
+}
+
+func (d *DB) migrateNotes() error {
+	cols, err := d.tableColumns("notes")
+	if err != nil {
+		return err
+	}
+
+	if len(cols) == 0 {
+		_, err = d.Exec(`
+			CREATE TABLE notes (
+				id         INTEGER PRIMARY KEY AUTOINCREMENT,
+				title      TEXT    NOT NULL,
+				parent_id  INTEGER REFERENCES notes(id) ON DELETE SET NULL,
+				created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+			)
+		`)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = d.Exec(`
+		CREATE TABLE IF NOT EXISTS updates (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			note_id    INTEGER NOT NULL,
+			body       TEXT    NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Re-read columns in case table was just created above
+	cols, err = d.tableColumns("notes")
+	if err != nil {
+		return err
+	}
+
+	if cols["body"] {
+		if _, err = d.Exec(`
+			INSERT INTO updates (note_id, body, created_at)
+			SELECT id, body, created_at FROM notes WHERE body != ''
+		`); err != nil {
+			return err
+		}
+		if _, err = d.Exec(`ALTER TABLE notes DROP COLUMN body`); err != nil {
+			return err
+		}
+	}
+
+	if cols["updated_at"] {
+		if _, err = d.Exec(`ALTER TABLE notes DROP COLUMN updated_at`); err != nil {
+			return err
+		}
+	}
+
+	if !cols["parent_id"] {
+		if _, err = d.Exec(`ALTER TABLE notes ADD COLUMN parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL`); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (d *DB) tableColumns(table string) (map[string]bool, error) {
+	rows, err := d.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cols := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	return cols, nil
 }

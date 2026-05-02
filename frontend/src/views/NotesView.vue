@@ -39,16 +39,36 @@
             <button class="btn-primary" :disabled="!dirty || saving" @click="save">
               {{ saving ? 'Saving…' : 'Save' }}
             </button>
+            <button class="btn-ghost" :class="{ active: showHistory }" @click="toggleHistory">
+              History
+            </button>
             <button class="btn-danger" @click="confirmDelete">Delete</button>
           </div>
         </div>
         <p v-if="saveError" class="save-error">{{ saveError }}</p>
-        <textarea
-          v-model="editBody"
-          class="body-textarea"
-          placeholder="Write your note here…"
-          @input="dirty = true"
-        />
+        <div class="editor-body">
+          <textarea
+            v-model="editBody"
+            class="body-textarea"
+            placeholder="Write your note here…"
+            @input="dirty = true"
+          />
+          <aside v-if="showHistory" class="history-panel">
+            <div class="history-header">History</div>
+            <div v-if="historyLoading" class="history-empty">Loading…</div>
+            <div v-else-if="history.length === 0" class="history-empty">No history yet</div>
+            <div
+              v-else
+              v-for="entry in history"
+              :key="entry.id"
+              class="history-entry"
+              @click="restoreBody(entry.body)"
+            >
+              <span class="history-date">{{ fmtDateFull(entry.created_at) }}</span>
+              <pre class="history-preview">{{ entry.body.slice(0, 120) }}{{ entry.body.length > 120 ? '…' : '' }}</pre>
+            </div>
+          </aside>
+        </div>
       </template>
       <div v-else class="no-selection">
         <p>Select a note or create a new one</p>
@@ -71,8 +91,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
-import { fetchNotes, createNote, updateNote, deleteNote } from '../api.js'
+import { ref, onMounted } from 'vue'
+import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory } from '../api.js'
 
 const props = defineProps({ token: String })
 const emit = defineEmits(['logout'])
@@ -87,6 +107,9 @@ const saving = ref(false)
 const saveError = ref('')
 const showDeleteModal = ref(false)
 const deleting = ref(false)
+const showHistory = ref(false)
+const history = ref([])
+const historyLoading = ref(false)
 
 onMounted(loadNotes)
 
@@ -105,6 +128,8 @@ function selectNote(note) {
   editBody.value = note.body
   dirty.value = false
   saveError.value = ''
+  showHistory.value = false
+  history.value = []
 }
 
 function newNote() {
@@ -113,28 +138,8 @@ function newNote() {
   editBody.value = ''
   dirty.value = true
   saveError.value = ''
-}
-
-async function save() {
-  saveError.value = ''
-  saving.value = true
-  try {
-    let updated
-    if (selected.value.id) {
-      updated = await updateNote(props.token, selected.value.id, editTitle.value, editBody.value)
-      const idx = notes.value.findIndex(n => n.id === updated.id)
-      if (idx !== -1) notes.value[idx] = updated
-    } else {
-      updated = await createNote(props.token, editTitle.value, editBody.value)
-      notes.value.unshift(updated)
-    }
-    selected.value = updated
-    dirty.value = false
-  } catch (e) {
-    saveError.value = e.message
-  } finally {
-    saving.value = false
-  }
+  showHistory.value = false
+  history.value = []
 }
 
 function confirmDelete() {
@@ -153,9 +158,60 @@ async function doDelete() {
   }
 }
 
+async function toggleHistory() {
+  if (!selected.value?.id) return
+  showHistory.value = !showHistory.value
+  if (showHistory.value && history.value.length === 0) {
+    historyLoading.value = true
+    try {
+      history.value = await fetchNoteHistory(props.token, selected.value.id)
+    } finally {
+      historyLoading.value = false
+    }
+  }
+}
+
+async function save() {
+  saveError.value = ''
+  saving.value = true
+  try {
+    let updated
+    if (selected.value.id) {
+      updated = await updateNote(props.token, selected.value.id, editTitle.value, editBody.value)
+      const idx = notes.value.findIndex(n => n.id === updated.id)
+      if (idx !== -1) notes.value[idx] = updated
+      // Refresh history if open
+      if (showHistory.value) {
+        history.value = await fetchNoteHistory(props.token, updated.id)
+      }
+    } else {
+      updated = await createNote(props.token, editTitle.value, editBody.value)
+      notes.value.unshift(updated)
+    }
+    selected.value = updated
+    dirty.value = false
+  } catch (e) {
+    saveError.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
+function restoreBody(body) {
+  editBody.value = body
+  dirty.value = true
+}
+
 function fmtDate(iso) {
   if (!iso) return ''
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function fmtDateFull(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
 }
 </script>
 
@@ -292,9 +348,14 @@ function fmtDate(iso) {
   background: var(--panel-bg);
 }
 
+.editor-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
 .body-textarea {
   flex: 1;
-  width: 100%;
   border: none;
   border-radius: 0;
   background: var(--html-bg);
@@ -302,9 +363,71 @@ function fmtDate(iso) {
   font-size: 0.95rem;
   line-height: 1.7;
   min-height: 0;
+  min-width: 0;
+  resize: none;
 }
 
 .body-textarea:focus { border-color: transparent; }
+
+.history-panel {
+  width: 280px;
+  min-width: 220px;
+  border-left: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.history-header {
+  padding: 0.65rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--font-color-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.history-empty {
+  padding: 1.25rem 1rem;
+  font-size: 0.85rem;
+  color: var(--font-color-secondary);
+  text-align: center;
+}
+
+.history-entry {
+  padding: 0.65rem 1rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.1s;
+  overflow-y: auto;
+}
+
+.history-entry:hover { background: var(--raised-bg); }
+
+.history-date {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--date-color);
+  margin-bottom: 0.3rem;
+}
+
+.history-preview {
+  font-size: 0.8rem;
+  color: var(--font-color);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.btn-ghost.active {
+  background: var(--raised-bg);
+  border-color: var(--accent-teal);
+  color: var(--accent-teal);
+}
 
 .no-selection {
   flex: 1;
