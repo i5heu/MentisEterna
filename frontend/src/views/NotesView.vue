@@ -7,6 +7,7 @@
         <span class="app-title">MentisEterna</span>
         <button class="btn-ghost icon-btn" title="Logout" @click="$emit('logout')">⏻</button>
       </div>
+      <button class="btn-amber new-btn" @click="newNote">+ New Note</button>
       <div class="search-box">
         <input
           v-model="searchQuery"
@@ -17,7 +18,6 @@
         />
         <span v-if="searching" class="search-spinner">⟳</span>
       </div>
-      <button class="btn-amber new-btn" @click="newNote">+ New Note</button>
       <div class="note-list">
         <!-- Search results mode -->
         <template v-if="searchQuery.trim()">
