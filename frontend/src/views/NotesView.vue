@@ -22,10 +22,10 @@
         <!-- Search results mode -->
         <template v-if="searchQuery.trim()">
           <div
-            v-for="sr in searchResults"
+            v-for="(sr, idx) in searchResults"
             :key="sr.id"
             class="note-item"
-            :class="{ active: selected?.id === sr.id }"
+            :class="{ active: selected?.id === sr.id, highlighted: highlightedIndex === idx }"
             @click="selectSearchResult(sr)"
           >
             <span class="note-title">{{ sr.title || 'Untitled' }}</span>
@@ -38,10 +38,10 @@
         <!-- Standard list mode -->
         <template v-else>
           <div
-            v-for="note in notes"
+            v-for="(note, idx) in notes"
             :key="note.id"
             class="note-item"
-            :class="{ active: selected?.id === note.id }"
+            :class="{ active: selected?.id === note.id, highlighted: highlightedIndex === idx }"
             @click="selectNote(note)"
           >
             <span class="note-title">{{ note.title || 'Untitled' }}</span>
@@ -126,11 +126,30 @@
         </div>
       </div>
     </div>
+
+    <!-- Hotkey help modal -->
+    <div v-if="showHotkeys" class="modal-overlay" @click.self="showHotkeys = false">
+      <div class="modal hotkey-modal">
+        <div class="hotkey-modal-header">
+          <span>Keyboard Shortcuts</span>
+          <button class="btn-ghost icon-btn" @click="showHotkeys = false">✕</button>
+        </div>
+        <div class="hotkey-list">
+          <div v-for="hk in hotkeys" :key="hk.key" class="hotkey-row">
+            <kbd class="hotkey-key">{{ hk.key }}</kbd>
+            <span class="hotkey-desc">{{ hk.desc }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- "?" help button -->
+    <button class="help-btn" title="Keyboard shortcuts (Shift+?)" @click="showHotkeys = !showHotkeys">?</button>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { marked } from 'marked'
 import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, searchNotes } from '../api.js'
 
@@ -148,6 +167,7 @@ const saveError = ref('')
 const showDeleteModal = ref(false)
 const deleting = ref(false)
 const showHistory = ref(false)
+const showHotkeys = ref(false)
 const history = ref([])
 const historyLoading = ref(false)
 
@@ -155,7 +175,30 @@ const historyLoading = ref(false)
 const searchQuery = ref('')
 const searchResults = ref([])
 const searching = ref(false)
+const highlightedIndex = ref(-1)
 let searchTimeout = null
+
+// The list currently shown in the sidebar (search results or standard notes)
+const sidebarList = computed(() =>
+  searchQuery.value.trim() ? searchResults.value : notes.value
+)
+
+// Hotkeys definition
+const hotkeys = [
+  { key: isMac() ? '⌘ N' : 'Ctrl+N', desc: 'New note' },
+  { key: isMac() ? '⌘ S' : 'Ctrl+S', desc: 'Save note' },
+  { key: isMac() ? '⌘ E' : 'Ctrl+E', desc: 'Toggle edit / preview' },
+  { key: isMac() ? '⌘ H' : 'Ctrl+H', desc: 'Toggle history panel' },
+  { key: isMac() ? '⌘ K' : 'Ctrl+K', desc: 'Focus search bar' },
+  { key: '↑ ↓', desc: 'Navigate list / search results' },
+  { key: 'Enter', desc: 'Open highlighted note' },
+  { key: 'Esc', desc: 'Close panel / blur / clear highlight' },
+  { key: 'Shift+?', desc: 'Toggle this help dialog' },
+]
+
+function isMac() {
+  return /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgentData?.platform || '')
+}
 
 // Edit / View toggle
 const isEditing = ref(false)
@@ -188,10 +231,10 @@ function selectNote(note) {
   showHistory.value = false
   history.value = []
   isEditing.value = false
+  highlightedIndex.value = notes.value.indexOf(note)
 }
 
 function selectSearchResult(sr) {
-  // sr is a SearchResult (Note + distance). Select it like a normal note.
   selected.value = { id: sr.id, title: sr.title, parent_id: sr.parent_id,
     body: sr.body, created_at: sr.created_at, updated_at: sr.updated_at }
   editTitle.value = sr.title
@@ -201,6 +244,7 @@ function selectSearchResult(sr) {
   showHistory.value = false
   history.value = []
   isEditing.value = false
+  highlightedIndex.value = searchResults.value.indexOf(sr)
 }
 
 function newNote() {
@@ -211,6 +255,7 @@ function newNote() {
   saveError.value = ''
   showHistory.value = false
   history.value = []
+  highlightedIndex.value = -1
 }
 
 function confirmDelete() {
@@ -251,7 +296,6 @@ async function save() {
       updated = await updateNote(props.token, selected.value.id, editTitle.value, editBody.value)
       const idx = notes.value.findIndex(n => n.id === updated.id)
       if (idx !== -1) notes.value[idx] = updated
-      // Refresh history if open
       if (showHistory.value) {
         history.value = await fetchNoteHistory(props.token, updated.id)
       }
@@ -288,31 +332,148 @@ function fmtDateFull(iso) {
 function onSearchInput() {
   clearTimeout(searchTimeout)
   searchTimeout = setTimeout(doSearch, 300)
+  highlightedIndex.value = -1
 }
 
 async function doSearch() {
   const q = searchQuery.value.trim()
   if (!q) {
     searchResults.value = []
+    highlightedIndex.value = -1
     return
   }
   searching.value = true
   try {
     searchResults.value = await searchNotes(props.token, q)
+    highlightedIndex.value = searchResults.value.length > 0 ? 0 : -1
   } catch (e) {
     searchResults.value = []
+    highlightedIndex.value = -1
   } finally {
     searching.value = false
   }
 }
 
 function relevancePct(distance) {
-  // sqlite-vss cosine distance ranges [0, 2] where 0 is identical.
-  // Map to percentage: distance 0 → 100%, distance 2 → 0%
   if (distance == null) return ''
   const pct = Math.max(0, Math.round((1 - distance / 2) * 100))
   return pct + '% match'
 }
+
+// ── Keyboard shortcut handler ──
+function onKeyDown(e) {
+  const mod = isMac() ? e.metaKey : e.ctrlKey
+
+  // Shift+? => toggle hotkey help
+  if (e.shiftKey && e.key === '?') {
+    e.preventDefault()
+    showHotkeys.value = !showHotkeys.value
+    return
+  }
+
+  // Esc => close modals / history / blur / clear highlight
+  if (e.key === 'Escape') {
+    if (showHotkeys.value) { showHotkeys.value = false; return }
+    if (showDeleteModal.value) { showDeleteModal.value = false; return }
+    if (showHistory.value) { showHistory.value = false; return }
+    if (highlightedIndex.value >= 0) { highlightedIndex.value = -1; return }
+    if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+      document.activeElement.blur()
+      return
+    }
+    return
+  }
+
+  // Ctrl/Cmd+N => new note
+  if (mod && e.key === 'n') {
+    e.preventDefault()
+    newNote()
+    return
+  }
+
+  // Ctrl/Cmd+S => save
+  if (mod && e.key === 's') {
+    e.preventDefault()
+    if (dirty.value && selected.value) save()
+    return
+  }
+
+  // Ctrl/Cmd+E => toggle edit/view
+  if (mod && e.key === 'e') {
+    e.preventDefault()
+    if (selected.value) {
+      toggleEdit()
+      if (isEditing.value) {
+        requestAnimationFrame(() => document.querySelector('.body-textarea')?.focus())
+      }
+    }
+    return
+  }
+
+  // Ctrl/Cmd+H => toggle history
+  if (mod && e.key === 'h') {
+    e.preventDefault()
+    if (selected.value?.id) toggleHistory()
+    return
+  }
+
+  // Ctrl/Cmd+K => focus search
+  if (mod && e.key === 'k') {
+    e.preventDefault()
+    const inp = document.querySelector('.search-input')
+    if (inp) inp.focus()
+    return
+  }
+
+  // Arrow Up / Down => navigate sidebar list
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const list = sidebarList.value
+    if (list.length === 0) return
+    e.preventDefault()
+    if (highlightedIndex.value < 0) {
+      highlightedIndex.value = e.key === 'ArrowDown' ? 0 : list.length - 1
+    } else if (e.key === 'ArrowDown') {
+      highlightedIndex.value = (highlightedIndex.value + 1) % list.length
+    } else {
+      highlightedIndex.value = (highlightedIndex.value - 1 + list.length) % list.length
+    }
+    // Scroll highlighted item into view after DOM update
+    requestAnimationFrame(() => {
+      const el = document.querySelector('.note-item.highlighted')
+      if (el) el.scrollIntoView({ block: 'nearest' })
+    })
+    return
+  }
+
+  // Enter => open highlighted note, or first result if focus is in search input
+  // (Skip if the user is typing in the title or body editor)
+  if (e.key === 'Enter') {
+    const tag = document.activeElement?.tagName
+    const inSearch = document.activeElement?.classList.contains('search-input')
+    // Don't intercept Enter in editor inputs/textarea (title, body, etc.)
+    if (!inSearch && (tag === 'INPUT' || tag === 'TEXTAREA')) return
+    const idx = inSearch ? 0 : highlightedIndex.value
+    if (idx >= 0 && idx < sidebarList.value.length) {
+      e.preventDefault()
+      const item = sidebarList.value[idx]
+      if (searchQuery.value.trim()) {
+        selectSearchResult(item)
+      } else {
+        selectNote(item)
+      }
+      if (inSearch) document.activeElement?.blur()
+    }
+    return
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeyDown)
+})
 </script>
 
 <style scoped>
@@ -411,6 +572,11 @@ function relevancePct(distance) {
 .note-item.active {
   background: var(--raised-bg);
   border-left-color: var(--accent-teal);
+}
+
+.note-item.highlighted {
+  background: var(--raised-bg);
+  border-left-color: var(--tag-bg-color);
 }
 
 .note-title {
@@ -720,5 +886,81 @@ function relevancePct(distance) {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+}
+
+/* Hotkey help modal */
+.hotkey-modal {
+  max-width: 420px;
+}
+
+.hotkey-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--header-title-color);
+}
+
+.hotkey-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid rgba(26, 44, 61, 0.4);
+}
+
+.hotkey-row:last-child {
+  border-bottom: none;
+}
+
+.hotkey-key {
+  background: var(--raised-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+  color: var(--pre-text-color);
+  white-space: nowrap;
+}
+
+.hotkey-desc {
+  font-size: 0.85rem;
+  color: var(--font-color-secondary);
+}
+
+/* "?" help button */
+.help-btn {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--raised-bg);
+  color: var(--font-color-secondary);
+  border: 1px solid var(--border-color);
+  font-size: 0.9rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+
+.help-btn:hover {
+  background: var(--accent-teal);
+  color: #fff;
+  border-color: var(--accent-teal);
 }
 </style>
