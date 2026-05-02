@@ -371,11 +371,19 @@ function onKeyDown(e) {
     return
   }
 
-  // Esc => close modals / history / blur / clear highlight
+  // Esc => close modals / history / clear search / clear highlight / blur
   if (e.key === 'Escape') {
     if (showHotkeys.value) { showHotkeys.value = false; return }
     if (showDeleteModal.value) { showDeleteModal.value = false; return }
     if (showHistory.value) { showHistory.value = false; return }
+    // If search bar is focused and has text, clear it
+    const inSearch = document.activeElement?.classList.contains('search-input')
+    if (inSearch && searchQuery.value.trim()) {
+      searchQuery.value = ''
+      searchResults.value = []
+      highlightedIndex.value = -1
+      return
+    }
     if (highlightedIndex.value >= 0) { highlightedIndex.value = -1; return }
     if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
       document.activeElement.blur()
