@@ -57,7 +57,7 @@ async function submit() {
 }
 
 .login-card {
-  background: var(--surface);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 2.5rem 2rem;
