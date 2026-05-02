@@ -58,7 +58,7 @@ async function submit() {
 
 .login-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 2.5rem 2rem;
   width: 100%;
@@ -73,7 +73,7 @@ async function submit() {
 .brand-name {
   font-size: 1.6rem;
   font-weight: 700;
-  color: var(--amber);
+  color: var(--header-title-color);
   letter-spacing: 0.03em;
 }
 
@@ -86,7 +86,7 @@ async function submit() {
 
 .field label {
   font-size: 0.8rem;
-  color: var(--text-muted);
+  color: var(--font-color-secondary);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -94,7 +94,7 @@ async function submit() {
 .field input { width: 100%; }
 
 .error {
-  color: var(--crimson);
+  color: var(--heading-color);
   font-size: 0.85rem;
   margin-bottom: 0.75rem;
 }
