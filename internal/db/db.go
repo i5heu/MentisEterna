@@ -127,7 +127,30 @@ func (d *DB) ensureAuthTables() error {
 			username   TEXT     NOT NULL,
 			expires_at DATETIME NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS webauthn_credentials (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id           INTEGER NOT NULL,
+			credential_id     BLOB    NOT NULL UNIQUE,
+			public_key        BLOB    NOT NULL,
+			attestation_type  TEXT    NOT NULL DEFAULT '',
+			attestation_format TEXT   NOT NULL DEFAULT '',
+			flags             INTEGER NOT NULL DEFAULT 0,
+			sign_count        INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY(user_id) REFERENCES auth(id) ON DELETE CASCADE
+		);
 	`)
+
+	// Migrate existing webauthn_credentials tables that may lack the new columns.
+	cols, cerr := d.tableColumns("webauthn_credentials")
+	if cerr == nil {
+		if !cols["flags"] {
+			_, _ = d.Exec(`ALTER TABLE webauthn_credentials ADD COLUMN flags INTEGER NOT NULL DEFAULT 0`)
+		}
+		if !cols["attestation_format"] {
+			_, _ = d.Exec(`ALTER TABLE webauthn_credentials ADD COLUMN attestation_format TEXT NOT NULL DEFAULT ''`)
+		}
+	}
+
 	return err
 }
 

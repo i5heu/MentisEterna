@@ -9,18 +9,56 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
+
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/llm"
 )
 
 type Server struct {
-	db   *db.DB
-	addr string
-	llm  llm.Embedder
+	db           *db.DB
+	addr         string
+	llm          llm.Embedder
+	webauthn     *webauthn.WebAuthn
+	sessionStore *webAuthnSessionStore
 }
 
 func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
-	return &Server{db: d, addr: addr, llm: embeddingClient}
+	wconfig := &webauthn.Config{
+		RPID:                  "localhost",
+		RPDisplayName:         "MentisEterna",
+		RPOrigins:             []string{"http://localhost:8080", "https://localhost:8080"},
+		AttestationPreference: "none",
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			AuthenticatorAttachment: "platform",
+			RequireResidentKey:      protocol.ResidentKeyRequired(),
+			UserVerification:        protocol.VerificationRequired,
+		},
+		Timeouts: webauthn.TimeoutsConfig{
+			Login: webauthn.TimeoutConfig{
+				Enforce:    false,
+				Timeout:    300000 * time.Millisecond,
+				TimeoutUVD: 120000 * time.Millisecond,
+			},
+			Registration: webauthn.TimeoutConfig{
+				Enforce:    false,
+				Timeout:    300000 * time.Millisecond,
+				TimeoutUVD: 120000 * time.Millisecond,
+			},
+		},
+	}
+	w, err := webauthn.New(wconfig)
+	if err != nil {
+		log.Fatalf("webauthn: %v", err)
+	}
+	return &Server{
+		db:           d,
+		addr:         addr,
+		llm:          embeddingClient,
+		webauthn:     w,
+		sessionStore: newWebAuthnSessionStore(),
+	}
 }
 
 func (s *Server) Start(ctx context.Context) error {
@@ -76,6 +114,13 @@ func (s *Server) Start(ctx context.Context) error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// WebAuthn routes
+	mux.HandleFunc("/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
+	mux.HandleFunc("/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
+	mux.HandleFunc("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
+	mux.HandleFunc("/webauthn/login/finish", s.handleWebAuthnLoginFinish)
+
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 
 	srv := &http.Server{

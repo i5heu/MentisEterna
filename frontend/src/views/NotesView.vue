@@ -53,6 +53,17 @@
         </template>
         <div v-if="loading || searching" class="empty-list">Loading…</div>
       </div>
+      <div class="sidebar-footer">
+        <button
+          class="btn-ghost passkey-btn"
+          :disabled="registeringPasskey"
+          @click="registerPasskey"
+        >
+          &#128273; {{ registeringPasskey ? "Registering…" : "Register Passkey" }}
+        </button>
+        <p v-if="regPasskeyErr" class="reg-error">{{ regPasskeyErr }}</p>
+        <p v-if="regPasskeyOk" class="reg-ok">Passkey registered.</p>
+      </div>
     </aside>
 
     <!-- Editor -->
@@ -198,7 +209,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { marked } from 'marked'
-import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, fetchChildren, searchNotes } from '../api.js'
+import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, fetchChildren, searchNotes, beginPasskeyRegistration } from '../api.js'
 
 const props = defineProps({ token: String })
 const emit = defineEmits(['logout'])
@@ -232,6 +243,11 @@ const childrenLoading = ref(false)
 // Parent selector state
 const parentSearch = ref('')
 const parentOptions = ref([])
+
+// Passkey registration state
+const registeringPasskey = ref(false)
+const regPasskeyErr = ref('')
+const regPasskeyOk = ref(false)
 const parentSearching = ref(false)
 const showParentPicker = ref(false)
 let parentSearchTimeout = null
@@ -256,6 +272,24 @@ const hotkeys = [
 
 function isMac() {
   return /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgentData?.platform || '')
+}
+
+async function registerPasskey() {
+  regPasskeyErr.value = ''
+  regPasskeyOk.value = false
+  registeringPasskey.value = true
+  try {
+    await beginPasskeyRegistration(props.token)
+    regPasskeyOk.value = true
+  } catch (e) {
+    if (e.name === 'NotAllowedError' || e.message?.includes('NotAllowed')) {
+      regPasskeyErr.value = 'Cancelled.'
+    } else {
+      regPasskeyErr.value = e.message || 'Registration failed'
+    }
+  } finally {
+    registeringPasskey.value = false
+  }
 }
 
 // Edit / View toggle
@@ -1270,5 +1304,27 @@ function onClickOutside(e) {
   background: var(--accent-teal);
   color: #fff;
   border-color: var(--accent-teal);
+}
+
+/* Sidebar footer (passkey registration) */
+.sidebar-footer {
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid var(--border-color);
+  text-align: center;
+}
+.passkey-btn {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+}
+.reg-error {
+  color: var(--heading-color);
+  font-size: 0.75rem;
+  margin-top: 0.3rem;
+}
+.reg-ok {
+  color: var(--accent-teal);
+  font-size: 0.75rem;
+  margin-top: 0.3rem;
 }
 </style>
