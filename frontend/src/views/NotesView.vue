@@ -106,7 +106,15 @@
                 </div>
               </div>
             </div>
-            <div v-if="selectedPath" class="selected-path">{{ selectedPath }}</div>
+            <div v-if="ancestors.length" class="breadcrumb-trail">
+              <span
+                v-for="(anc, i) in ancestors"
+                :key="anc.id"
+                class="breadcrumb-seg"
+                :class="{ 'breadcrumb-current': i === ancestors.length - 1 }"
+                @click="selectBreadcrumb(anc)"
+              >{{ anc.title || 'Untitled' }}<span v-if="i < ancestors.length - 1" class="breadcrumb-colon">:</span></span>
+            </div>
           </div>
           <div class="editor-actions">
             <button class="btn-ghost" @click="toggleEdit">
@@ -209,7 +217,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { marked } from 'marked'
-import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, fetchChildren, searchNotes, beginPasskeyRegistration } from '../api.js'
+import { fetchNotes, createNote, updateNote, deleteNote, fetchNoteHistory, fetchChildren, fetchAncestors, searchNotes, beginPasskeyRegistration } from '../api.js'
 
 const props = defineProps({ token: String })
 const emit = defineEmits(['logout'])
@@ -248,6 +256,7 @@ const parentOptions = ref([])
 const registeringPasskey = ref(false)
 const regPasskeyErr = ref('')
 const regPasskeyOk = ref(false)
+const ancestors = ref([])
 const parentSearching = ref(false)
 const showParentPicker = ref(false)
 let parentSearchTimeout = null
@@ -326,6 +335,7 @@ function selectNote(note) {
   highlightedIndex.value = notes.value.indexOf(note)
   loadChildren(note.id)
   populateParentSearch(note)
+  loadAncestors(note.id)
 }
 
 function selectSearchResult(sr) {
@@ -341,6 +351,7 @@ function selectSearchResult(sr) {
   highlightedIndex.value = searchResults.value.indexOf(sr)
   loadChildren(sr.id)
   populateParentSearch(selected.value)
+  loadAncestors(sr.id)
 }
 
 function populateParentSearch(note) {
@@ -349,6 +360,7 @@ function populateParentSearch(note) {
     parentSearch.value = p ? p.title : ''
   } else {
     parentSearch.value = ''
+  ancestors.value = []
   }
 }
 
@@ -363,6 +375,7 @@ function newNote() {
   highlightedIndex.value = -1
   children.value = []
   parentSearch.value = ''
+  ancestors.value = []
 }
 
 function confirmDelete() {
@@ -445,24 +458,34 @@ function selectParent(note) {
 function clearParent() {
   selected.value = { ...selected.value, parent_id: null }
   parentSearch.value = ''
+  ancestors.value = []
   parentOptions.value = []
   dirty.value = true
 }
 
-// Computed: full path for the selected note (own title or [parent]:[self])
-const selectedPath = computed(() => {
-  if (!selected.value) return ''
-  const parentNote = notes.value.find(n => n.id === selected.value.parent_id)
-  if (parentNote) {
-    return parentNote.title + ':' + selected.value.title
+async function loadAncestors(noteId) {
+  if (!noteId) {
+    ancestors.value = []
+    return
   }
-  return selected.value.title || 'Untitled'
-})
+  try {
+    ancestors.value = await fetchAncestors(props.token, noteId)
+  } catch {
+    ancestors.value = []
+  }
+}
 
-// Child path: [parent title]:[child title]
+function selectBreadcrumb(anc) {
+  if (anc.id === selected.value?.id) return
+  selectNote(anc)
+}
+
+// Child path: breadcrumb-based path for a child note
 function childPath(child) {
-  if (!selected.value) return child.title || 'Untitled'
-  return (selected.value.title || 'Untitled') + ':' + (child.title || 'Untitled')
+  const chain = ancestors.value
+  const titles = chain.map(n => n.title || 'Untitled')
+  titles.push(child.title || 'Untitled')
+  return titles.join(':')
 }
 
 function selectNoteFromChild(child) {
@@ -925,13 +948,43 @@ function onClickOutside(e) {
   cursor: default;
 }
 
-.selected-path {
+
+.breadcrumb-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
   font-size: 0.78rem;
+  margin-top: 0.3rem;
+}
+
+.breadcrumb-seg {
   color: var(--accent-teal);
-  font-style: italic;
+  cursor: pointer;
+  transition: color 0.15s, text-decoration 0.15s;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.breadcrumb-seg:hover {
+  color: var(--header-title-color);
+  text-decoration: underline;
+}
+
+.breadcrumb-current {
+  color: var(--font-color);
+  cursor: default;
+  font-weight: 600;
+}
+
+.breadcrumb-current:hover {
+  color: var(--font-color);
+  text-decoration: none;
+}
+
+.breadcrumb-colon {
+  color: var(--font-color-secondary);
+  margin: 0 0.15rem;
+  cursor: default;
 }
 
 .editor-body {
