@@ -58,6 +58,10 @@ export async function fetchChildren(token, id) {
     return request(`/notes/${id}/children`, { headers: authHeaders(token) });
 }
 
+export async function fetchAncestors(token, id) {
+    return request(`/notes/${id}/ancestors`, { headers: authHeaders(token) });
+}
+
 export async function searchNotes(token, query) {
     return request(`/notes/search?q=${encodeURIComponent(query)}`, {
         headers: authHeaders(token),

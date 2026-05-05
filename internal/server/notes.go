@@ -212,6 +212,52 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// getNoteAncestors returns the full ancestor chain (root → … → self) for a note.
+// GET /notes/:id/ancestors
+func (s *Server) getNoteAncestors(w http.ResponseWriter, r *http.Request) {
+	id, ok := noteIDRaw(r.URL.Path)
+	if !ok {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	var chain []Note
+	cur := id
+	for {
+		n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, cur))
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		chain = append(chain, n)
+		if n.ParentID == nil {
+			break
+		}
+		cur = *n.ParentID
+	}
+	// Reverse so the chain is root-first.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	writeJSON(w, http.StatusOK, chain)
+}
+
+// noteIDRaw extracts an int64 id from a path like "/notes/123/ancestors"
+func noteIDRaw(path string) (int64, bool) {
+	seg := strings.TrimPrefix(path, "/notes/")
+	seg = strings.TrimSuffix(seg, "/history")
+	seg = strings.TrimSuffix(seg, "/children")
+	seg = strings.TrimSuffix(seg, "/ancestors")
+	id, err := strconv.ParseInt(seg, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
 // getNoteChildren returns all notes whose parent_id matches the given note ID.
 // GET /notes/:id/children
 func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
