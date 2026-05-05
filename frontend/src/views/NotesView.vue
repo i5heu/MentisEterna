@@ -588,8 +588,10 @@ function relevancePct(distance) {
 function onKeyDown(e) {
   const mod = isMac() ? e.metaKey : e.ctrlKey
 
-  // Shift+? => toggle hotkey help
+  // Shift+? => toggle hotkey help (skip if typing in an editor field)
   if (e.shiftKey && e.key === '?') {
+    const tag = document.activeElement?.tagName
+    if (isEditing.value && (tag === 'TEXTAREA' || tag === 'INPUT')) return
     e.preventDefault()
     showHotkeys.value = !showHotkeys.value
     return
