@@ -77,7 +77,7 @@
               placeholder="Note title"
               @input="dirty = true"
             />
-            <div class="parent-row">
+            <div v-if="isEditing" class="parent-row">
               <span class="parent-label">Parent:</span>
               <div class="parent-picker-wrapper">
                 <input
@@ -379,9 +379,11 @@ function newNote(parentNote = null) {
   children.value = []
   parentSearch.value = ''
   ancestors.value = []
+  isEditing.value = true
   if (parentNote) {
     parentSearch.value = parentNote.title || ''
   }
+  requestAnimationFrame(() => document.querySelector('.body-textarea')?.focus())
 }
 
 function newChildNote() {
@@ -523,7 +525,10 @@ async function save() {
     }
     selected.value = updated
     dirty.value = false
+    isEditing.value = false
+    populateParentSearch(updated)
     loadChildren(updated.id)
+    loadAncestors(updated.id)
   } catch (e) {
     saveError.value = e.message
   } finally {
