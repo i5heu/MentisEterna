@@ -120,6 +120,9 @@
             <button class="btn-ghost" @click="toggleEdit">
               {{ isEditing ? '🖉 View' : '✎ Edit' }}
             </button>
+            <button class="btn-amber btn-child" @click="newChildNote">
+              + Child
+            </button>
             <button class="btn-primary" :disabled="!dirty || saving" @click="save">
               {{ saving ? 'Saving…' : 'Save' }}
             </button>
@@ -364,8 +367,8 @@ function populateParentSearch(note) {
   }
 }
 
-function newNote() {
-  selected.value = { id: null, title: '', body: '', parent_id: null }
+function newNote(parentNote = null) {
+  selected.value = { id: null, title: '', body: '', parent_id: parentNote ? parentNote.id : null }
   editTitle.value = ''
   editBody.value = ''
   dirty.value = true
@@ -376,6 +379,16 @@ function newNote() {
   children.value = []
   parentSearch.value = ''
   ancestors.value = []
+  if (parentNote) {
+    parentSearch.value = parentNote.title || ''
+  }
+}
+
+function newChildNote() {
+  if (!selected.value?.id) return
+  newNote(selected.value)
+  isEditing.value = true
+  requestAnimationFrame(() => document.querySelector('.body-textarea')?.focus())
 }
 
 function confirmDelete() {
@@ -868,6 +881,11 @@ function onClickOutside(e) {
   gap: 0.5rem;
   flex-shrink: 0;
   flex-wrap: wrap;
+}
+
+.btn-child {
+  font-size: 0.82rem;
+  padding: 0.45rem 0.85rem;
 }
 
 .save-error {
