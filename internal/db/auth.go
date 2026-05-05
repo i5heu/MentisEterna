@@ -68,6 +68,26 @@ func (d *DB) CreateSession(username string) (token string, expiresAt time.Time, 
 	return token, expiresAt, nil
 }
 
+// GetUserID returns the id for a given username.
+func (d *DB) GetUserID(username string) (int64, error) {
+	var id int64
+	err := d.QueryRow(`SELECT id FROM auth WHERE username = ?`, username).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
+}
+
+// GetUsernameByID returns the username for a given auth.id.
+func (d *DB) GetUsernameByID(id int64) (string, error) {
+	var username string
+	err := d.QueryRow(`SELECT username FROM auth WHERE id = ?`, id).Scan(&username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return username, err
+}
+
 // ValidateSession looks up the token and returns the username if it is valid and not expired.
 func (d *DB) ValidateSession(token string) (username string, err error) {
 	var expiresAt string
