@@ -75,11 +75,11 @@ func (d *DB) GetUserByWebAuthnCredential(credentialID []byte) (userID int64, use
 	return
 }
 
-// UpdateWebAuthnSignCount updates the stored sign counter after a successful assertion.
-func (d *DB) UpdateWebAuthnSignCount(credentialID []byte, signCount uint32) error {
+// UpdateWebAuthnSignCount updates the stored sign counter and flags after a successful assertion.
+func (d *DB) UpdateWebAuthnSignCount(credentialID []byte, signCount uint32, flags webauthn.CredentialFlags) error {
 	_, err := d.Exec(
-		`UPDATE webauthn_credentials SET sign_count = ? WHERE credential_id = ?`,
-		signCount, credentialID,
+		`UPDATE webauthn_credentials SET sign_count = ?, flags = ? WHERE credential_id = ?`,
+		signCount, int(flags.ProtocolValue()), credentialID,
 	)
 	return err
 }

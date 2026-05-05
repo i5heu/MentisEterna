@@ -255,7 +255,7 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := s.db.UpdateWebAuthnSignCount(credential.ID, credential.Authenticator.SignCount); err != nil {
+	if err := s.db.UpdateWebAuthnSignCount(credential.ID, credential.Authenticator.SignCount, credential.Flags); err != nil {
 		log.Printf("webauthn: update sign count: %v", err)
 	}
 
