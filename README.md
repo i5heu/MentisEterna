@@ -25,7 +25,8 @@
   - [ ] alternative OLLAMA url (needed to use anothert OLLAMA for tag and title generation, because local ollama is often CPU only)
 - [ ] SQLite AES-256 in OFB mode
 - [ ] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
-## TODO
+
+## TODO Future
 - [ ] Encrypted Backup
 - [ ] OCR for images and pdfs
 - [ ] speech to text notes
@@ -39,6 +40,16 @@
   - [ ] Brainstorm and Research mode
   - [ ] Fast note creation with AI parent selection
   - [ ] Fast Handnote import
+
+## TODO Note Types
+- [x] Recipe (with ingredient table)
+  - [x] Recipe Overview (dashboard listing all recipe notes, grocery list generation via RPC action)
+- [ ] Task Sytem
+  - [ ] Task note type - title, status, dificulty, priority, description, due date, time estimation, time used, recurring options
+  - [ ] Task overview dashboard - list all tasks, filter by status, due date, etc. 
+  - [ ] Daily task list - 3 tasks per day
+- [ ] Home Note Type
+  - [ ] Shows latest notes, current tasks, weather
 
 ## Prerequisites
 
