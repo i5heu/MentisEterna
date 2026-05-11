@@ -84,6 +84,24 @@ func NewManager(db *sql.DB, workers int) *Manager {
 // UpsertDefinitions upserts job_definitions rows from the provided cron jobs.
 // Returns a map from plugin_id+name to the definition ID.
 func (m *Manager) UpsertDefinitions(pluginID string, jobs []CronJob) error {
+	if err := m.upsertDefs(pluginID, jobs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RegisterAdHoc registers a job that is only triggered on-demand via Enqueue
+// (not on a cron schedule). The task function is stored in the in-memory map
+// and the definition is persisted so Enqueue can find it.
+func (m *Manager) RegisterAdHoc(pluginID string, jobs []CronJob) error {
+	// Force empty schedule for ad-hoc jobs (no cron ticks).
+	for i := range jobs {
+		jobs[i].Schedule = ""
+	}
+	return m.upsertDefs(pluginID, jobs)
+}
+
+func (m *Manager) upsertDefs(pluginID string, jobs []CronJob) error {
 	for _, job := range jobs {
 		res, err := m.db.Exec(
 			`INSERT INTO job_definitions (plugin_id, name, schedule)
@@ -182,6 +200,10 @@ func (m *Manager) Start() error {
 		var schedule string
 		if err := rows.Scan(&id, &schedule); err != nil {
 			return fmt.Errorf("scan job definition: %w", err)
+		}
+		// Empty schedule means ad-hoc only (no cron), skip scheduler.
+		if schedule == "" {
+			continue
 		}
 		wg.Add(1)
 		go m.runScheduler(id, schedule, &wg)
