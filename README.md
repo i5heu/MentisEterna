@@ -10,6 +10,7 @@
 ## TODO
 - [x] Chat like UI
 - [ ] Auto Title Generator
+  - [ ] alternative OLLAMA url
 - [ ] Note Types
 - [ ] Pseudo-Plugins
   - [ ] Test harness
