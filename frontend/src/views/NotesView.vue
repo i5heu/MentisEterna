@@ -89,6 +89,7 @@
                 </div>
             </div>
             <div class="sidebar-footer">
+                <JobQueue :token="token" />
                 <button
                     class="btn-ghost passkey-btn"
                     :disabled="registeringPasskey"
@@ -583,6 +584,7 @@ import {
     beginPasskeyRegistration,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
+import JobQueue from "../components/JobQueue.vue";
 
 const props = defineProps({ token: String });
 const emit = defineEmits(["logout"]);

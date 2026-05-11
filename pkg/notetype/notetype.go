@@ -11,10 +11,12 @@ import (
 
 // CronJob describes a background task registered by a plugin.
 // Schedule is a standard cron expression (e.g. "@daily", "0 8 * * *").
-// Task receives the *sql.DB and is expected to handle its own errors.
+// Task receives the *sql.DB and an optional payload (nil for cron-triggered runs).
+// It returns a human-readable result summary and an error.
 type CronJob struct {
+	Name     string
 	Schedule string
-	Task     func(db *sql.DB) error
+	Task     func(db *sql.DB, payload []byte) (result string, err error)
 }
 
 // NoteType is the interface all custom note plugins must implement.
