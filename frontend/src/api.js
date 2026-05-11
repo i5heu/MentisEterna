@@ -201,6 +201,26 @@ export async function beginPasskeyRegistration(token) {
     });
 }
 
+// --- Job Queue API ---
+
+export async function fetchJobs(token) {
+    return request("/jobs", { headers: authHeaders(token) });
+}
+
+export async function retryJob(token, runId) {
+    return request(`/jobs/${runId}/retry`, {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
+export async function cancelJob(token, runId) {
+    return request(`/jobs/${runId}/cancel`, {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 /**
  * Begin passkey login (discoverable / usernameless).
  */

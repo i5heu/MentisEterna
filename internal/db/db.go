@@ -65,10 +65,10 @@ type DB struct {
 func (d *DB) VSSAvailable() bool { return d.vssAvailable }
 
 func Open(path string) (*DB, error) {
-	d, err := openWithDriver("sqlite3-vss", path+"?_journal_mode=WAL&_foreign_keys=on", true)
+	d, err := openWithDriver("sqlite3-vss", path+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000", true)
 	if err != nil {
 		log.Printf("VSS extensions not available, falling back to standard SQLite: %v", err)
-		d, err = openWithDriver("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=on", false)
+		d, err = openWithDriver("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000", false)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite: %w", err)
 		}
@@ -112,6 +112,9 @@ func (d *DB) migrate() error {
 	if err := d.ensureAuthTables(); err != nil {
 		return err
 	}
+	if err := d.ensureJobTables(); err != nil {
+		return err
+	}
 	return d.migrateNotes()
 }
 
@@ -151,6 +154,37 @@ func (d *DB) ensureAuthTables() error {
 		}
 	}
 
+	return err
+}
+
+func (d *DB) ensureJobTables() error {
+	_, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS job_definitions (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			plugin_id   TEXT    NOT NULL,
+			name        TEXT    NOT NULL,
+			schedule    TEXT    NOT NULL,
+			enabled     INTEGER NOT NULL DEFAULT 1,
+			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(plugin_id, name)
+		);
+
+		CREATE TABLE IF NOT EXISTS job_runs (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id      INTEGER NOT NULL REFERENCES job_definitions(id) ON DELETE CASCADE,
+			status      TEXT    NOT NULL DEFAULT 'planned',
+			payload     TEXT,
+			started_at  DATETIME,
+			finished_at DATETIME,
+			error       TEXT,
+			result      TEXT,
+			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_job_runs_status ON job_runs(status);
+		CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id);
+		CREATE INDEX IF NOT EXISTS idx_job_runs_created ON job_runs(created_at);
+	`)
 	return err
 }
 

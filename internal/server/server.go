@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
@@ -23,6 +25,7 @@ type Server struct {
 	llm          llm.Embedder
 	webauthn     *webauthn.WebAuthn
 	sessionStore *webAuthnSessionStore
+	jobManager   *jobs.Manager
 }
 
 func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
@@ -59,6 +62,7 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
 		llm:          embeddingClient,
 		webauthn:     w,
 		sessionStore: newWebAuthnSessionStore(),
+		jobManager:   jobs.NewManager(d.DB, 2),
 	}
 }
 
@@ -73,8 +77,30 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Printf("plugin %s initialized", plugin.ID())
 	}
 
-	// Start centralized cron scheduler for plugin background jobs.
-	s.startCronJobs()
+	// Initialize the job system: upsert plugin cron jobs and start workers.
+	for _, plugin := range notetype.Registry {
+		pluginJobs := plugin.CronJobs()
+		if len(pluginJobs) == 0 {
+			continue
+		}
+		// Convert notetype.CronJob → jobs.CronJob
+		jobsForPlugin := make([]jobs.CronJob, len(pluginJobs))
+		for i, j := range pluginJobs {
+			jobsForPlugin[i] = jobs.CronJob{
+				Name:     j.Name,
+				Schedule: j.Schedule,
+				Task:     j.Task,
+			}
+		}
+		if err := s.jobManager.UpsertDefinitions(plugin.ID(), jobsForPlugin); err != nil {
+			log.Fatalf("Failed to register jobs for plugin %s: %v", plugin.ID(), err)
+		}
+		log.Printf("plugin %s: %d job(s) registered", plugin.ID(), len(jobsForPlugin))
+	}
+
+	if err := s.jobManager.Start(); err != nil {
+		log.Fatalf("Failed to start job manager: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +171,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
 	mux.HandleFunc("/webauthn/login/finish", s.handleWebAuthnLoginFinish)
 
+	// Job routes
+	mux.HandleFunc("/jobs", s.handleJobs)
+	mux.HandleFunc("/jobs/", s.handleJobByID)
+
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 
 	srv := &http.Server{
@@ -162,6 +192,7 @@ func (s *Server) Start(ctx context.Context) error {
 		if err := srv.Shutdown(shutCtx); err != nil {
 			log.Printf("shutdown: %v", err)
 		}
+		s.jobManager.Stop()
 	}()
 
 	log.Printf("listening on http://localhost%s", s.addr)
@@ -171,72 +202,69 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-// startCronJobs iterates over all registered plugins and schedules their
-// CronJobs using a simple goroutine-based scheduler. For production use,
-// consider github.com/robfig/cron/v3, but a lightweight approach keeps
-// dependencies minimal.
-func (s *Server) startCronJobs() {
-	for _, plugin := range notetype.Registry {
-		for _, job := range plugin.CronJobs() {
-			scheduleCron(job.Schedule, func() {
-				if err := job.Task(s.db.DB); err != nil {
-					log.Printf("cron [%s]: %v", plugin.ID(), err)
-				}
-			})
-		}
-	}
-}
+// --- Job Handlers ---
 
-// scheduleCron runs a function on a simple interval-based schedule.
-// Supported formats:
-//   - "@every 1h", "@every 30m", "@every 24h" — Go duration after @every
-//   - "@daily" — runs once per day at midnight
-//   - "@hourly" — runs once per hour
-//   - For full cron expressions, use robfig/cron (see AGENTS.md).
-func scheduleCron(schedule string, fn func()) {
-	d, ok := parseSimpleSchedule(schedule)
-	if !ok {
-		log.Printf("cron: unsupported schedule %q, skipping", schedule)
+func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	go func() {
-		// Sleep until the next aligned tick for @daily/@hourly, or just loop for @every.
-		for {
-			if strings.HasPrefix(schedule, "@every ") {
-				time.Sleep(d)
-			} else {
-				now := time.Now()
-				next := now.Truncate(d).Add(d)
-				if next.Before(now) || next.Equal(now) {
-					next = next.Add(d)
-				}
-				time.Sleep(next.Sub(now))
-			}
-			fn()
-			if !strings.HasPrefix(schedule, "@every ") {
-				// For @daily/@hourly, recalculate next tick after each run.
-				time.Sleep(d)
-			}
-		}
-	}()
+	resp, err := s.jobManager.ListRuns(50)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-func parseSimpleSchedule(schedule string) (time.Duration, bool) {
-	switch {
-	case strings.HasPrefix(schedule, "@every "):
-		d, err := time.ParseDuration(strings.TrimPrefix(schedule, "@every "))
-		if err != nil {
-			return 0, false
+func (s *Server) handleJobByID(w http.ResponseWriter, r *http.Request) {
+	// Parse /jobs/123/retry or /jobs/123/cancel
+	path := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		http.Error(w, "invalid job run id", http.StatusBadRequest)
+		return
+	}
+
+	switch parts[1] {
+	case "retry":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
-		return d, true
-	case schedule == "@daily":
-		return 24 * time.Hour, true
-	case schedule == "@hourly":
-		return time.Hour, true
+		newID, err := s.jobManager.RetryRun(id)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"retried":    true,
+			"new_run_id": newID,
+		})
+	case "cancel":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := s.jobManager.CancelRun(id); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"cancelled": true,
+		})
 	default:
-		return 0, false
+		http.Error(w, "not found", http.StatusNotFound)
 	}
 }
+
+// --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")

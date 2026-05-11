@@ -381,15 +381,18 @@ func Run(t *testing.T, plugin notetype.NoteType, td TestData) {
 		}
 	})
 
-	// CronJobs should not panic.
+	// CronJobs should not panic and must have required fields.
 	t.Run("CronJobs_NoPanic", func(t *testing.T) {
 		jobs := plugin.CronJobs()
 		for i, job := range jobs {
+			if job.Name == "" {
+				t.Errorf("CronJob[%d] has empty Name", i)
+			}
 			if job.Schedule == "" {
-				t.Errorf("CronJob[%d] has empty schedule", i)
+				t.Errorf("CronJob[%d] has empty Schedule", i)
 			}
 			if job.Task == nil {
-				t.Errorf("CronJob[%d] has nil task", i)
+				t.Errorf("CronJob[%d] has nil Task", i)
 			}
 		}
 	})

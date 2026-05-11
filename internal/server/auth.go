@@ -90,6 +90,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func isAPIPath(p string) bool {
 	return p == "/health" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
+		p == "/jobs" || strings.HasPrefix(p, "/jobs/") ||
 		strings.HasPrefix(p, "/webauthn/")
 }
 
