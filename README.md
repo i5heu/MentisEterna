@@ -23,7 +23,7 @@
 - [ ] Security Review and Auth hardening
 ## TODO
 - [ ] Auto Title Generator
-  - [ ] alternative OLLAMA url
+  - [ ] alternative OLLAMA url (needed to use anothert OLLAMA for tag and title generation, because local ollama is often CPU only)
 - [ ] OCR for images and pdfs
 - [ ] speech to text notes
 - [ ] tags
