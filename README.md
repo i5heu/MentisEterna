@@ -17,7 +17,7 @@
 - [x] Job system with persistent queue, retry, and frontend panel
   - [x] Job Queue Indicator in sidebar
   - [x] Semantic indexing via job queue
-- [ ] S3 Media Storage (Encrypted)
+- [x] S3 Media Storage (Encrypted)
 - [ ] Note linking and backlinking
 - [ ] tags
   - [ ] index note type
@@ -61,6 +61,107 @@
 
 - Ollama: [Installation Guide](https://ollama.com/docs/installation)
 - Qwen/Qwen3-Embedding-4B-GGUF: `ollama pull hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M`
+
+## S3 Media Storage
+
+MentisEterna supports encrypted file attachments stored on any S3-compatible object storage (AWS S3, MinIO, Backblaze B2, etc.). Files are **AES-256-GCM encrypted** before leaving the server — each file gets its own random 256-bit key. Ciphertext is cached locally and replicated to all configured S3 endpoints.
+
+### Environment Variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `MEDIA_CACHE_DIR` | Yes | Writable directory for local encrypted file cache (e.g. `/var/mentis/cache`) |
+| `MEDIA_S3_ENDPOINTS` | Yes | JSON array of endpoint configurations (see format below) |
+
+If these variables are not set, the media subsystem is disabled and a warning is logged at startup. The server still runs — file upload/download endpoints simply return `503 Service Unavailable`.
+
+### `MEDIA_S3_ENDPOINTS` Format
+
+A JSON array of objects, each describing one S3-compatible endpoint:
+
+```json
+[
+  {
+    "id":                "primary",
+    "bucket":            "my-bucket",
+    "region":            "us-east-1",
+    "endpoint":          "https://s3.amazonaws.com",
+    "access_key_id":     "AKIAIOSFODNN7EXAMPLE",
+    "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "force_path_style":  false
+  }
+]
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `id` | Yes | Unique name for this endpoint (e.g. `"primary"`, `"backblaze"`). Must be unique across all endpoints. |
+| `bucket` | Yes | S3 bucket name. |
+| `region` | No | AWS region. Defaults to `us-east-1` if omitted. |
+| `endpoint` | Yes | Base URL of the S3-compatible service. For AWS: `https://s3.amazonaws.com`. For MinIO: `http://localhost:9000`. |
+| `access_key_id` | Yes | Access key / username. |
+| `secret_access_key` | Yes | Secret key / password. |
+| `force_path_style` | No | Use path-style bucket addressing (`/bucket/key`) instead of virtual-hosted style (`bucket.endpoint/key`). Required for MinIO and many self-hosted S3 services. Defaults to `false`. |
+
+### Multiple Endpoints (Replication)
+
+You can configure multiple endpoints for redundancy. Files are uploaded to **all** endpoints simultaneously, and the `repair_replicas` background job (`@every 1m`) heals any replicas that failed during upload:
+
+```json
+[
+  {
+    "id":                "aws-primary",
+    "bucket":            "mentis-files",
+    "region":            "us-east-1",
+    "endpoint":          "https://s3.amazonaws.com",
+    "access_key_id":     "AKIA...",
+    "secret_access_key": "...",
+    "force_path_style":  false
+  },
+  {
+    "id":                "backblaze-backup",
+    "bucket":            "mentis-backup",
+    "region":            "us-west-004",
+    "endpoint":          "https://s3.us-west-004.backblazeb2.com",
+    "access_key_id":     "...",
+    "secret_access_key": "...",
+    "force_path_style":  true
+  }
+]
+```
+
+### Encryption Details
+
+- **Algorithm**: AES-256-GCM (chunked mode, 1 MiB chunks)
+- **Key**: Random 256-bit key generated per file (via `crypto/rand`)
+- **Nonce**: Random 12-byte base nonce per file, with chunk index XOR'd for each chunk
+- **File format**: `MEF1` magic bytes → version byte → chunk size → [plain_len | ciphertext]...
+- Keys and nonces are stored in the `files` table alongside the ciphertext SHA-256 hash
+
+### Media Background Jobs
+
+The media subsystem registers these cron jobs:
+
+| Job | Schedule | Purpose |
+|---|---|---|
+| `repair_replicas` | `@every 1m` | Sweeps for files with failed replicas and retries upload |
+| `cleanup_pending_inline` | `@every 1h` | Finalizes inline files whose parent note was confirmed |
+
+### Example: MinIO for Local Development
+
+```bash
+export MEDIA_CACHE_DIR="/tmp/mentis-media-cache"
+export MEDIA_S3_ENDPOINTS='[
+  {
+    "id": "minio",
+    "bucket": "mentis",
+    "endpoint": "http://localhost:9000",
+    "access_key_id": "minioadmin",
+    "secret_access_key": "minioadmin",
+    "force_path_style": true
+  }
+]'
+```
 
 ## Creating Custom Note Types
 
