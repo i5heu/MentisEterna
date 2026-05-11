@@ -9,6 +9,7 @@
 
 ## TODO
 - [ ] Chat like UI
+- [ ] Auto Title Generator
 - [ ] Note Types
 - [ ] Pseudo-Plugins
   - [ ] Test harness
