@@ -115,11 +115,8 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Printf("plugin %s: %d job(s) registered", plugin.ID(), len(jobsForPlugin))
 	}
 
-	if err := s.jobManager.Start(); err != nil {
-		log.Fatalf("Failed to start job manager: %v", err)
-	}
-
 	// Register ad-hoc VSS embedding index job (on-demand, not cron).
+	// Must happen before Start() so workers see the task.
 	if s.db.VSSAvailable() && s.llm != nil {
 		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{{
 			Name: "vss_index",
@@ -129,7 +126,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Register media jobs (cron + ad-hoc).
+	// Register media jobs (cron + ad-hoc). Must happen before Start().
 	if s.mediaService != nil {
 		s.mediaService.EnqueueFunc = s.jobManager.Enqueue
 		if err := s.jobManager.UpsertDefinitions("_media", []jobs.CronJob{
@@ -145,6 +142,11 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Fatalf("Failed to register media ad-hoc jobs: %v", err)
 		}
 		log.Printf("media: jobs registered")
+	}
+
+	// Start workers after all task registrations are complete.
+	if err := s.jobManager.Start(); err != nil {
+		log.Fatalf("Failed to start job manager: %v", err)
 	}
 
 	mux := http.NewServeMux()
