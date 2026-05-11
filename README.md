@@ -1,5 +1,7 @@
 # MentisEterna
 
+> ⚠️⚠️⚠️ Do not use this. This is a terrible generated mess of doom i created for prototyping. I only use it in a private VPN. It is absolutly not secure or safe to use.  ⚠️⚠️⚠️
+
 <p align="center" style="margin: 2em;">
     <img width="280" height="280" style="border-radius: 3%; max-width: 100%" alt="Logo of OuroborosDB" src=".media/MentisEterna_logo.svg">
 </p>
