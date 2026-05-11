@@ -26,6 +26,13 @@
 - [ ] mobile-app - sync?
 - [ ] SQLite AES-256 in OFB mode
 - [ ] Security Review and Auth hardening
+- [ ] UX Improvements
+  - [ ] Note linking and backlinking
+  - [ ] Drag and Drop for notes
+  - [ ] Resizable panes
+  - [ ] Better Keyboard Shortcuts
+  - [ ] Autocomplete and predictive text
+  - [ ] Brainstorm and Research mode
 
 ## Prerequisites
 

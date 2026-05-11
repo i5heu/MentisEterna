@@ -31,19 +31,46 @@ export async function fetchNote(token, id) {
     return request(`/notes/${id}`, { headers: authHeaders(token) });
 }
 
-export async function createNote(token, title, body, parentId) {
+export async function createNote(
+    token,
+    title,
+    body,
+    parentId,
+    type,
+    customData,
+) {
     return request("/notes", {
         method: "POST",
         headers: authHeaders(token),
-        body: JSON.stringify({ title, body, parent_id: parentId ?? null }),
+        body: JSON.stringify({
+            title,
+            body,
+            parent_id: parentId ?? null,
+            type: type || "standard",
+            custom_data: customData || null,
+        }),
     });
 }
 
-export async function updateNote(token, id, title, body, parentId) {
+export async function updateNote(
+    token,
+    id,
+    title,
+    body,
+    parentId,
+    type,
+    customData,
+) {
     return request(`/notes/${id}`, {
         method: "PUT",
         headers: authHeaders(token),
-        body: JSON.stringify({ title, body, parent_id: parentId ?? null }),
+        body: JSON.stringify({
+            title,
+            body,
+            parent_id: parentId ?? null,
+            type: type || "standard",
+            custom_data: customData || null,
+        }),
     });
 }
 
@@ -69,6 +96,14 @@ export async function fetchAncestors(token, id) {
 export async function searchNotes(token, query) {
     return request(`/notes/search?q=${encodeURIComponent(query)}`, {
         headers: authHeaders(token),
+    });
+}
+
+export async function pluginAction(token, noteId, action, params) {
+    return request(`/notes/${noteId}/action`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ action, params: params || null }),
     });
 }
 

@@ -627,6 +627,9 @@ func TestSearchAfterUpdateUsesNewBody(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: expected 200, got %d", w.Code)
 	}
+	// Wait for the async syncEmbeddingAfterEdit goroutine from updateNote to finish.
+	// The mock embedder is fast, so 100ms is sufficient.
+	time.Sleep(100 * time.Millisecond)
 	s.syncEmbeddingAfterEdit(n.ID, "Doc", "updated content about airplanes")
 
 	// Search for "airplanes" should now find the note.

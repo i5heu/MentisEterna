@@ -225,6 +225,12 @@ func (d *DB) migrateNotes() error {
 		}
 	}
 
+	if !cols["type"] {
+		if _, err = d.Exec(`ALTER TABLE notes ADD COLUMN type TEXT NOT NULL DEFAULT 'standard'`); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
