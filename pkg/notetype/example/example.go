@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
@@ -43,7 +44,19 @@ type ExamplePayload struct {
 }
 
 func (p *ExamplePlugin) Validate(raw json.RawMessage) error {
-	return nil // accept anything
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload ExamplePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return err
+	}
+	for i, item := range payload.Items {
+		if item.Label == "" {
+			return fmt.Errorf("example: item %d: label is required", i+1)
+		}
+	}
+	return nil
 }
 
 func (p *ExamplePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, noteID int64, raw json.RawMessage) error {
