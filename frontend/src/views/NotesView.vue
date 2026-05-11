@@ -682,6 +682,7 @@ async function loadNotes() {
 }
 
 function selectNote(note) {
+    closeThreadSidebar();
     selected.value = note;
     editTitle.value = note.title;
     editBody.value = note.body;
@@ -698,6 +699,7 @@ function selectNote(note) {
 }
 
 function selectSearchResult(sr) {
+    closeThreadSidebar();
     selected.value = {
         id: sr.id,
         title: sr.title,
@@ -731,6 +733,7 @@ function populateParentSearch(note) {
 }
 
 function newNote(parentNote = null) {
+    closeThreadSidebar();
     selected.value = {
         id: null,
         title: "",
@@ -1247,8 +1250,6 @@ function onClickOutside(e) {
 //   /note/new                                  → compose a new note
 // Only the numeric IDs are parsed on nav; titles are cosmetic.
 
-let squelchPopstate = false;
-
 function notePath(note) {
     // Build "id:ancestor:ancestor:self" slug for a note
     const chain = ancestors.value;
@@ -1286,13 +1287,11 @@ function buildURL() {
 
 function pushURL() {
     const url = buildURL();
-    squelchPopstate = true;
     window.history.pushState({}, "", url);
 }
 
 function replaceURL() {
     const url = buildURL();
-    squelchPopstate = true;
     window.history.replaceState({}, "", url);
 }
 
@@ -1360,7 +1359,10 @@ async function loadFromURL() {
                 if (!tNote) {
                     try {
                         tNote = await fetchNote(props.token, tid);
-                        if (tNote && !notes.value.some((n) => n.id === tNote.id)) {
+                        if (
+                            tNote &&
+                            !notes.value.some((n) => n.id === tNote.id)
+                        ) {
                             notes.value.push(tNote);
                         }
                     } catch {
@@ -1380,13 +1382,8 @@ async function loadFromURL() {
 }
 
 function onPopstate() {
-    if (squelchPopstate) {
-        squelchPopstate = false;
-        return;
-    }
     loadFromURL();
 }
-
 </script>
 <style scoped>
 .layout {
