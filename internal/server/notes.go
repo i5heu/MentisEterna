@@ -258,6 +258,12 @@ func noteIDRaw(path string) (int64, bool) {
 	return id, true
 }
 
+// ChildNote extends Note with a child_count for thread indicators.
+type ChildNote struct {
+	Note
+	ChildCount int64 `json:"child_count"`
+}
+
 // getNoteChildren returns all notes whose parent_id matches the given note ID.
 // GET /notes/:id/children
 func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
@@ -284,14 +290,17 @@ func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	children := []Note{}
+	children := []ChildNote{}
 	for rows.Next() {
 		n, err := scanNote(rows)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		children = append(children, n)
+		cn := ChildNote{Note: n}
+		// get child count (number of notes whose parent_id is this child's id)
+		_ = s.db.QueryRow(`SELECT COUNT(*) FROM notes WHERE parent_id = ?`, n.ID).Scan(&cn.ChildCount)
+		children = append(children, cn)
 	}
 	writeJSON(w, http.StatusOK, children)
 }
