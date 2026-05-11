@@ -681,8 +681,8 @@ async function loadNotes() {
     }
 }
 
-function selectNote(note) {
-    closeThreadSidebar();
+async function selectNote(note) {
+    threadNote.value = null;
     selected.value = note;
     editTitle.value = note.title;
     editBody.value = note.body;
@@ -694,12 +694,12 @@ function selectNote(note) {
     highlightedIndex.value = rootNotes.value.indexOf(note);
     loadChildren(note.id);
     populateParentSearch(note);
-    loadAncestors(note.id);
+    await loadAncestors(note.id);
     pushURL();
 }
 
-function selectSearchResult(sr) {
-    closeThreadSidebar();
+async function selectSearchResult(sr) {
+    threadNote.value = null;
     selected.value = {
         id: sr.id,
         title: sr.title,
@@ -718,7 +718,7 @@ function selectSearchResult(sr) {
     highlightedIndex.value = searchResults.value.indexOf(sr);
     loadChildren(sr.id);
     populateParentSearch(selected.value);
-    loadAncestors(sr.id);
+    await loadAncestors(sr.id);
     pushURL();
 }
 
@@ -733,7 +733,7 @@ function populateParentSearch(note) {
 }
 
 function newNote(parentNote = null) {
-    closeThreadSidebar();
+    threadNote.value = null;
     selected.value = {
         id: null,
         title: "",
@@ -988,12 +988,12 @@ async function save() {
             notes.value.unshift(updated);
         }
         selected.value = updated;
-        pushURL();
         dirty.value = false;
         isEditing.value = false;
         populateParentSearch(updated);
         loadChildren(updated.id);
-        loadAncestors(updated.id);
+        await loadAncestors(updated.id);
+        pushURL();
     } catch (e) {
         saveError.value = e.message;
     } finally {
