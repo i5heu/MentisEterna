@@ -76,6 +76,13 @@
                         <span class="note-date">{{
                             fmtDate(note.updated_at)
                         }}</span>
+                        <span
+                            v-if="note.pinned"
+                            class="pin-indicator"
+                            title="Pinned"
+                        >
+                            📌
+                        </span>
                     </div>
                     <div
                         v-if="rootNotes.length === 0 && !loading"
@@ -220,6 +227,16 @@
                             @click="toggleHistory"
                         >
                             History
+                        </button>
+                        <button
+                            class="btn-ghost pin-editor-btn"
+                            :class="{ pinned: selected?.pinned }"
+                            :title="
+                                selected?.pinned ? 'Unpin note' : 'Pin note'
+                            "
+                            @click="togglePin(selected)"
+                        >
+                            📌
                         </button>
                         <button class="btn-danger" @click="confirmDelete">
                             Delete
@@ -581,6 +598,7 @@ import {
     fetchChildren,
     fetchAncestors,
     searchNotes,
+    setNotePin,
     beginPasskeyRegistration,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
@@ -718,6 +736,22 @@ function toggleEdit() {
     isEditing.value = !isEditing.value;
 }
 
+async function togglePin(note) {
+    if (!note?.id) return;
+    const newPinned = !note.pinned;
+    try {
+        await setNotePin(props.token, note.id, newPinned);
+        // Reload the note list so sort order (pinned first) is correct.
+        await loadNotes();
+        // Update selected note pinned state.
+        if (selected.value?.id === note.id) {
+            selected.value.pinned = newPinned;
+        }
+    } catch (e) {
+        saveError.value = e.message;
+    }
+}
+
 onMounted(loadNotes);
 
 async function loadNotes() {
@@ -766,6 +800,7 @@ async function selectSearchResult(sr) {
         title: sr.title,
         parent_id: sr.parent_id,
         type: sr.type || "standard",
+        pinned: sr.pinned || false,
         body: sr.body,
         created_at: sr.created_at,
         updated_at: sr.updated_at,
@@ -1023,7 +1058,8 @@ async function sendThreadReply() {
             threadReplyBody.value,
             threadNote.value.id,
         );
-        notes.value.unshift(child);
+        // Reload the note list so sort order is correct.
+        await loadNotes();
         threadChildren.value.push(child);
         threadReplyTitle.value = "";
         threadReplyBody.value = "";
@@ -1064,8 +1100,6 @@ async function save() {
                 noteType.value,
                 customData.value,
             );
-            const idx = notes.value.findIndex((n) => n.id === updated.id);
-            if (idx !== -1) notes.value[idx] = updated;
             if (showHistory.value) {
                 history.value = await fetchNoteHistory(props.token, updated.id);
             }
@@ -1078,8 +1112,9 @@ async function save() {
                 noteType.value,
                 customData.value,
             );
-            notes.value.unshift(updated);
         }
+        // Reload the full note list so sort order is correct.
+        await loadNotes();
         selected.value = updated;
         dirty.value = false;
         isEditing.value = false;
@@ -1110,8 +1145,8 @@ async function sendReply() {
             newReplyBody.value,
             selected.value.id,
         );
-        // Prepend to notes list so it appears in sidebar
-        notes.value.unshift(child);
+        // Reload the note list so sort order is correct.
+        await loadNotes();
         // Append to children so it appears in the chat feed
         children.value.push(child);
         newReplyTitle.value = "";
@@ -1600,6 +1635,23 @@ function onPopstate() {
 .note-date {
     font-size: 0.75rem;
     color: var(--date-color);
+}
+
+.pin-indicator {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.75rem;
+    opacity: 0.5;
+}
+
+.note-item {
+    position: relative;
+}
+
+.pin-editor-btn.pinned {
+    color: var(--accent-amber);
 }
 
 .empty-list {

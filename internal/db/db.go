@@ -265,6 +265,12 @@ func (d *DB) migrateNotes() error {
 		}
 	}
 
+	if !cols["pinned"] {
+		if _, err = d.Exec(`ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

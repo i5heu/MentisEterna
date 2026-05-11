@@ -21,6 +21,7 @@ type Note struct {
 	Title      string `json:"title"`
 	ParentID   *int64 `json:"parent_id"`
 	Type       string `json:"type"`
+	Pinned     bool   `json:"pinned"`
 	Body       string `json:"body"`
 	CreatedAt  string `json:"created_at"`
 	UpdatedAt  string `json:"updated_at"`
@@ -36,7 +37,7 @@ type NoteUpdate struct {
 }
 
 const noteSelectSQL = `
-	SELECT n.id, n.title, n.parent_id, n.type, n.created_at,
+	SELECT n.id, n.title, n.parent_id, n.type, n.pinned, n.created_at,
 	       COALESCE(u.body, '') AS body,
 	       COALESCE(u.created_at, n.created_at) AS updated_at
 	FROM notes n
@@ -47,7 +48,7 @@ const noteSelectSQL = `
 
 func scanNote(row interface{ Scan(...any) error }) (Note, error) {
 	var n Note
-	err := row.Scan(&n.ID, &n.Title, &n.ParentID, &n.Type, &n.CreatedAt, &n.Body, &n.UpdatedAt)
+	err := row.Scan(&n.ID, &n.Title, &n.ParentID, &n.Type, &n.Pinned, &n.CreatedAt, &n.Body, &n.UpdatedAt)
 	return n, err
 }
 
@@ -74,7 +75,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) listNotes(w http.ResponseWriter, _ *http.Request) {
-	rows, err := s.db.Query(noteSelectSQL + ` ORDER BY updated_at DESC`)
+	rows, err := s.db.Query(noteSelectSQL + ` ORDER BY n.pinned DESC, updated_at DESC`)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -282,6 +283,44 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// setNotePin toggles the pinned status of a note.
+// POST /notes/:id/pin with {"pinned": true|false}
+func (s *Server) setNotePin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, ok := noteID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	res, err := s.db.Exec(`UPDATE notes SET pinned = ? WHERE id = ?`, in.Pinned, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.enrichNote(&n)
+	writeJSON(w, http.StatusOK, n)
+}
+
 // getNoteAncestors returns the full ancestor chain (root -> ... -> self) for a note.
 // GET /notes/:id/ancestors
 func (s *Server) getNoteAncestors(w http.ResponseWriter, r *http.Request) {
@@ -477,6 +516,7 @@ func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	seg = strings.TrimSuffix(seg, "/history")
 	seg = strings.TrimSuffix(seg, "/children")
 	seg = strings.TrimSuffix(seg, "/action")
+	seg = strings.TrimSuffix(seg, "/pin")
 	id, err := strconv.ParseInt(seg, 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid id", http.StatusBadRequest)
@@ -623,7 +663,7 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	noteRows, err := s.db.Query(`
-		SELECT n.id, n.title, n.parent_id, n.type, n.created_at,
+		SELECT n.id, n.title, n.parent_id, n.type, n.pinned, n.created_at,
 		       COALESCE(u.body, '') AS body,
 		       COALESCE(u.created_at, n.created_at) AS updated_at
 		FROM notes n
@@ -641,7 +681,7 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	results := []SearchResult{}
 	for noteRows.Next() {
 		var sr SearchResult
-		err := noteRows.Scan(&sr.ID, &sr.Title, &sr.ParentID, &sr.Type, &sr.CreatedAt,
+		err := noteRows.Scan(&sr.ID, &sr.Title, &sr.ParentID, &sr.Type, &sr.Pinned, &sr.CreatedAt,
 			&sr.Body, &sr.UpdatedAt)
 		if err != nil {
 			writeErr(w, err)

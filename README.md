@@ -9,7 +9,7 @@
 
 
 ## TODO MVP
-- [ ] Pin notes 
+- [x] Pin notes 
 - [x] Chat like UI
 - [x] Note Types
 - [x] Pseudo-Plugins

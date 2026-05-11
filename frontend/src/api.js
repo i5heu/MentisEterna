@@ -99,6 +99,14 @@ export async function searchNotes(token, query) {
     });
 }
 
+export async function setNotePin(token, id, pinned) {
+    return request(`/notes/${id}/pin`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ pinned }),
+    });
+}
+
 export async function pluginAction(token, noteId, action, params) {
     return request(`/notes/${noteId}/action`, {
         method: "POST",
