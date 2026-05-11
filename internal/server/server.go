@@ -16,6 +16,7 @@ import (
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
+	"github.com/i5heu/MentisEterna/internal/media"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
@@ -26,6 +27,7 @@ type Server struct {
 	webauthn     *webauthn.WebAuthn
 	sessionStore *webAuthnSessionStore
 	jobManager   *jobs.Manager
+	mediaService *media.Service
 }
 
 func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
@@ -56,13 +58,28 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
 	if err != nil {
 		log.Fatalf("webauthn: %v", err)
 	}
+
+	jobMgr := jobs.NewManager(d.DB, 2)
+
+	// Media subsystem: set up cache, S3 store, and the service orchestrator.
+	var mediaSvc *media.Service
+	mediaCfg, cfgErr := media.LoadConfigFromEnv()
+	if cfgErr != nil {
+		log.Printf("media: not enabled (%v)", cfgErr)
+	} else {
+		mediaSvc = media.NewService(d, mediaCfg)
+		// EnqueueFunc will be wired after jobMgr is started.
+		log.Printf("media: enabled with %d endpoint(s), cache=%s", len(mediaCfg.Endpoints), mediaCfg.CacheDir)
+	}
+
 	return &Server{
 		db:           d,
 		addr:         addr,
 		llm:          embeddingClient,
 		webauthn:     w,
 		sessionStore: newWebAuthnSessionStore(),
-		jobManager:   jobs.NewManager(d.DB, 2),
+		jobManager:   jobMgr,
+		mediaService: mediaSvc,
 	}
 }
 
@@ -110,6 +127,24 @@ func (s *Server) Start(ctx context.Context) error {
 		}}); err != nil {
 			log.Fatalf("Failed to register VSS index job: %v", err)
 		}
+	}
+
+	// Register media jobs (cron + ad-hoc).
+	if s.mediaService != nil {
+		s.mediaService.EnqueueFunc = s.jobManager.Enqueue
+		if err := s.jobManager.UpsertDefinitions("_media", []jobs.CronJob{
+			{Name: "repair_replicas", Schedule: "@every 1m", Task: s.mediaService.RepairSweepTask},
+			{Name: "cleanup_pending_inline", Schedule: "@every 1h", Task: s.mediaService.PendingInlineCleanupTask},
+		}); err != nil {
+			log.Fatalf("Failed to register media cron jobs: %v", err)
+		}
+		if err := s.jobManager.RegisterAdHoc("_media", []jobs.CronJob{
+			{Name: "repair_file_replica", Task: s.mediaService.RepairReplicaTask},
+			{Name: "delete_file_replica", Task: s.mediaService.DeleteReplicaTask},
+		}); err != nil {
+			log.Fatalf("Failed to register media ad-hoc jobs: %v", err)
+		}
+		log.Printf("media: jobs registered")
 	}
 
 	mux := http.NewServeMux()
@@ -167,6 +202,19 @@ func (s *Server) Start(ctx context.Context) error {
 			s.setNotePin(w, r)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/files") {
+			s.uploadAttachment(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/files/inline") {
+			s.uploadInlineFile(w, r)
+			return
+		}
+		// DELETE /notes/:id/files/:fileID
+		if idx := strings.LastIndex(r.URL.Path, "/files/"); idx > 0 && r.Method == http.MethodDelete {
+			s.deleteAttachment(w, r)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			s.getNote(w, r)
@@ -188,6 +236,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// Job routes
 	mux.HandleFunc("/jobs", s.handleJobs)
 	mux.HandleFunc("/jobs/", s.handleJobByID)
+
+	// File serving endpoint
+	mux.HandleFunc("/file/", s.serveFile)
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 

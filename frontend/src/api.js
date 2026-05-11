@@ -15,6 +15,10 @@ function authHeaders(token) {
     };
 }
 
+function authOnlyHeaders(token) {
+    return { Authorization: `Bearer ${token}` };
+}
+
 export async function login(username, password) {
     return request("/login", {
         method: "POST",
@@ -112,6 +116,35 @@ export async function pluginAction(token, noteId, action, params) {
         method: "POST",
         headers: authHeaders(token),
         body: JSON.stringify({ action, params: params || null }),
+    });
+}
+
+// --- File Attachments API ---
+
+export async function uploadAttachment(token, noteId, file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request(`/notes/${noteId}/files`, {
+        method: "POST",
+        headers: authOnlyHeaders(token),
+        body: formData,
+    });
+}
+
+export async function uploadInlineFile(token, noteId, file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request(`/notes/${noteId}/files/inline`, {
+        method: "POST",
+        headers: authOnlyHeaders(token),
+        body: formData,
+    });
+}
+
+export async function deleteAttachment(token, noteId, fileId) {
+    return request(`/notes/${noteId}/files/${fileId}`, {
+        method: "DELETE",
+        headers: authHeaders(token),
     });
 }
 

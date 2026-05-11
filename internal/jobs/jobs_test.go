@@ -450,6 +450,103 @@ func TestPayloadRoundTrip(t *testing.T) {
 	t.Logf("payload round-trip: payload=%s result=%s", *dbPayload, *dbResult)
 }
 
+func TestMediaJobsRegistration(t *testing.T) {
+	d := openTestDB(t)
+	m := NewManager(d, 1)
+
+	// Simulate what the media package does: register ad-hoc upload and delete jobs.
+	uploadCalled := false
+	deleteCalled := false
+
+	err := m.RegisterAdHoc("media", []CronJob{
+		{
+			Name: "upload_file",
+			Task: func(db *sql.DB, payload []byte) (string, error) {
+				uploadCalled = true
+				return "uploaded file", nil
+			},
+		},
+		{
+			Name: "delete_replicas",
+			Task: func(db *sql.DB, payload []byte) (string, error) {
+				deleteCalled = true
+				return "deleted replicas", nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("register ad-hoc: %v", err)
+	}
+
+	// Verify definitions exist.
+	var count int
+	d.QueryRow(`SELECT COUNT(*) FROM job_definitions WHERE plugin_id = 'media'`).Scan(&count)
+	if count != 2 {
+		t.Errorf("expected 2 media job definitions, got %d", count)
+	}
+
+	// Verify schedule is empty (ad-hoc only).
+	var schedule string
+	d.QueryRow(`SELECT schedule FROM job_definitions WHERE plugin_id = 'media' AND name = 'upload_file'`).Scan(&schedule)
+	if schedule != "" {
+		t.Errorf("expected empty schedule for ad-hoc job, got %q", schedule)
+	}
+
+	// Enqueue an upload job and simulate worker execution.
+	payload := json.RawMessage(`{"file_id":42}`)
+	runID, err := m.Enqueue("media", "upload_file", payload)
+	if err != nil {
+		t.Fatalf("enqueue upload_file: %v", err)
+	}
+
+	// Find the task and execute it.
+	task := m.tasks[1] // job_definition id for upload_file
+	if task == nil {
+		t.Fatal("upload_file task not registered")
+	}
+	result, taskErr := task(d, []byte(payload))
+	if taskErr != nil {
+		t.Fatalf("upload_file task: %v", taskErr)
+	}
+	if !uploadCalled {
+		t.Error("upload task was not called")
+	}
+	t.Logf("upload task result: %s", result)
+
+	// Update run as done.
+	d.Exec(`UPDATE job_runs SET status = 'done', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), result = ? WHERE id = ?`,
+		result, runID)
+
+	// Verify the run is recorded.
+	var status string
+	d.QueryRow(`SELECT status FROM job_runs WHERE id = ?`, runID).Scan(&status)
+	if status != StatusDone {
+		t.Errorf("expected status 'done', got %q", status)
+	}
+
+	// Enqueue a delete job.
+	payload2 := json.RawMessage(`{"file_id":99}`)
+	runID2, err := m.Enqueue("media", "delete_replicas", payload2)
+	if err != nil {
+		t.Fatalf("enqueue delete_replicas: %v", err)
+	}
+	task2 := m.tasks[2] // job_definition id for delete_replicas
+	if task2 == nil {
+		t.Fatal("delete_replicas task not registered")
+	}
+	result2, taskErr2 := task2(d, []byte(payload2))
+	if taskErr2 != nil {
+		t.Fatalf("delete_replicas task: %v", taskErr2)
+	}
+	if !deleteCalled {
+		t.Error("delete task was not called")
+	}
+	d.Exec(`UPDATE job_runs SET status = 'done', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), result = ? WHERE id = ?`,
+		result2, runID2)
+
+	t.Logf("media jobs: upload=%d delete=%d both completed", runID, runID2)
+}
+
 func TestListRuns(t *testing.T) {
 	d := openTestDB(t)
 	m := NewManager(d, 1)
