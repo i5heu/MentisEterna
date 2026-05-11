@@ -27,6 +27,18 @@ type Note struct {
 	UpdatedAt  string `json:"updated_at"`
 	CustomData any    `json:"custom_data,omitempty"`
 	UISchema   any    `json:"ui_schema,omitempty"`
+	// Attachments are files attached to this note.
+	Attachments []NoteFile `json:"attachments,omitempty"`
+}
+
+// NoteFile is a lightweight view of a file for note JSON responses.
+type NoteFile struct {
+	ID        int64  `json:"id"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mime_type"`
+	SizeBytes int64  `json:"size_bytes"`
+	URL       string `json:"url"`
+	IsImage   bool   `json:"is_image"`
 }
 
 type NoteUpdate struct {
@@ -68,6 +80,42 @@ func (s *Server) enrichNote(n *Note) {
 	}
 	n.CustomData = customData
 	n.UISchema = plugin.UISchema()
+}
+
+// loadNoteAttachments loads attachment metadata for a note from the database.
+func (s *Server) loadNoteAttachments(noteID int64) ([]NoteFile, error) {
+	rows, err := s.db.Query(`
+		SELECT f.id, f.filename, f.mime_type, f.size_bytes
+		FROM files f
+		JOIN files_refs fr ON fr.file_id = f.id
+		WHERE fr.note_id = ? AND fr.ref_kind = 'attachment' AND f.deleted_at IS NULL
+	`, noteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []NoteFile
+	for rows.Next() {
+		var nf NoteFile
+		if err := rows.Scan(&nf.ID, &nf.Filename, &nf.MimeType, &nf.SizeBytes); err != nil {
+			return nil, err
+		}
+		nf.URL = fmt.Sprintf("/file/%d/%d", noteID, nf.ID)
+		nf.IsImage = isImageMIME(nf.MimeType)
+		files = append(files, nf)
+	}
+	return files, rows.Err()
+}
+
+// isImageMIME returns true if the given MIME type represents an image.
+func isImageMIME(mimeType string) bool {
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/tiff":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -154,6 +202,16 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reconcile inline file refs from markdown body (after commit).
+	if s.mediaService != nil && in.Body != "" {
+		orphaned, err := s.mediaService.ReconcileInlineRefs(context.Background(), id, in.Body)
+		if err != nil {
+			log.Printf("media: reconcile inline refs for note %d: %v", id, err)
+		} else if len(orphaned) > 0 {
+			log.Printf("media: note %d: cleaned up %d unreferenced inline files", id, len(orphaned))
+		}
+	}
+
 	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if err != nil {
 		writeErr(w, err)
@@ -161,6 +219,7 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enrich with custom data and UI schema.
 	s.enrichNote(&n)
+	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	// Async VSS embedding sync via job queue
 	s.enqueueVSSIndex(id, in.Title, in.Body)
 	writeJSON(w, http.StatusCreated, n)
@@ -181,6 +240,7 @@ func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.enrichNote(&n)
+	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -251,12 +311,23 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reconcile inline file refs from markdown body (after commit).
+	if s.mediaService != nil && in.Body != "" {
+		orphaned, err := s.mediaService.ReconcileInlineRefs(context.Background(), id, in.Body)
+		if err != nil {
+			log.Printf("media: reconcile inline refs for note %d: %v", id, err)
+		} else if len(orphaned) > 0 {
+			log.Printf("media: note %d: cleaned up %d unreferenced inline files", id, len(orphaned))
+		}
+	}
+
 	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	s.enrichNote(&n)
+	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	// Async VSS embedding sync via job queue
 	s.enqueueVSSIndex(id, in.Title, in.Body)
 	writeJSON(w, http.StatusOK, n)
@@ -267,6 +338,17 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// Collect deletable file IDs BEFORE deleting the note (refs still exist).
+	var deletableFiles []int64
+	if s.mediaService != nil {
+		var err error
+		deletableFiles, err = s.mediaService.CollectDeletableFilesAfterNoteDelete(context.Background(), id)
+		if err != nil {
+			log.Printf("media: collect deletable files for note %d: %v", id, err)
+		}
+	}
+
 	res, err := s.db.Exec(`DELETE FROM notes WHERE id = ?`, id)
 	if err != nil {
 		writeErr(w, err)
@@ -276,10 +358,19 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+
 	// Remove VSS embedding
 	if s.db.VSSAvailable() {
 		_, _ = s.db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, id)
 	}
+
+	// Soft-delete files that have no remaining refs and enqueue replica deletion.
+	if s.mediaService != nil && len(deletableFiles) > 0 {
+		if err := s.mediaService.SoftDeleteFiles(deletableFiles); err != nil {
+			log.Printf("media: soft delete files for note %d: %v", id, err)
+		}
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -409,6 +500,12 @@ func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
 		cn := ChildNote{Note: n}
 		// get child count (number of notes whose parent_id is this child's id)
 		_ = s.db.QueryRow(`SELECT COUNT(*) FROM notes WHERE parent_id = ?`, n.ID).Scan(&cn.ChildCount)
+		// load attachments (skip on error)
+		if atts, err := s.loadNoteAttachments(n.ID); err != nil {
+			log.Printf("load attachments for child note %d: %v", n.ID, err)
+		} else {
+			cn.Attachments = atts
+		}
 		children = append(children, cn)
 	}
 	writeJSON(w, http.StatusOK, children)

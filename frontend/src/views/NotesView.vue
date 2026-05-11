@@ -215,6 +215,13 @@
                             + Child
                         </button>
                         <button
+                            class="btn-ghost"
+                            @click="onAttachFile"
+                            :disabled="!selected?.id"
+                        >
+                            📎 Attach
+                        </button>
+                        <button
                             class="btn-primary"
                             :disabled="!dirty || saving"
                             @click="save"
@@ -261,10 +268,13 @@
                         <div class="message-body">
                             <textarea
                                 v-if="isEditing"
+                                ref="bodyTextarea"
                                 v-model="editBody"
                                 class="body-textarea"
-                                placeholder="Write your note here…"
+                                placeholder="Write your note here… (drag files here)"
                                 @input="dirty = true"
+                                @dragover.prevent
+                                @drop.prevent="onBodyDrop"
                             />
                             <div
                                 v-else
@@ -284,6 +294,11 @@
                                     dirty = true;
                                 }
                             "
+                        />
+                        <NoteAttachments
+                            :attachments="selected.attachments"
+                            :editing="isEditing"
+                            @remove="removeAttachment"
                         />
                     </div>
 
@@ -456,6 +471,10 @@
                         :editing="false"
                         @selectNote="(id) => selectNoteById(id)"
                     />
+                    <NoteAttachments
+                        :attachments="threadNote.attachments"
+                        :editing="false"
+                    />
                 </div>
 
                 <!-- Child messages of the thread note -->
@@ -602,7 +621,13 @@ import {
     beginPasskeyRegistration,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
+import NoteAttachments from "../components/NoteAttachments.vue";
 import JobQueue from "../components/JobQueue.vue";
+import {
+    uploadAttachment,
+    uploadInlineFile,
+    deleteAttachment,
+} from "../api.js";
 
 const props = defineProps({ token: String });
 const emit = defineEmits(["logout"]);
@@ -616,6 +641,22 @@ const noteType = ref("standard");
 const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
+const bodyTextarea = ref(null);
+
+function insertAtCursor(text) {
+    const el = bodyTextarea.value;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    editBody.value =
+        editBody.value.slice(0, start) + text + editBody.value.slice(end);
+    requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + text.length;
+        el.setSelectionRange(pos, pos);
+    });
+    dirty.value = true;
+}
 
 // Available note types (discovered from registry via server response or hardcoded list)
 const typeOptions = [
@@ -734,6 +775,12 @@ function renderMarkdown(body) {
 
 function toggleEdit() {
     isEditing.value = !isEditing.value;
+}
+
+async function ensureSelectedNoteSaved() {
+    if (!selected.value?.id) await save();
+    if (!selected.value?.id)
+        throw new Error("Save the note before uploading files");
 }
 
 async function togglePin(note) {
@@ -1126,6 +1173,67 @@ async function save() {
         saveError.value = e.message;
     } finally {
         saving.value = false;
+    }
+}
+
+// --- File attachment handlers ---
+
+async function onAttachFile() {
+    try {
+        await ensureSelectedNoteSaved();
+    } catch (e) {
+        saveError.value = e.message;
+        return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.onchange = async () => {
+        const file = input.files[0];
+        if (!file) return;
+        try {
+            const result = await uploadAttachment(
+                props.token,
+                selected.value.id,
+                file,
+            );
+            if (!selected.value.attachments) selected.value.attachments = [];
+            selected.value.attachments.push(result.file);
+        } catch (e) {
+            saveError.value = e.message;
+        }
+    };
+    input.click();
+}
+
+async function onBodyDrop(e) {
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    try {
+        await ensureSelectedNoteSaved();
+    } catch (err) {
+        saveError.value = err.message;
+        return;
+    }
+    try {
+        const result = await uploadInlineFile(
+            props.token,
+            selected.value.id,
+            file,
+        );
+        insertAtCursor(result.markdown);
+    } catch (err) {
+        saveError.value = err.message;
+    }
+}
+
+async function removeAttachment(file) {
+    try {
+        await deleteAttachment(props.token, selected.value.id, file.id);
+        selected.value.attachments = selected.value.attachments.filter(
+            (f) => f.id !== file.id,
+        );
+    } catch (e) {
+        saveError.value = e.message;
     }
 }
 

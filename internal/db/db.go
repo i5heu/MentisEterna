@@ -115,7 +115,10 @@ func (d *DB) migrate() error {
 	if err := d.ensureJobTables(); err != nil {
 		return err
 	}
-	return d.migrateNotes()
+	if err := d.migrateNotes(); err != nil {
+		return err
+	}
+	return d.ensureMediaTables()
 }
 
 func (d *DB) ensureAuthTables() error {
@@ -272,6 +275,60 @@ func (d *DB) migrateNotes() error {
 	}
 
 	return nil
+}
+
+func (d *DB) ensureMediaTables() error {
+	_, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS files (
+			id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+			original_note_id       INTEGER REFERENCES notes(id) ON DELETE SET NULL,
+			pending_inline_note_id INTEGER REFERENCES notes(id) ON DELETE CASCADE,
+			pending_inline_at      DATETIME,
+			storage_key            TEXT    NOT NULL UNIQUE,
+			filename               TEXT    NOT NULL,
+			mime_type              TEXT    NOT NULL,
+			size_bytes             INTEGER NOT NULL,
+			plaintext_sha256       TEXT,
+			ciphertext_sha256      TEXT    NOT NULL,
+			aes_key                BLOB    NOT NULL,
+			aes_nonce              BLOB    NOT NULL,
+			created_at             DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			deleted_at             DATETIME
+		);
+
+		CREATE TABLE IF NOT EXISTS file_s3 (
+			file_id           INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+			endpoint_id       TEXT    NOT NULL,
+			state             TEXT    NOT NULL,
+			remote_key        TEXT    NOT NULL,
+			etag              TEXT,
+			ciphertext_size   INTEGER,
+			last_error        TEXT,
+			retry_count       INTEGER NOT NULL DEFAULT 0,
+			last_attempt_at   DATETIME,
+			last_success_at   DATETIME,
+			next_retry_at     DATETIME,
+			updated_at        DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (file_id, endpoint_id)
+		);
+
+		CREATE TABLE IF NOT EXISTS files_refs (
+			note_id      INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+			file_id      INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+			ref_kind     TEXT    NOT NULL,
+			created_at   DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at   DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (note_id, file_id, ref_kind)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_files_pending_inline_note_id ON files(pending_inline_note_id);
+		CREATE INDEX IF NOT EXISTS idx_files_pending_inline_at ON files(pending_inline_at);
+		CREATE INDEX IF NOT EXISTS idx_files_deleted_at ON files(deleted_at);
+		CREATE INDEX IF NOT EXISTS idx_file_s3_next_retry ON file_s3(state, next_retry_at);
+		CREATE INDEX IF NOT EXISTS idx_files_refs_note_id ON files_refs(note_id);
+		CREATE INDEX IF NOT EXISTS idx_files_refs_file_id ON files_refs(file_id);
+	`)
+	return err
 }
 
 // ensureVSSDimension ensures the vss_notes virtual table uses the expected
