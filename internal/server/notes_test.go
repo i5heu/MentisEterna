@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -758,4 +759,215 @@ func TestSearchResultContainsAllFields(t *testing.T) {
 	}
 	// Distance is always present (can be 0 for exact match).
 	_ = sr.Distance
+}
+
+// --- Note lifecycle + file retention tests ---
+
+// newTestServerWithMediaForNotes creates a server with media for note lifecycle tests.
+func newTestServerWithMediaForNotes(t *testing.T) *Server {
+	t.Helper()
+	s, _ := newTestServerWithMedia(t)
+	return s
+}
+
+func TestUpdateNoteConvertsPendingInlineToInlineRef(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Create a note
+	body := `{"title":"test","body":"initial"}`
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewReader([]byte(body)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.createNote(w, req)
+
+	var noteID int64
+	s.db.QueryRow(`SELECT id FROM notes ORDER BY id DESC LIMIT 1`).Scan(&noteID)
+
+	// Upload an inline file
+	ct, mpBody := multipartBody("file", "ref-me.txt", "text/plain", []byte("ref me"))
+	req2 := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files/inline", noteID), mpBody)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	req2.Header.Set("Content-Type", ct)
+	w2 := httptest.NewRecorder()
+	s.uploadInlineFile(w2, req2)
+
+	var fileID int64
+	s.db.QueryRow(`SELECT id FROM files WHERE filename = 'ref-me.txt'`).Scan(&fileID)
+
+	// Now update the note to reference the file in its body
+	updatedBody := fmt.Sprintf(`{"title":"test","body":"see [file](/file/%d/%d)"}`, noteID, fileID)
+	req3 := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/notes/%d", noteID), bytes.NewReader([]byte(updatedBody)))
+	req3.Header.Set("Authorization", "Bearer "+token)
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	s.updateNote(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Fatalf("update: %d: %s", w3.Code, w3.Body.String())
+	}
+
+	// Verify inline ref exists and pending state is cleared
+	var refCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM files_refs WHERE note_id = ? AND file_id = ? AND ref_kind = 'inline'`,
+		noteID, fileID).Scan(&refCount)
+	if refCount != 1 {
+		t.Errorf("expected 1 inline ref, got %d", refCount)
+	}
+
+	var pendingNoteID *int64
+	s.db.QueryRow(`SELECT pending_inline_note_id FROM files WHERE id = ?`, fileID).Scan(&pendingNoteID)
+	if pendingNoteID != nil {
+		t.Error("expected pending_inline_note_id to be cleared")
+	}
+}
+
+func TestUpdateNoteDeletesUnusedPendingInlineFiles(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Create a note
+	body := `{"title":"test","body":"initial"}`
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewReader([]byte(body)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.createNote(w, req)
+
+	var noteID int64
+	s.db.QueryRow(`SELECT id FROM notes ORDER BY id DESC LIMIT 1`).Scan(&noteID)
+
+	// Upload an inline file that will NOT be referenced
+	ct, mpBody := multipartBody("file", "unused.txt", "text/plain", []byte("unused"))
+	req2 := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files/inline", noteID), mpBody)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	req2.Header.Set("Content-Type", ct)
+	w2 := httptest.NewRecorder()
+	s.uploadInlineFile(w2, req2)
+
+	var fileID int64
+	s.db.QueryRow(`SELECT id FROM files WHERE filename = 'unused.txt'`).Scan(&fileID)
+
+	// Update the note WITHOUT referencing the file
+	updatedBody := `{"title":"test","body":"no file references here"}`
+	req3 := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/notes/%d", noteID), bytes.NewReader([]byte(updatedBody)))
+	req3.Header.Set("Authorization", "Bearer "+token)
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	s.updateNote(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Fatalf("update: %d: %s", w3.Code, w3.Body.String())
+	}
+
+	// File should be soft-deleted
+	var deletedAt *string
+	s.db.QueryRow(`SELECT deleted_at FROM files WHERE id = ?`, fileID).Scan(&deletedAt)
+	if deletedAt == nil {
+		t.Error("expected unreferenced pending file to be soft-deleted")
+	}
+}
+
+func TestDeleteNoteKeepsFileWhenAnotherNoteStillReferencesIt(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Create note A
+	reqA := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewReader([]byte(`{"title":"note A","body":"a"}`)))
+	reqA.Header.Set("Authorization", "Bearer "+token)
+	reqA.Header.Set("Content-Type", "application/json")
+	wA := httptest.NewRecorder()
+	s.createNote(wA, reqA)
+	var noteAID int64
+	s.db.QueryRow(`SELECT id FROM notes WHERE title = 'note A'`).Scan(&noteAID)
+
+	// Create note B
+	reqB := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewReader([]byte(`{"title":"note B","body":"b"}`)))
+	reqB.Header.Set("Authorization", "Bearer "+token)
+	reqB.Header.Set("Content-Type", "application/json")
+	wB := httptest.NewRecorder()
+	s.createNote(wB, reqB)
+	var noteBID int64
+	s.db.QueryRow(`SELECT id FROM notes WHERE title = 'note B'`).Scan(&noteBID)
+
+	// Upload file to note A
+	ct, mpBody := multipartBody("file", "shared.txt", "text/plain", []byte("shared"))
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteAID), mpBody)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+
+	var fileID int64
+	s.db.QueryRow(`SELECT id FROM files WHERE filename = 'shared.txt'`).Scan(&fileID)
+
+	// Also reference the file from note B
+	s.db.Exec(`INSERT INTO files_refs (note_id, file_id, ref_kind) VALUES (?, ?, 'attachment')`, noteBID, fileID)
+
+	// Delete note A
+	req2 := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/notes/%d", noteAID), nil)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	s.deleteNote(w2, req2)
+
+	if w2.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d", w2.Code)
+	}
+
+	// File should NOT be soft-deleted (note B still references it)
+	var deletedAt *string
+	s.db.QueryRow(`SELECT deleted_at FROM files WHERE id = ?`, fileID).Scan(&deletedAt)
+	if deletedAt != nil {
+		t.Error("file should not be deleted while note B still references it")
+	}
+
+	// Note B's ref should still exist
+	var refCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM files_refs WHERE note_id = ? AND file_id = ?`, noteBID, fileID).Scan(&refCount)
+	if refCount != 1 {
+		t.Errorf("expected note B ref to remain, got %d", refCount)
+	}
+}
+
+func TestDeleteNoteDeletesFileWhenLastRefDisappears(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Create a note
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewReader([]byte(`{"title":"lonely","body":"lonely"}`)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.createNote(w, req)
+	var noteID int64
+	s.db.QueryRow(`SELECT id FROM notes WHERE title = 'lonely'`).Scan(&noteID)
+
+	// Upload file
+	ct, mpBody := multipartBody("file", "lonely.txt", "text/plain", []byte("lonely"))
+	req2 := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), mpBody)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	req2.Header.Set("Content-Type", ct)
+	w2 := httptest.NewRecorder()
+	s.uploadAttachment(w2, req2)
+
+	var fileID int64
+	s.db.QueryRow(`SELECT id FROM files WHERE filename = 'lonely.txt'`).Scan(&fileID)
+
+	// Delete the note (last reference)
+	req3 := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/notes/%d", noteID), nil)
+	req3.Header.Set("Authorization", "Bearer "+token)
+	w3 := httptest.NewRecorder()
+	s.deleteNote(w3, req3)
+
+	if w3.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d", w3.Code)
+	}
+
+	// File should be soft-deleted (no refs remaining)
+	var deletedAt *string
+	s.db.QueryRow(`SELECT deleted_at FROM files WHERE id = ?`, fileID).Scan(&deletedAt)
+	if deletedAt == nil {
+		t.Error("file should be soft-deleted when last ref disappears")
+	}
 }
