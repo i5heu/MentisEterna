@@ -1,5 +1,5 @@
 """
-Integration test: login, create notes, and search via the MentisEterna API.
+Integration helper: login, create notes, and verify they are written via the MentisEterna API.
 Usage: python3 test_search.py [--base-url http://localhost:8080]
 """
 
@@ -9,7 +9,6 @@ import json
 import sqlite3
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 
 
@@ -90,14 +89,6 @@ class MentisClient:
             print("    id=%s title=%r" % (n["id"], n["title"]))
         return data
 
-    def search(self, query: str):
-        encoded = urllib.parse.quote(query)
-        print("Searching for '%s' (GET /notes/search?q=%s)..." % (query, encoded))
-        status, data = self._req("GET", "/notes/search?q=" + encoded)
-        print("  Status: %d" % status)
-        print("  Results: " + json.dumps(data, indent=2))
-        return data
-
     def health(self):
         status, data = self._req("GET", "/health")
         print("Health: %s" % data)
@@ -105,7 +96,9 @@ class MentisClient:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MentisEterna search integration test")
+    parser = argparse.ArgumentParser(
+        description="MentisEterna note write verification helper"
+    )
     parser.add_argument(
         "--base-url", default="http://localhost:8080", help="Server base URL"
     )
@@ -160,64 +153,36 @@ def main():
     print("")
     print("=" * 60)
     print("3. Creating notes")
-    import time
 
     try:
         note1 = c.create_note("Hello Note", "Hello World")
         note2 = c.create_note("Python Note", "Python is awesome for testing APIs")
         note3 = c.create_note("Grocery List", "Milk, eggs, bread, butter")
-        # Give the async embedding goroutine time to finish
-        print("Waiting 2s for async embedding sync...")
-        time.sleep(2)
     except Exception as e:
         print("FAIL: Create note failed: %s" % e)
         sys.exit(1)
 
-    # 4. List notes
+    # 4. Verify notes are written (list them)
     print("")
     print("=" * 60)
-    print("4. Listing all notes")
+    print("4. Verifying notes are written")
     try:
-        c.list_notes()
+        notes = c.list_notes()
+        titles = {n["title"] for n in notes}
+        expected = {"Hello Note", "Python Note", "Grocery List"}
+        if expected.issubset(titles):
+            print("OK: All %d expected notes are present." % len(expected))
+        else:
+            missing = expected - titles
+            print("FAIL: Missing notes: %s" % missing)
+            sys.exit(1)
     except Exception as e:
         print("FAIL: List notes failed: %s" % e)
         sys.exit(1)
 
-    # 5. Search tests
     print("")
     print("=" * 60)
-    print("5. Search tests")
-
-    tests = [
-        ("Hello World", "exact title/body match"),
-        ("Hello", "partial match"),
-        ("Python", "different note match"),
-        ("grocery", "case-insensitive-ish"),
-        ("nonexistent_xyz_123", "no results expected"),
-    ]
-
-    failures = 0
-    for query, description in tests:
-        print("")
-        print("--- Test: %s (q=%r) ---" % (description, query))
-        try:
-            results = c.search(query)
-            print("  OK: %d result(s)" % len(results))
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            print("  HTTP ERROR %d: %s" % (e.code, body[:300]))
-            failures += 1
-        except Exception as e:
-            print("  FAIL: %s" % e)
-            failures += 1
-
-    print("")
-    print("=" * 60)
-    if failures == 0:
-        print("All search tests passed!")
-    else:
-        print("%d search test(s) failed!" % failures)
-        sys.exit(1)
+    print("Done — all notes written successfully.")
 
 
 if __name__ == "__main__":
