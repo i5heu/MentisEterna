@@ -4,6 +4,15 @@
     <img width="280" height="280" style="border-radius: 3%; max-width: 100%" alt="Logo of OuroborosDB" src=".media/MentisEterna_logo.svg">
 </p>
 
+## TODO
+- [ ] Chat like UI
+- [ ] Note Types
+- [ ] Pseudo-Plugins
+  - [ ] Test harness
+- [ ] cron system
+- [ ] backup
+- [ ] mobile-app - sync?
+- [ ] Security Review and Auth hardening
 
 ## Prerequisites
 
