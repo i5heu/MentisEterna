@@ -7,3 +7,4 @@ data/
 frontend/node_modules/
 FrontEndDist/
 lib/
+start.sh
