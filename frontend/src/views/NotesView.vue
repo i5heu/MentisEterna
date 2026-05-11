@@ -537,6 +537,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { marked } from "marked";
 import {
     fetchNotes,
+    fetchNote,
     createNote,
     updateNote,
     deleteNote,
@@ -693,6 +694,7 @@ function selectNote(note) {
     loadChildren(note.id);
     populateParentSearch(note);
     loadAncestors(note.id);
+    pushURL();
 }
 
 function selectSearchResult(sr) {
@@ -715,6 +717,7 @@ function selectSearchResult(sr) {
     loadChildren(sr.id);
     populateParentSearch(selected.value);
     loadAncestors(sr.id);
+    pushURL();
 }
 
 function populateParentSearch(note) {
@@ -748,6 +751,7 @@ function newNote(parentNote = null) {
     if (parentNote) {
         parentSearch.value = parentNote.title || "";
     }
+    pushURL();
     requestAnimationFrame(() =>
         document.querySelector(".body-textarea")?.focus(),
     );
@@ -772,7 +776,9 @@ async function doDelete() {
         await deleteNote(props.token, selected.value.id);
         notes.value = notes.value.filter((n) => n.id !== selected.value.id);
         selected.value = null;
+        threadNote.value = null;
         showDeleteModal.value = false;
+        pushURL();
     } finally {
         deleting.value = false;
     }
@@ -904,12 +910,14 @@ async function openThreadSidebar(note) {
     } catch {
         threadAncestors.value = [];
     }
+    pushURL();
 }
 
 function closeThreadSidebar() {
     threadNote.value = null;
     threadChildren.value = [];
     threadAncestors.value = [];
+    pushURL();
 }
 
 async function sendThreadReply() {
@@ -977,6 +985,7 @@ async function save() {
             notes.value.unshift(updated);
         }
         selected.value = updated;
+        pushURL();
         dirty.value = false;
         isEditing.value = false;
         populateParentSearch(updated);
@@ -1213,17 +1222,152 @@ function onKeyDown(e) {
 onMounted(() => {
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("click", onClickOutside);
+    window.addEventListener("popstate", onPopstate);
+    // Restore state from URL on initial load
+    loadFromURL();
 });
 
 onUnmounted(() => {
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("click", onClickOutside);
+    window.removeEventListener("popstate", onPopstate);
 });
 
 function onClickOutside(e) {
     if (!e.target.closest(".parent-picker-wrapper")) {
         showParentPicker.value = false;
     }
+}
+
+// ── URL routing ──
+// URL scheme:
+//   /                    → no selection
+//   /note/123            → note 123 selected
+//   /note/123/thread/456 → note 123 in main, thread 456 in sidebar
+//   /note/new            → compose a new note
+
+let squelchPopstate = false;
+
+function buildURL() {
+    let url = "/";
+    if (selected.value) {
+        if (selected.value.id) {
+            url = `/note/${selected.value.id}`;
+        } else {
+            url = "/note/new";
+        }
+    }
+    if (threadNote.value) {
+        url += `/thread/${threadNote.value.id}`;
+    }
+    return url;
+}
+
+function pushURL() {
+    const url = buildURL();
+    squelchPopstate = true;
+    window.history.pushState({}, "", url);
+}
+
+function replaceURL() {
+    const url = buildURL();
+    squelchPopstate = true;
+    window.history.replaceState({}, "", url);
+}
+
+async function loadFromURL() {
+    const path = location.pathname;
+    // Match: /note/:id  or  /note/:id/thread/:tid  or  /note/new  or  /note/new/thread/:tid
+    const m = path.match(/^\/note\/(new|\d+)(?:\/thread\/(\d+))?\/?$/);
+    if (!m) {
+        // No note in URL — ensure clean state
+        if (selected.value || threadNote.value) {
+            selected.value = null;
+            threadNote.value = null;
+            replaceURL();
+        }
+        return;
+    }
+
+    const noteId = m[1];
+    const threadId = m[2];
+
+    // Handle /note/new
+    if (noteId === "new") {
+        if (!selected.value || selected.value.id !== null) {
+            newNote();
+        }
+    } else {
+        const id = parseInt(noteId, 10);
+        if (isNaN(id) || id <= 0) return;
+
+        // Load the note if not already selected
+        if (!selected.value || selected.value.id !== id) {
+            // Find in cache first
+            let note = notes.value.find((n) => n.id === id);
+            if (!note) {
+                // Fetch from server
+                try {
+                    note = await fetchNote(props.token, id);
+                    if (note) {
+                        // Add to cache if not present
+                        if (!notes.value.some((n) => n.id === note.id)) {
+                            notes.value.push(note);
+                        }
+                    }
+                } catch {
+                    // Note not found or network error — stay on current
+                    replaceURL();
+                    return;
+                }
+            }
+            if (note) {
+                selectNote(note);
+            } else {
+                replaceURL();
+                return;
+            }
+        }
+    }
+
+    // Handle thread sidebar
+    if (threadId) {
+        const tid = parseInt(threadId, 10);
+        if (!isNaN(tid) && tid > 0) {
+            if (!threadNote.value || threadNote.value.id !== tid) {
+                let tNote = notes.value.find((n) => n.id === tid);
+                if (!tNote) {
+                    try {
+                        tNote = await fetchNote(props.token, tid);
+                        if (
+                            tNote &&
+                            !notes.value.some((n) => n.id === tNote.id)
+                        ) {
+                            notes.value.push(tNote);
+                        }
+                    } catch {
+                        // Thread note not found — just clear it
+                    }
+                }
+                if (tNote) {
+                    await openThreadSidebar(tNote);
+                }
+            }
+        }
+    } else {
+        // No thread in URL — close sidebar if open
+        if (threadNote.value) {
+            closeThreadSidebar();
+        }
+    }
+}
+
+function onPopstate() {
+    if (squelchPopstate) {
+        squelchPopstate = false;
+        return;
+    }
+    loadFromURL();
 }
 </script>
 
