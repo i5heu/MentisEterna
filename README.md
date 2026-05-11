@@ -7,32 +7,36 @@
     <img width="280" height="280" style="border-radius: 3%; max-width: 100%" alt="Logo of OuroborosDB" src=".media/MentisEterna_logo.svg">
 </p>
 
-## TODO
+
+## TODO MVP
 - [ ] Pin notes 
 - [x] Chat like UI
-- [ ] Auto Title Generator
-  - [ ] alternative OLLAMA url
 - [ ] Note Types
 - [ ] Pseudo-Plugins
   - [ ] Test harness
 - [ ] cron system
 - [ ] Job Queue Indicator
 - [ ] S3 Media Storage (Encrypted)
-  - [ ] OCR for images and pdfs
-  - [ ] speech to text notes
-- [ ] tags
-- [ ] better search (by title, path and tags)
-- [ ] backup
-- [ ] mobile-app - sync?
+- [ ] Note linking and backlinking
+- [ ] Encrypted Backup
 - [ ] SQLite AES-256 in OFB mode
 - [ ] Security Review and Auth hardening
+## TODO
+- [ ] Auto Title Generator
+  - [ ] alternative OLLAMA url
+- [ ] OCR for images and pdfs
+- [ ] speech to text notes
+- [ ] tags
+- [ ] better search (by title, path and tags)
+- [ ] mobile-app - sync?
 - [ ] UX Improvements
-  - [ ] Note linking and backlinking
   - [ ] Drag and Drop for notes
   - [ ] Resizable panes
   - [ ] Better Keyboard Shortcuts
   - [ ] Autocomplete and predictive text
   - [ ] Brainstorm and Research mode
+  - [ ] Fast note creation with AI parent selection
+  - [ ] Fast Handnote import
 
 ## Prerequisites
 
