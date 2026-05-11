@@ -8,13 +8,17 @@
 </p>
 
 ## TODO
-- [ ] Chat like UI
+- [x] Chat like UI
 - [ ] Auto Title Generator
 - [ ] Note Types
 - [ ] Pseudo-Plugins
   - [ ] Test harness
 - [ ] cron system
 - [ ] Job Queue Indicator
+- [ ] S3 Media Storage (Encrypted)
+  - [ ] OCR for images and pdfs
+- [ ] tags
+- [ ] better search (by title, path and tags)
 - [ ] backup
 - [ ] mobile-app - sync?
 - [ ] Security Review and Auth hardening
