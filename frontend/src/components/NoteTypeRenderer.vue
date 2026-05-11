@@ -9,32 +9,35 @@
                         <th>Name</th>
                         <th>Amount</th>
                         <th>Unit</th>
-                        <th></th>
+                        <th v-if="editing"></th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr v-for="(ing, idx) in ingredients" :key="idx">
-                        <td>
+                        <td v-if="editing">
                             <input
                                 v-model="ing.name"
                                 placeholder="Ingredient name"
                             />
                         </td>
-                        <td>
+                        <td v-else>{{ ing.name || "-" }}</td>
+                        <td v-if="editing">
                             <input
                                 v-model="ing.amount"
                                 placeholder="e.g. 2"
                                 class="amount-input"
                             />
                         </td>
-                        <td>
+                        <td v-else>{{ ing.amount || "-" }}</td>
+                        <td v-if="editing">
                             <input
                                 v-model="ing.unit"
                                 placeholder="e.g. cups"
                                 class="unit-input"
                             />
                         </td>
-                        <td>
+                        <td v-else>{{ ing.unit || "-" }}</td>
+                        <td v-if="editing">
                             <button
                                 class="btn-ghost btn-sm"
                                 @click="removeIngredient(idx)"
@@ -45,9 +48,16 @@
                     </tr>
                 </tbody>
             </table>
-            <button class="btn-ghost btn-sm" @click="addIngredient">
+            <button
+                v-if="editing"
+                class="btn-ghost btn-sm"
+                @click="addIngredient"
+            >
                 + Add Ingredient
             </button>
+            <p v-if="!editing && ingredients.length === 0" class="empty-hint">
+                No ingredients yet. Switch to edit mode to add some.
+            </p>
         </div>
 
         <!-- Recipe Overview type: dashboard with grocery list -->

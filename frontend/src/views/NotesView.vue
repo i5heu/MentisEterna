@@ -259,7 +259,7 @@
                             :note="selected"
                             :token="token"
                             :editing="isEditing"
-                            @select-note="selectNoteFromChild"
+                            @selectNote="(id) => selectNoteById(id)"
                             @update:custom-data="
                                 (d) => {
                                     customData = d;
@@ -723,11 +723,22 @@ async function loadNotes() {
 
 async function selectNote(note) {
     threadNote.value = null;
-    selected.value = note;
-    editTitle.value = note.title;
-    editBody.value = note.body;
-    noteType.value = note.type || "standard";
-    customData.value = note.custom_data || null;
+    // Re-fetch from server to get full enriched data (custom_data, ui_schema, etc.)
+    try {
+        const full = await fetchNote(props.token, note.id);
+        selected.value = full;
+        editTitle.value = full.title;
+        editBody.value = full.body;
+        noteType.value = full.type || "standard";
+        customData.value = full.custom_data || null;
+    } catch {
+        // Fallback to the sidebar data if fetch fails.
+        selected.value = note;
+        editTitle.value = note.title;
+        editBody.value = note.body;
+        noteType.value = note.type || "standard";
+        customData.value = note.custom_data || null;
+    }
     dirty.value = false;
     saveError.value = "";
     showHistory.value = false;
@@ -937,6 +948,23 @@ function selectNoteFromChild(child) {
     }
     // Otherwise open the thread in the right sidebar
     openThreadSidebar(child);
+}
+
+// selectNoteById is called from NoteTypeRenderer (e.g., recipe overview cards)
+// when the user clicks a linked note. It looks up the note from the sidebar
+// list first, then falls back to fetching it fresh from the server.
+async function selectNoteById(id) {
+    // Try to find the note in our loaded list first.
+    let note = notes.value.find((n) => n.id === id);
+    if (!note) {
+        // Fetch fresh from the server.
+        try {
+            note = await fetchNote(props.token, id);
+        } catch {
+            return;
+        }
+    }
+    await selectNote(note);
 }
 
 async function openThreadSidebar(note) {
