@@ -58,10 +58,10 @@
                         No results
                     </div>
                 </template>
-                <!-- Standard list mode -->
+                <!-- Standard list mode (root notes only) -->
                 <template v-else>
                     <div
-                        v-for="(note, idx) in notes"
+                        v-for="(note, idx) in rootNotes"
                         :key="note.id"
                         class="note-item"
                         :class="{
@@ -78,7 +78,7 @@
                         }}</span>
                     </div>
                     <div
-                        v-if="notes.length === 0 && !loading"
+                        v-if="rootNotes.length === 0 && !loading"
                         class="empty-list"
                     >
                         No notes yet
@@ -263,7 +263,7 @@
                                 class="btn-ghost btn-thread"
                                 @click="selectNoteFromChild(child)"
                             >
-                                → Open Thread
+                                → ({{ child.child_count ?? 0 }})
                             </button>
                         </div>
                     </div>
@@ -473,9 +473,14 @@ const parentSearching = ref(false);
 const showParentPicker = ref(false);
 let parentSearchTimeout = null;
 
-// The list currently shown in the sidebar (search results or standard notes)
+// Root notes (no parent_id) — shown in the sidebar
+const rootNotes = computed(() =>
+    notes.value.filter((n) => n.parent_id == null),
+);
+
+// The list currently shown in the sidebar (search results or root notes)
 const sidebarList = computed(() =>
-    searchQuery.value.trim() ? searchResults.value : notes.value,
+    searchQuery.value.trim() ? searchResults.value : rootNotes.value,
 );
 
 // Hotkeys definition
@@ -554,7 +559,7 @@ function selectNote(note) {
     showHistory.value = false;
     history.value = [];
     isEditing.value = false;
-    highlightedIndex.value = notes.value.indexOf(note);
+    highlightedIndex.value = rootNotes.value.indexOf(note);
     loadChildren(note.id);
     populateParentSearch(note);
     loadAncestors(note.id);
@@ -1850,6 +1855,7 @@ function onClickOutside(e) {
 /* Thread / actions row */
 .message-actions {
     display: flex;
+    justify-content: flex-end;
     gap: 0.5rem;
     padding-top: 0.3rem;
     border-top: 1px solid var(--border-color);
