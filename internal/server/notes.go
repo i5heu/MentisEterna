@@ -277,7 +277,7 @@ func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.Query(noteSelectSQL+` WHERE n.parent_id = ? ORDER BY n.title ASC`, id)
+	rows, err := s.db.Query(noteSelectSQL+` WHERE n.parent_id = ? ORDER BY n.created_at ASC`, id)
 	if err != nil {
 		writeErr(w, err)
 		return
