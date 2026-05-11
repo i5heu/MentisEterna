@@ -265,6 +265,7 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	setAuthCookie(w, token, expiresAt)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"token":      token,
 		"expires_at": expiresAt.Format("2006-01-02T15:04:05Z"),

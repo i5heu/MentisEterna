@@ -9,11 +9,29 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/i5heu/MentisEterna/internal/db"
 )
 
 const pwChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+// authCookieName is the name of the cookie used for browser-based auth
+// (so that embedded resource requests like <img> can be authenticated).
+const authCookieName = "auth_token"
+
+// setAuthCookie sets the auth_token cookie on the response.
+func setAuthCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  expiresAt,
+	})
+}
 
 func initAdminPassword(d *db.DB) {
 	has, err := d.HasAdminPassword()
@@ -82,6 +100,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	setAuthCookie(w, token, expiresAt)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"token":      token,
 		"expires_at": expiresAt.Format("2006-01-02T15:04:05Z"),
@@ -102,7 +121,13 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		token := extractBearerToken(r)
+		if token == "" {
+			// Fall back to cookie for browser-embedded requests (img, video, etc.)
+			if c, err := r.Cookie(authCookieName); err == nil {
+				token = c.Value
+			}
+		}
 		if token == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
