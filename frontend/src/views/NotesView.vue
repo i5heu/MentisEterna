@@ -359,9 +359,7 @@
                 >
                     ✕
                 </button>
-                <span class="thread-sidebar-title">{{
-                    threadNote.title || "Untitled"
-                }}</span>
+                <span class="thread-sidebar-title">Thread</span>
                 <button
                     class="btn-ghost icon-btn"
                     @click="selectNote(threadNote)"
@@ -388,31 +386,55 @@
                     ></span
                 >
             </div>
-            <!-- Thread note body -->
-            <div
-                class="thread-body markdown-body"
-                v-html="renderMarkdown(threadNote.body)"
-            ></div>
-            <!-- Children of the thread note -->
-            <div class="thread-children">
+            <!-- Chat feed (same structure as main) -->
+            <div class="chat-feed">
+                <!-- Root message: the thread note -->
+                <div class="chat-message chat-message-root">
+                    <div class="message-meta">
+                        <span class="message-author">{{
+                            threadNote.title || "Untitled"
+                        }}</span>
+                        <span class="message-date">{{
+                            fmtDateFull(threadNote.created_at)
+                        }}</span>
+                        <span class="message-badge">root</span>
+                    </div>
+                    <div
+                        class="message-body markdown-body"
+                        v-html="renderMarkdown(threadNote.body)"
+                    />
+                </div>
+
+                <!-- Child messages of the thread note -->
                 <div
                     v-for="tc in threadChildren"
                     :key="tc.id"
-                    class="thread-child-item"
-                    @click="selectThreadChild(tc)"
+                    class="chat-message chat-message-child"
                 >
-                    <span class="thread-child-title">{{
-                        tc.title || "Untitled"
-                    }}</span>
-                    <span class="thread-child-date">{{
-                        fmtDate(tc.created_at)
-                    }}</span>
-                    <span v-if="tc.child_count" class="thread-child-count">{{
-                        tc.child_count
-                    }}</span>
+                    <div class="message-meta">
+                        <span class="message-author">{{
+                            tc.title || "Untitled"
+                        }}</span>
+                        <span class="message-date">{{
+                            fmtDateFull(tc.created_at)
+                        }}</span>
+                    </div>
+                    <div
+                        class="message-body markdown-body"
+                        v-html="renderMarkdown(tc.body)"
+                    />
+                    <div class="message-actions">
+                        <button
+                            class="btn-ghost btn-thread"
+                            @click="selectThreadChild(tc)"
+                        >
+                            → ({{ tc.child_count ?? 0 }})
+                        </button>
+                    </div>
                 </div>
+
                 <div v-if="threadChildrenLoading" class="chat-status">
-                    Loading…
+                    Loading replies…
                 </div>
                 <div
                     v-else-if="threadChildren.length === 0"
@@ -2055,13 +2077,17 @@ function onClickOutside(e) {
    ============================================= */
 
 .thread-sidebar {
-    width: 300px;
-    min-width: 240px;
+    width: 320px;
+    min-width: 260px;
     background: var(--panel-bg);
     border-left: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+}
+
+.thread-sidebar .chat-feed {
+    flex: 1;
 }
 
 .thread-sidebar-header {
@@ -2092,60 +2118,6 @@ function onClickOutside(e) {
     font-size: 0.72rem;
     border-bottom: 1px solid var(--border-color);
     gap: 0;
-}
-
-.thread-body {
-    flex: 0 0 auto;
-    max-height: 40%;
-    overflow-y: auto;
-    padding: 0.75rem 0.9rem;
-    font-size: 0.82rem;
-    line-height: 1.6;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.thread-children {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0.25rem 0;
-}
-
-.thread-child-item {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    border-bottom: 1px solid rgba(26, 44, 61, 0.4);
-    transition: background 0.1s;
-}
-
-.thread-child-item:hover {
-    background: var(--raised-bg);
-}
-
-.thread-child-title {
-    flex: 1;
-    font-size: 0.8rem;
-    color: var(--accent-teal);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.thread-child-date {
-    font-size: 0.68rem;
-    color: var(--date-color);
-    flex-shrink: 0;
-}
-
-.thread-child-count {
-    font-size: 0.7rem;
-    color: var(--font-color-secondary);
-    background: var(--raised-bg);
-    border-radius: 8px;
-    padding: 0.1rem 0.45rem;
-    flex-shrink: 0;
 }
 
 .thread-composer {
