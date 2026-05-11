@@ -139,12 +139,62 @@
             </div>
         </div>
 
+        <!-- Example type: checklist with checkboxes -->
+        <div v-if="note.type === 'example'" class="checklist-editor">
+            <h3>Checklist</h3>
+            <div
+                v-for="(item, idx) in checklistItems"
+                :key="idx"
+                class="checklist-row"
+            >
+                <input
+                    v-if="editing"
+                    type="checkbox"
+                    :checked="item.checked"
+                    @change="item.checked = $event.target.checked"
+                />
+                <span v-else class="checklist-mark">{{
+                    item.checked ? "☑" : "☐"
+                }}</span>
+                <input
+                    v-if="editing"
+                    v-model="item.label"
+                    class="checklist-input"
+                    placeholder="Item text"
+                />
+                <span v-else :class="{ 'checked-text': item.checked }">{{
+                    item.label || "-"
+                }}</span>
+                <button
+                    v-if="editing"
+                    class="btn-ghost btn-sm"
+                    @click="removeChecklistItem(idx)"
+                >
+                    &times;
+                </button>
+            </div>
+            <button
+                v-if="editing"
+                class="btn-ghost btn-sm"
+                @click="addChecklistItem"
+            >
+                + Add Item
+            </button>
+            <p
+                v-if="!editing && checklistItems.length === 0"
+                class="empty-hint"
+            >
+                No items yet. Switch to edit mode to add some.
+            </p>
+        </div>
+
         <!-- Generic custom data form (fallback for other types) -->
         <div
             v-if="
                 note.ui_schema &&
                 note.type !== 'recipe' &&
-                note.type !== 'recipe_overview'
+                note.type !== 'recipe_overview' &&
+                note.type !== 'example'
             "
             class="custom-form"
         >
@@ -173,6 +223,7 @@ const emit = defineEmits(["selectNote", "update:customData"]);
 const ingredients = ref([]);
 const overviewData = ref(null);
 const generatingList = ref(false);
+const checklistItems = ref([]);
 
 // Watch for note changes and initialize local state.
 watch(
@@ -191,6 +242,16 @@ watch(
                 recipes: [],
                 grocery_items: [],
             };
+        }
+        if (n.type === "example") {
+            // custom_data is { items: [...] } from the backend.
+            const its = n.custom_data?.items || n.custom_data;
+            checklistItems.value = Array.isArray(its)
+                ? its.map((it) => ({
+                      label: it.label || "",
+                      checked: !!it.checked,
+                  }))
+                : [];
         }
     },
     { immediate: true },
@@ -211,12 +272,34 @@ watch(
     { deep: true },
 );
 
+// Emit custom data changes for checklist items.
+watch(
+    checklistItems,
+    (val) => {
+        emit("update:customData", {
+            items: val.map(({ label, checked }) => ({
+                label,
+                checked,
+            })),
+        });
+    },
+    { deep: true },
+);
+
 function addIngredient() {
     ingredients.value.push({ name: "", amount: "", unit: "" });
 }
 
 function removeIngredient(idx) {
     ingredients.value.splice(idx, 1);
+}
+
+function addChecklistItem() {
+    checklistItems.value.push({ label: "", checked: false });
+}
+
+function removeChecklistItem(idx) {
+    checklistItems.value.splice(idx, 1);
 }
 
 async function generateGroceryList() {
@@ -330,6 +413,38 @@ async function generateGroceryList() {
     font-size: 0.9rem;
     color: var(--accent-teal);
     margin-bottom: 0.5rem;
+}
+
+.checklist-editor {
+    margin-bottom: 1rem;
+}
+
+.checklist-editor h3 {
+    font-size: 1rem;
+    color: var(--header-title-color);
+    margin-bottom: 0.75rem;
+}
+
+.checklist-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.checklist-mark {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+
+.checklist-input {
+    flex: 1;
+}
+
+.checked-text {
+    text-decoration: line-through;
+    color: var(--font-color-secondary);
 }
 
 .empty-hint {

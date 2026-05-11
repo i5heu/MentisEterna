@@ -85,7 +85,11 @@ func (p *ExamplePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int,
 		item.Checked = checked != 0
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Return the same Payload shape that Validate/ProcessSave expect.
+	return ExamplePayload{Items: items}, nil
 }
 
 func (p *ExamplePlugin) UISchema() json.RawMessage {
