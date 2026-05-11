@@ -114,7 +114,8 @@ func (p *RecipePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return ingredients, nil
+	// Return the same Payload shape that Validate/ProcessSave expect.
+	return Payload{Ingredients: ingredients}, nil
 }
 
 func (p *RecipePlugin) UISchema() json.RawMessage {

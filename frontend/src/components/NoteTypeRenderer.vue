@@ -180,8 +180,10 @@ watch(
     (n) => {
         if (!n) return;
         if (n.type === "recipe") {
-            ingredients.value = Array.isArray(n.custom_data)
-                ? n.custom_data.map((ing) => ({ ...ing }))
+            // custom_data is { ingredients: [...] } from the backend.
+            const ings = n.custom_data?.ingredients || n.custom_data;
+            ingredients.value = Array.isArray(ings)
+                ? ings.map((ing) => ({ ...ing }))
                 : [];
         }
         if (n.type === "recipe_overview") {
