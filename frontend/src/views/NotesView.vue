@@ -349,6 +349,105 @@
             </div>
         </main>
 
+        <!-- Thread Sidebar (right) -->
+        <aside v-if="threadNote" class="thread-sidebar">
+            <div class="thread-sidebar-header">
+                <button
+                    class="btn-ghost icon-btn"
+                    @click="closeThreadSidebar"
+                    title="Close thread"
+                >
+                    ✕
+                </button>
+                <span class="thread-sidebar-title">{{
+                    threadNote.title || "Untitled"
+                }}</span>
+                <button
+                    class="btn-ghost icon-btn"
+                    @click="selectNote(threadNote)"
+                    title="Open full view"
+                >
+                    ⤢
+                </button>
+            </div>
+            <!-- Breadcrumb -->
+            <div v-if="threadAncestors.length" class="thread-breadcrumb">
+                <span
+                    v-for="(anc, i) in threadAncestors"
+                    :key="anc.id"
+                    class="breadcrumb-seg"
+                    :class="{
+                        'breadcrumb-current': i === threadAncestors.length - 1,
+                    }"
+                    @click="openThreadSidebar(anc)"
+                    >{{ anc.title || "Untitled"
+                    }}<span
+                        v-if="i < threadAncestors.length - 1"
+                        class="breadcrumb-colon"
+                        >:</span
+                    ></span
+                >
+            </div>
+            <!-- Thread note body -->
+            <div
+                class="thread-body markdown-body"
+                v-html="renderMarkdown(threadNote.body)"
+            ></div>
+            <!-- Children of the thread note -->
+            <div class="thread-children">
+                <div
+                    v-for="tc in threadChildren"
+                    :key="tc.id"
+                    class="thread-child-item"
+                    @click="selectThreadChild(tc)"
+                >
+                    <span class="thread-child-title">{{
+                        tc.title || "Untitled"
+                    }}</span>
+                    <span class="thread-child-date">{{
+                        fmtDate(tc.created_at)
+                    }}</span>
+                    <span v-if="tc.child_count" class="thread-child-count">{{
+                        tc.child_count
+                    }}</span>
+                </div>
+                <div v-if="threadChildrenLoading" class="chat-status">
+                    Loading…
+                </div>
+                <div
+                    v-else-if="threadChildren.length === 0"
+                    class="chat-status"
+                >
+                    No replies yet
+                </div>
+            </div>
+            <!-- Thread composer -->
+            <div class="thread-composer">
+                <input
+                    v-model="threadReplyTitle"
+                    class="composer-title"
+                    placeholder="Reply title…"
+                />
+                <div class="composer-body-row">
+                    <textarea
+                        v-model="threadReplyBody"
+                        class="composer-textarea"
+                        placeholder="Write a reply…"
+                        rows="2"
+                    />
+                    <button
+                        class="btn-primary composer-send"
+                        :disabled="
+                            !threadReplyTitle.trim() || threadSendingReply
+                        "
+                        @click="sendThreadReply"
+                    >
+                        {{ threadSendingReply ? "…" : "Send" }}
+                    </button>
+                </div>
+            </div>
+        </aside>
+
         <!-- Delete confirm modal -->
         <div
             v-if="showDeleteModal"
@@ -454,6 +553,15 @@ let searchTimeout = null;
 // Children state
 const children = ref([]);
 const childrenLoading = ref(false);
+
+// Thread sidebar state
+const threadNote = ref(null); // the note whose thread is shown in the right sidebar
+const threadChildren = ref([]);
+const threadChildrenLoading = ref(false);
+const threadAncestors = ref([]);
+const threadReplyTitle = ref("");
+const threadReplyBody = ref("");
+const threadSendingReply = ref(false);
 
 // Reply composer state
 const newReplyTitle = ref("");
@@ -746,7 +854,77 @@ function childPath(child) {
 }
 
 function selectNoteFromChild(child) {
-    selectNote(child);
+    // On mobile / narrow screens, navigate into the note directly
+    if (window.innerWidth < 768) {
+        selectNote(child);
+        return;
+    }
+    // Otherwise open the thread in the right sidebar
+    openThreadSidebar(child);
+}
+
+async function openThreadSidebar(note) {
+    threadNote.value = note;
+    threadReplyTitle.value = "";
+    threadReplyBody.value = "";
+    // Load children of the thread note
+    threadChildrenLoading.value = true;
+    try {
+        threadChildren.value = await fetchChildren(props.token, note.id);
+    } catch {
+        threadChildren.value = [];
+    } finally {
+        threadChildrenLoading.value = false;
+    }
+    // Load ancestors for breadcrumb
+    try {
+        threadAncestors.value = await fetchAncestors(props.token, note.id);
+    } catch {
+        threadAncestors.value = [];
+    }
+}
+
+function closeThreadSidebar() {
+    threadNote.value = null;
+    threadChildren.value = [];
+    threadAncestors.value = [];
+}
+
+async function sendThreadReply() {
+    if (!threadReplyTitle.value.trim() || threadSendingReply.value) return;
+    if (!threadNote.value?.id) return;
+    threadSendingReply.value = true;
+    try {
+        const child = await createNote(
+            props.token,
+            threadReplyTitle.value,
+            threadReplyBody.value,
+            threadNote.value.id,
+        );
+        notes.value.unshift(child);
+        threadChildren.value.push(child);
+        threadReplyTitle.value = "";
+        threadReplyBody.value = "";
+        // Update the child_count on the original child in the main children list
+        const idx = children.value.findIndex(
+            (c) => c.id === threadNote.value.id,
+        );
+        if (idx !== -1 && children.value[idx].child_count != null) {
+            children.value[idx] = {
+                ...children.value[idx],
+                child_count: children.value[idx].child_count + 1,
+            };
+        }
+    } catch (e) {
+        saveError.value = e.message;
+    } finally {
+        threadSendingReply.value = false;
+    }
+}
+
+function selectThreadChild(child) {
+    // Open the child's thread in the sidebar (drill down)
+    openThreadSidebar(child);
 }
 
 async function save() {
@@ -1870,6 +2048,119 @@ function onClickOutside(e) {
 .btn-thread:hover {
     background: rgba(109, 148, 132, 0.12);
     color: var(--accent-teal);
+}
+
+/* =============================================
+   Thread Sidebar (right)
+   ============================================= */
+
+.thread-sidebar {
+    width: 300px;
+    min-width: 240px;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.thread-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    gap: 0.4rem;
+}
+
+.thread-sidebar-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--font-color);
+    flex: 1;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.thread-breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.72rem;
+    border-bottom: 1px solid var(--border-color);
+    gap: 0;
+}
+
+.thread-body {
+    flex: 0 0 auto;
+    max-height: 40%;
+    overflow-y: auto;
+    padding: 0.75rem 0.9rem;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.thread-children {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.25rem 0;
+}
+
+.thread-child-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(26, 44, 61, 0.4);
+    transition: background 0.1s;
+}
+
+.thread-child-item:hover {
+    background: var(--raised-bg);
+}
+
+.thread-child-title {
+    flex: 1;
+    font-size: 0.8rem;
+    color: var(--accent-teal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.thread-child-date {
+    font-size: 0.68rem;
+    color: var(--date-color);
+    flex-shrink: 0;
+}
+
+.thread-child-count {
+    font-size: 0.7rem;
+    color: var(--font-color-secondary);
+    background: var(--raised-bg);
+    border-radius: 8px;
+    padding: 0.1rem 0.45rem;
+    flex-shrink: 0;
+}
+
+.thread-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--border-color);
+    background: var(--panel-bg);
+}
+
+@media (max-width: 767px) {
+    .thread-sidebar {
+        display: none;
+    }
 }
 
 /* Status / empty row */
