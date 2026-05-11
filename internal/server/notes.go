@@ -656,6 +656,9 @@ func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
 
 // enqueueVSSIndex enqueues a vss_index job for the given note.
 func (s *Server) enqueueVSSIndex(noteID int64, title, body string) {
+	if s.jobManager == nil {
+		return
+	}
 	payload, _ := json.Marshal(map[string]interface{}{
 		"note_id": noteID,
 		"title":   title,

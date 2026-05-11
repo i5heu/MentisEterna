@@ -56,6 +56,8 @@ func TestIsAPIPath(t *testing.T) {
 		{"/notes", true},
 		{"/notes/1", true},
 		{"/notes/1/history", true},
+		{"/file/1/42", true},
+		{"/file/999/888", true},
 		{"/login", false},
 		{"/", false},
 		{"/static/app.js", false},
