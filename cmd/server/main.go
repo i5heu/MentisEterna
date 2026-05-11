@@ -10,6 +10,11 @@ import (
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/server"
+
+	// Register note type plugins via their init() functions.
+	_ "github.com/i5heu/MentisEterna/pkg/notetype/example"
+	_ "github.com/i5heu/MentisEterna/pkg/notetype/recipe"
+	_ "github.com/i5heu/MentisEterna/pkg/notetype/recipeoverview"
 )
 
 func main() {

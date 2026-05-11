@@ -118,6 +118,22 @@
                             placeholder="Note title"
                             @input="dirty = true"
                         />
+                        <div v-if="isEditing" class="type-row">
+                            <span class="parent-label">Type:</span>
+                            <select
+                                v-model="noteType"
+                                class="type-select"
+                                @change="dirty = true"
+                            >
+                                <option
+                                    v-for="opt in typeOptions"
+                                    :key="opt.value"
+                                    :value="opt.value"
+                                >
+                                    {{ opt.label }}
+                                </option>
+                            </select>
+                        </div>
                         <div v-if="isEditing" class="parent-row">
                             <span class="parent-label">Parent:</span>
                             <div class="parent-picker-wrapper">
@@ -238,6 +254,19 @@
                                 v-html="renderedBody"
                             />
                         </div>
+                        <NoteTypeRenderer
+                            v-if="selected"
+                            :note="selected"
+                            :token="token"
+                            :editing="isEditing"
+                            @select-note="selectNoteFromChild"
+                            @update:custom-data="
+                                (d) => {
+                                    customData = d;
+                                    dirty = true;
+                                }
+                            "
+                        />
                     </div>
 
                     <!-- Child messages (direct children of the selected note) -->
@@ -547,6 +576,7 @@ import {
     searchNotes,
     beginPasskeyRegistration,
 } from "../api.js";
+import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
 
 const props = defineProps({ token: String });
 const emit = defineEmits(["logout"]);
@@ -556,8 +586,18 @@ const loading = ref(false);
 const selected = ref(null);
 const editTitle = ref("");
 const editBody = ref("");
+const noteType = ref("standard");
+const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
+
+// Available note types (discovered from registry via server response or hardcoded list)
+const typeOptions = [
+    { value: "standard", label: "Standard Note" },
+    { value: "recipe", label: "Recipe" },
+    { value: "recipe_overview", label: "Recipe Overview" },
+    { value: "example", label: "Example (Checklist)" },
+];
 const saveError = ref("");
 const showDeleteModal = ref(false);
 const deleting = ref(false);
@@ -686,6 +726,8 @@ async function selectNote(note) {
     selected.value = note;
     editTitle.value = note.title;
     editBody.value = note.body;
+    noteType.value = note.type || "standard";
+    customData.value = note.custom_data || null;
     dirty.value = false;
     saveError.value = "";
     showHistory.value = false;
@@ -704,12 +746,15 @@ async function selectSearchResult(sr) {
         id: sr.id,
         title: sr.title,
         parent_id: sr.parent_id,
+        type: sr.type || "standard",
         body: sr.body,
         created_at: sr.created_at,
         updated_at: sr.updated_at,
     };
     editTitle.value = sr.title;
     editBody.value = sr.body;
+    noteType.value = sr.type || "standard";
+    customData.value = null;
     dirty.value = false;
     saveError.value = "";
     showHistory.value = false;
@@ -972,6 +1017,8 @@ async function save() {
                 editTitle.value,
                 editBody.value,
                 selected.value.parent_id,
+                noteType.value,
+                customData.value,
             );
             const idx = notes.value.findIndex((n) => n.id === updated.id);
             if (idx !== -1) notes.value[idx] = updated;
@@ -984,6 +1031,8 @@ async function save() {
                 editTitle.value,
                 editBody.value,
                 selected.value.parent_id,
+                noteType.value,
+                customData.value,
             );
             notes.value.unshift(updated);
         }
@@ -1578,6 +1627,29 @@ function onPopstate() {
 }
 
 /* Parent selector */
+.type-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.25rem;
+}
+
+.type-select {
+    background: var(--raised-bg);
+    color: var(--font-color);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+}
+
+.type-select:focus {
+    border-color: var(--accent-teal);
+}
+
 .parent-row {
     display: flex;
     align-items: center;
