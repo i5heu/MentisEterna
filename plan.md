@@ -12,14 +12,17 @@
 
 ## Locked Product Decisions
 
-- Use **Approach 2**: `files` + `file_s3_state` + `file_refs`.
-- Each file stores its own plaintext AES-256 key and per-file nonce in `files`.
+- Use `files` + `file_s3` + `files_refs`; per-endpoint lifecycle state lives in `file_s3.state`, so there is no separate `files_s3_state` table in the first implementation.
+- Each file stores its own plaintext AES-256 key and per-file **base nonce** in `files`.
 - Upload is **synchronous from the user’s perspective**.
-- Replica writes are **best effort per request**: note/file save succeeds if DB state is recorded even when some endpoints fail.
+- Each upload request performs a first-wave parallel PUT to every configured endpoint.
+- A user-visible upload succeeds only if the DB transaction commits **and at least one endpoint** stores the encrypted object.
+- If all endpoints fail on the first wave, the request fails and any partial remote/cache state from that attempt must be cleaned up.
 - Failed endpoints are retried automatically until they become `uploaded`.
 - `/file/:noteID/:fileID` must require normal authenticated requests.
 - `noteID` in `/file/:noteID/:fileID` is cosmetic; auth + existing `fileID` control access.
 - Drag/drop uploads are temporary pending files until the next save resolves markdown references.
+- Each pending inline upload must record both the owning note and a timestamp so abandoned drops can be reaped later.
 - Dropped files not referenced in the next saved body must be deleted.
 - Images insert markdown image syntax; non-images insert normal markdown links.
 - Append-file uploads create persistent attachments even when the note body contains no markdown link.
@@ -135,49 +138,56 @@ Add these tables in `internal/db/db.go` after `migrateNotes()` creates `notes` /
 
 ```sql
 CREATE TABLE IF NOT EXISTS files (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    original_note_id      INTEGER REFERENCES notes(id) ON DELETE SET NULL,
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    original_note_id       INTEGER REFERENCES notes(id) ON DELETE SET NULL,
     pending_inline_note_id INTEGER REFERENCES notes(id) ON DELETE CASCADE,
-    storage_key           TEXT    NOT NULL UNIQUE,
-    filename              TEXT    NOT NULL,
-    mime_type             TEXT    NOT NULL,
-    size_bytes            INTEGER NOT NULL,
-    ciphertext_sha256     TEXT    NOT NULL,
-    aes_key               BLOB    NOT NULL,
-    aes_nonce             BLOB    NOT NULL,
-    created_at            DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    deleted_at            DATETIME
+    pending_inline_at      DATETIME,
+    storage_key            TEXT    NOT NULL UNIQUE,
+    filename               TEXT    NOT NULL,
+    mime_type              TEXT    NOT NULL,
+    size_bytes             INTEGER NOT NULL,
+    plaintext_sha256       TEXT,
+    ciphertext_sha256      TEXT    NOT NULL,
+    aes_key                BLOB    NOT NULL,
+    aes_nonce              BLOB    NOT NULL,
+    created_at             DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    deleted_at             DATETIME
 );
 
-CREATE TABLE IF NOT EXISTS file_s3_state (
-    file_id          INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    endpoint_id      TEXT    NOT NULL,
-    state            TEXT    NOT NULL,
-    remote_key       TEXT    NOT NULL,
-    etag             TEXT,
-    ciphertext_size  INTEGER,
-    last_error       TEXT,
-    retry_count      INTEGER NOT NULL DEFAULT 0,
-    next_retry_at    DATETIME,
-    updated_at       DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+CREATE TABLE IF NOT EXISTS file_s3 (
+    file_id           INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    endpoint_id       TEXT    NOT NULL,
+    state             TEXT    NOT NULL,
+    remote_key        TEXT    NOT NULL,
+    etag              TEXT,
+    ciphertext_size   INTEGER,
+    last_error        TEXT,
+    retry_count       INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at   DATETIME,
+    last_success_at   DATETIME,
+    next_retry_at     DATETIME,
+    updated_at        DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     PRIMARY KEY (file_id, endpoint_id)
 );
 
-CREATE TABLE IF NOT EXISTS file_refs (
+CREATE TABLE IF NOT EXISTS files_refs (
     note_id      INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
     file_id      INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     ref_kind     TEXT    NOT NULL,
     created_at   DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at   DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     PRIMARY KEY (note_id, file_id, ref_kind)
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_pending_inline_note_id ON files(pending_inline_note_id);
+CREATE INDEX IF NOT EXISTS idx_files_pending_inline_at ON files(pending_inline_at);
 CREATE INDEX IF NOT EXISTS idx_files_deleted_at ON files(deleted_at);
-CREATE INDEX IF NOT EXISTS idx_file_s3_state_state_next_retry ON file_s3_state(state, next_retry_at);
-CREATE INDEX IF NOT EXISTS idx_file_refs_file_id ON file_refs(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_s3_next_retry ON file_s3(state, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_files_refs_note_id ON files_refs(note_id);
+CREATE INDEX IF NOT EXISTS idx_files_refs_file_id ON files_refs(file_id);
 ```
 
-`pending_inline_note_id` is necessary so the “next save resolves dropped files” rule is tied to a specific note.
+`pending_inline_note_id` ties a pending drop to the note that owns the next-save reconciliation step, while `pending_inline_at` gives the janitor job a time-based safety net when that save never happens.
 
 ## API Shape
 
@@ -245,7 +255,7 @@ func TestMediaTablesExist(t *testing.T) {
     if err != nil { t.Fatal(err) }
     defer d.Close()
 
-    for _, table := range []string{"files", "file_s3_state", "file_refs"} {
+    for _, table := range []string{"files", "file_s3", "files_refs"} {
         var name string
         err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
         if err != nil { t.Fatalf("missing table %s: %v", table, err) }
@@ -272,7 +282,8 @@ Validation rules:
 
 - `MEDIA_CACHE_DIR` must not be empty
 - `MEDIA_S3_ENDPOINTS` must decode to at least one endpoint
-- each endpoint needs a unique `ID`, `Bucket`, and `Endpoint`
+- each endpoint needs a unique `ID`
+- each endpoint must provide `Bucket`, `Endpoint`, `AccessKeyID`, and `SecretAccessKey`
 
 - [ ] **Step 4: Extend note payloads to carry attachments**
 
@@ -282,7 +293,7 @@ Add `NoteFile` and `Attachments` to `internal/server/notes.go`, plus a helper:
 func (s *Server) loadNoteAttachments(noteID int64) ([]NoteFile, error)
 ```
 
-It should query only `file_refs.ref_kind = 'attachment'` and emit URLs as `/file/<noteID>/<fileID>`.
+It should query only `files_refs.ref_kind = 'attachment'` and emit URLs as `/file/<noteID>/<fileID>`.
 
 - [ ] **Step 5: Run the focused backend tests**
 
@@ -390,13 +401,15 @@ git commit -m "feat: add encrypted media object format and cache"
 
 - [ ] **Step 1: Write failing service tests for replica state and repair**
 
-Add tests with fake replicas:
+Add these tests with fake replicas:
 
 ```go
 func TestCreateFileMarksPerEndpointStates(t *testing.T) { /* one success, one failure */ }
+func TestCreateFileFailsWhenAllReplicasFail(t *testing.T) { /* initial request must fail if every endpoint fails */ }
 func TestRepairRetriesUploadFailedReplica(t *testing.T) { /* failed replica becomes uploaded */ }
 func TestDeleteRetriesDeleteFailedReplica(t *testing.T) { /* delete_failed becomes deleted */ }
 func TestReadFallsBackToHealthyReplicaThenCachesEncryptedBytes(t *testing.T) { /* no local cache, second replica works */ }
+func TestPendingInlineCleanupDeletesAbandonedFile(t *testing.T) { /* stale pending file with no refs is reaped */ }
 ```
 
 - [ ] **Step 2: Build the S3 client wrapper**
@@ -431,10 +444,11 @@ func (s *Service) CollectDeletableFilesAfterNoteDelete(ctx context.Context, note
 Behavior:
 
 - encrypt to temp file once
-- insert `files` row + `file_s3_state` rows + `file_refs` row(s) in one DB transaction
-- upload encrypted temp file to all endpoints concurrently
+- insert `files` row + `file_s3` rows + `files_refs` row(s) in one DB transaction
+- upload encrypted temp file to all endpoints concurrently for the initial request
 - persist per-endpoint result state
-- return success even when some replicas fail
+- commit success only when at least one replica upload succeeded
+- if all replicas fail, abort the request and clean up any partial remote/cache state from that attempt
 - enqueue repair work after commit for failed endpoints
 
 - [ ] **Step 4: Register media jobs in `internal/server/server.go`**
@@ -491,7 +505,9 @@ Add tests for:
 
 ```go
 func TestUploadAttachmentCreatesAttachmentRef(t *testing.T) {}
+func TestUploadFailsWhenAllReplicasFail(t *testing.T) {}
 func TestUploadInlineMarksPendingInline(t *testing.T) {}
+func TestUploadInlineReturnsImageMarkdownWhenMimeIsImage(t *testing.T) {}
 func TestServeFileRequiresAuth(t *testing.T) {}
 func TestServeFileIgnoresCosmeticNoteID(t *testing.T) {}
 func TestDeleteAttachmentRemovesOnlyThisNotesAttachmentRef(t *testing.T) {}
@@ -518,7 +534,7 @@ func (s *Server) deleteAttachment(w http.ResponseWriter, r *http.Request)
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request)
 ```
 
-Use `multipart/form-data` parsing, detect MIME from the uploaded file header when the browser’s provided type is blank, and return JSON payloads including `id`, `filename`, `mime_type`, `is_image`, and `url`.
+Use `multipart/form-data` parsing, sniff MIME from the first bytes of the uploaded content instead of trusting only the browser-provided type, and return JSON payloads including `id`, `filename`, `mime_type`, `is_image`, and `url`. Inline-upload responses should also include a server-derived `markdown` field so the frontend inserts exactly the link/image syntax implied by the canonical MIME classification.
 
 - [ ] **Step 4: Register routes in `internal/server/server.go`**
 
@@ -552,7 +568,7 @@ Never write plaintext to disk.
 Run:
 
 ```bash
-go test ./internal/server -run 'TestUploadAttachmentCreatesAttachmentRef|TestUploadInlineMarksPendingInline|TestServeFileRequiresAuth|TestServeFileIgnoresCosmeticNoteID|TestDeleteAttachmentRemovesOnlyThisNotesAttachmentRef' -v
+go test ./internal/server -run 'TestUploadAttachmentCreatesAttachmentRef|TestUploadFailsWhenAllReplicasFail|TestUploadInlineMarksPendingInline|TestUploadInlineReturnsImageMarkdownWhenMimeIsImage|TestServeFileRequiresAuth|TestServeFileIgnoresCosmeticNoteID|TestDeleteAttachmentRemovesOnlyThisNotesAttachmentRef' -v
 ```
 
 Expected: all new file-route tests pass.
@@ -599,9 +615,9 @@ Return a de-duplicated `[]int64`. Images and links both work because both contai
 After writing the new `updates` row but before committing:
 
 - parse referenced file IDs
-- delete existing `inline_markdown` refs for this note
-- insert current `inline_markdown` refs
-- clear `pending_inline_note_id` for newly referenced pending files belonging to this note
+- delete existing `inline` refs for this note
+- insert current `inline` refs
+- clear `pending_inline_note_id` and `pending_inline_at` for newly referenced pending files belonging to this note
 - identify pending files for this note that are still unreferenced
 - soft-delete those unreferenced files and collect their IDs for post-commit delete jobs
 
@@ -611,9 +627,9 @@ Do **not** touch `attachment` refs during body reconciliation.
 
 Refactor `deleteNote` to use a transaction:
 
-1. collect `file_id`s currently referenced by that note
+1. collect `file_id`s currently referenced by that note plus any pending-inline files still owned by that note
 2. delete the note
-3. query which affected files still have any `file_refs`
+3. query which affected files still have any `files_refs`
 4. soft-delete only the files with zero remaining refs
 5. commit
 6. enqueue replica delete jobs after commit
@@ -727,8 +743,8 @@ Add `@dragover.prevent` and `@drop.prevent="onBodyDrop"` to the editor textarea.
 
 1. ensure note is saved
 2. upload the dropped file with `uploadInlineFile`
-3. insert `![](${url})` for images
-4. insert `[filename](${url})` for non-images
+3. insert the server-returned `markdown` string at the cursor
+4. keep the note dirty so the next save reconciles refs and deletes unused drops
 
 - [ ] **Step 6: Render attachments after note bodies in root and child messages**
 
@@ -770,12 +786,14 @@ Ensure the test suite covers all of these behaviors explicitly:
 4. Saving a note converts referenced pending-inline files into inline refs.
 5. Saving a note deletes pending-inline files that are absent from the final body.
 6. Upload can succeed while one replica is upload_failed.
-7. Failed replicas are retried until they become uploaded.
-8. /file/:noteID/:fileID rejects unauthenticated requests.
-9. /file/:wrongNoteID/:fileID still serves when auth passes.
-10. Read path uses encrypted local cache and never persists plaintext.
-11. Deleting note A does not delete the file while note B still attaches or links it.
-12. Deleting the last reference deletes cache + all replicas eventually.
+7. Upload fails when every replica rejects the first-wave write.
+8. Failed replicas are retried until they become uploaded.
+9. /file/:noteID/:fileID rejects unauthenticated requests.
+10. /file/:wrongNoteID/:fileID still serves when auth passes.
+11. Read path uses encrypted local cache and never persists plaintext.
+12. Deleting note A does not delete the file while note B still attaches or links it.
+13. Deleting the last reference deletes cache + all replicas eventually.
+14. The stale pending-inline janitor deletes abandoned drops that never reach a save event.
 ```
 
 - [ ] **Step 2: Run the backend verification suite**
@@ -817,6 +835,7 @@ Verify manually in the browser:
 - Copy the file URL into a second note; deleting the first note does not break the file.
 - Shut down one S3 endpoint; upload still succeeds and the failed endpoint appears as upload_failed.
 - Bring the endpoint back; repair job eventually marks it uploaded.
+- Leave a dropped file unused and abandon the tab/session; the janitor job eventually deletes it.
 ```
 
 - [ ] **Step 6: Final commit**
@@ -837,27 +856,32 @@ Use this matrix to check plan coverage while implementing:
 | Attachments survive without markdown | `TestUploadAttachmentCreatesAttachmentRef`, note payload attachment assertions |
 | Inline dropped file removed when unused | `TestUpdateNoteDeletesUnusedPendingInlineFiles` |
 | Cross-note references are supported | `TestDeleteNoteKeepsFileWhenAnotherNoteStillReferencesIt` |
-| Replica failure does not block save | `TestCreateFileMarksPerEndpointStates` |
+| Replica failure does not block save once one replica succeeds | `TestCreateFileMarksPerEndpointStates` |
+| All-replica initial failure rejects the request | `TestCreateFileFailsWhenAllReplicasFail`, `TestUploadFailsWhenAllReplicasFail` |
 | Failed endpoints repair later | `TestRepairRetriesUploadFailedReplica` |
 | `/file/` requires auth | `TestServeFileRequiresAuth` + auth path coverage |
 | `noteID` is cosmetic | `TestServeFileIgnoresCosmeticNoteID` |
 | Only encrypted bytes hit disk | cache/service tests + manual inspection |
-| Images insert image markdown | frontend/manual smoke |
+| Images insert image markdown | `TestUploadInlineReturnsImageMarkdownWhenMimeIsImage`, frontend/manual smoke |
 | Non-images insert normal link markdown | frontend/manual smoke |
+| Abandoned dropped files are eventually reaped | `TestPendingInlineCleanupDeletesAbandonedFile` + manual smoke |
 
 ## Implementation Notes to Keep the Feature Safe
 
 - Generate the `files` row before upload so `file_id` is available for `storage_key` and returned URL.
+- Set `pending_inline_at` on inline uploads and clear it only when the next save successfully reconciles the file into an active inline ref.
 - Use `original_note_id` only as provenance; do not use it for authorization or retention.
 - Keep attachment refs and inline refs separate; they solve different product requirements.
+- Initial upload success requires at least one live replica; failures on the other replicas become repair work, not user-visible failure.
+- If the first wave fails on every endpoint, clean up any partial cache/remote state before returning an error.
 - Enqueue jobs **after** the transaction commits so workers never chase uncommitted rows.
 - On serve, prefer local cache first, then any healthy replica, then return 502/503 if nothing is readable.
-- Never trust S3 metadata for mime type or filename; use the DB as the source of truth.
+- Never trust browser- or S3-provided metadata for mime type or filename; use server sniffing + the DB as the source of truth.
 - Because plaintext AES keys live in SQLite by explicit product choice, avoid logging file keys, nonces, or decrypted content anywhere.
 
 ## Self-Review
 
-- Schema coverage: includes `files`, `file_s3_state`, and `file_refs`, plus the approved retention semantics.
+- Schema coverage: includes `files`, `file_s3`, and `files_refs`, plus the approved retention semantics.
 - Upload flows: append + drag/drop are both planned, including unsaved-note handling.
 - Delete flows: note delete, attachment remove, pending-inline cleanup, and replica delete retry are all covered.
 - Read path: authenticated, cache-backed, encrypted-at-rest locally, note ID cosmetic.
