@@ -8,6 +8,7 @@
 </p>
 
 ## TODO
+- [ ] Pin notes 
 - [x] Chat like UI
 - [ ] Auto Title Generator
   - [ ] alternative OLLAMA url
@@ -18,10 +19,12 @@
 - [ ] Job Queue Indicator
 - [ ] S3 Media Storage (Encrypted)
   - [ ] OCR for images and pdfs
+  - [ ] speech to text notes
 - [ ] tags
 - [ ] better search (by title, path and tags)
 - [ ] backup
 - [ ] mobile-app - sync?
+- [ ] SQLite AES-256 in OFB mode
 - [ ] Security Review and Auth hardening
 
 ## Prerequisites
