@@ -11,9 +11,9 @@
 ## TODO MVP
 - [ ] Pin notes 
 - [x] Chat like UI
-- [ ] Note Types
-- [ ] Pseudo-Plugins
-  - [ ] Test harness
+- [x] Note Types
+- [x] Pseudo-Plugins
+  - [x] Test harness
 - [ ] cron system
 - [ ] Job Queue Indicator
 - [ ] S3 Media Storage (Encrypted)
@@ -138,6 +138,61 @@ const typeOptions = [
     { value: "yourtype",  label: "Your Type" },
 ];
 ```
+
+### Testing Your Plugin
+
+Every plugin gets a **free test battery** via `pkg/notetype/plugintest/`. Create a single test file:
+
+```go
+// pkg/notetype/yourtype/yourtype_test.go
+package yourtype
+
+import (
+    "testing"
+    "github.com/i5heu/MentisEterna/pkg/notetype/plugintest"
+)
+
+func TestYourPlugin(t *testing.T) {
+    plugintest.Run(t, &YourPlugin{}, plugintest.TestData{
+        ValidPayload:   `{"things":[{"name":"Foo"}]}`,
+        InvalidPayload: `{"things":[{"name":""}]}`,
+    })
+}
+```
+
+This runs **14 sub-tests** automatically:
+
+| Sub-test | What it verifies |
+|---|---|
+| `ID_NotEmpty` | Plugin ID is non-empty |
+| `Registry` | Plugin is findable in the global registry |
+| `ID_Uniqueness` | No two plugins share the same ID |
+| `InitSchema_Idempotent` | Calling `InitSchema` twice does not error |
+| `InitSchema_AfterNotesTable` | Schema works when the `notes` table already exists |
+| `UISchema_ValidJSON` | UI schema is parseable JSON |
+| `Validate_EmptyPayload` | Empty and null payloads pass validation |
+| `Validate_AcceptsValid` | Your valid payload passes validation |
+| `Validate_RejectsInvalid` | Your invalid payload is rejected |
+| `SaveLoad_RoundTrip` | Save → Load → re-validate catches **shape mismatches** |
+| `SaveLoad_OrphanCleanup` | Deleting a note cascades to plugin tables |
+| `SaveLoad_EmptySave` | Saving null/empty payload does not crash |
+| `CronJobs_NoPanic` | All cron jobs have non-empty schedules and non-nil tasks |
+| `Actions_Handler` | (placeholder) Action handler is registered |
+
+**Key check — payload shape consistency**: The `SaveLoad_RoundTrip` test calls `ProcessSave` → `ProcessLoad` → `json.Marshal` → `Validate`. If your `ProcessLoad` returns a different JSON shape than `Validate` expects (e.g. a raw array `[...]` instead of `{"items": [...]}`), this test fails with an explicit hint. This is the single most common bug when writing plugins.
+
+**Helper functions** for writing additional custom tests:
+
+```go
+func TestMyCustomBehavior(t *testing.T) {
+    d := plugintest.DB(t, &YourPlugin{})       // in-memory DB with notes + plugin schema
+    noteID := plugintest.CreateNote(t, d, "My Note", &YourPlugin{})
+    plugintest.SavePayload(t, d, &YourPlugin{}, noteID, json.RawMessage(`...`))
+    // ... your assertions here ...
+}
+```
+
+**Fast iteration mode**: Use `plugintest.Quick()` during development — runs only 3 tests (validation + UI schema) instead of 14.
 
 ### Interface Reference
 
