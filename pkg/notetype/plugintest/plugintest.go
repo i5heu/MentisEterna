@@ -99,6 +99,7 @@ func Run(t *testing.T, plugin notetype.NoteType, td TestData) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			title TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'standard',
+			pinned INTEGER NOT NULL DEFAULT 0,
 			parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 		)`); err != nil {
 			t.Fatalf("create notes table: %v", err)
@@ -169,6 +170,7 @@ func Run(t *testing.T, plugin notetype.NoteType, td TestData) {
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				title TEXT NOT NULL,
 				type TEXT NOT NULL DEFAULT 'standard',
+				pinned INTEGER NOT NULL DEFAULT 0,
 				parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 			)`); err != nil {
 				t.Fatalf("create notes table: %v", err)
@@ -178,7 +180,6 @@ func Run(t *testing.T, plugin notetype.NoteType, td TestData) {
 				t.Fatalf("InitSchema: %v", err)
 			}
 
-			// Insert a note.
 			res, err := d.Exec(`INSERT INTO notes (title, type) VALUES ('roundtrip', ?)`, plugin.ID())
 			if err != nil {
 				t.Fatalf("insert note: %v", err)
@@ -273,6 +274,7 @@ func Run(t *testing.T, plugin notetype.NoteType, td TestData) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			title TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'standard',
+			pinned INTEGER NOT NULL DEFAULT 0,
 			parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 		)`); err != nil {
 			t.Fatalf("create notes table: %v", err)
@@ -338,6 +340,7 @@ func Run(t *testing.T, plugin notetype.NoteType, td TestData) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			title TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'standard',
+			pinned INTEGER NOT NULL DEFAULT 0,
 			parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 		)`); err != nil {
 			t.Fatalf("create notes table: %v", err)
@@ -461,6 +464,7 @@ func DB(t *testing.T, plugin notetype.NoteType) *db.DB {
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,
 		title      TEXT NOT NULL,
 		type       TEXT NOT NULL DEFAULT 'standard',
+		pinned     INTEGER NOT NULL DEFAULT 0,
 		parent_id  INTEGER REFERENCES notes(id) ON DELETE SET NULL,
 		created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	)`); err != nil {

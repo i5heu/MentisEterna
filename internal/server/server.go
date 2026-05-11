@@ -163,6 +163,10 @@ func (s *Server) Start(ctx context.Context) error {
 			s.handlePluginAction(w, r)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/pin") {
+			s.setNotePin(w, r)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			s.getNote(w, r)
