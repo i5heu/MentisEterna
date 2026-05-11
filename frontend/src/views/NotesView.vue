@@ -800,10 +800,13 @@ function newNote(parentNote = null) {
         id: null,
         title: "",
         body: "",
+        type: "standard",
         parent_id: parentNote ? parentNote.id : null,
     };
     editTitle.value = "";
     editBody.value = "";
+    noteType.value = "standard";
+    customData.value = null;
     dirty.value = true;
     saveError.value = "";
     showHistory.value = false;
