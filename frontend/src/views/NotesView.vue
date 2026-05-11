@@ -432,6 +432,12 @@
                         class="message-body markdown-body"
                         v-html="renderMarkdown(threadNote.body)"
                     />
+                    <NoteTypeRenderer
+                        :note="threadNote"
+                        :token="token"
+                        :editing="false"
+                        @selectNote="(id) => selectNoteById(id)"
+                    />
                 </div>
 
                 <!-- Child messages of the thread note -->
@@ -950,9 +956,8 @@ function selectNoteFromChild(child) {
     openThreadSidebar(child);
 }
 
-// selectNoteById is called from NoteTypeRenderer (e.g., recipe overview cards)
-// when the user clicks a linked note. It looks up the note from the sidebar
-// list first, then falls back to fetching it fresh from the server.
+// openNoteInThreadById is called from NoteTypeRenderer (e.g., recipe overview cards)
+// when the user clicks a linked note. It opens the note in the thread sidebar.
 async function selectNoteById(id) {
     // Try to find the note in our loaded list first.
     let note = notes.value.find((n) => n.id === id);
@@ -964,11 +969,17 @@ async function selectNoteById(id) {
             return;
         }
     }
-    await selectNote(note);
+    // Open in the thread sidebar (right panel) instead of replacing the main editor.
+    openThreadSidebar(note);
 }
 
 async function openThreadSidebar(note) {
-    threadNote.value = note;
+    // Fetch the full enriched note so custom_data is available for rendering.
+    try {
+        threadNote.value = await fetchNote(props.token, note.id);
+    } catch {
+        threadNote.value = note;
+    }
     threadReplyTitle.value = "";
     threadReplyBody.value = "";
     // Load children of the thread note
