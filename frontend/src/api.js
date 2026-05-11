@@ -27,6 +27,10 @@ export async function fetchNotes(token) {
     return request("/notes", { headers: authHeaders(token) });
 }
 
+export async function fetchNote(token, id) {
+    return request(`/notes/${id}`, { headers: authHeaders(token) });
+}
+
 export async function createNote(token, title, body, parentId) {
     return request("/notes", {
         method: "POST",

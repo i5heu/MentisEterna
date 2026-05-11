@@ -14,6 +14,7 @@
 - [ ] Pseudo-Plugins
   - [ ] Test harness
 - [ ] cron system
+- [ ] Job Queue Indicator
 - [ ] backup
 - [ ] mobile-app - sync?
 - [ ] Security Review and Auth hardening
