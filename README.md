@@ -14,8 +14,9 @@
 - [x] Note Types
 - [x] Pseudo-Plugins
   - [x] Test harness
-- [ ] cron system
-  - [ ] Job Queue Indicator
+- [x] Job system with persistent queue, retry, and frontend panel
+  - [x] Job Queue Indicator in sidebar
+  - [x] Semantic indexing via job queue
 - [ ] S3 Media Storage (Encrypted)
 - [ ] Note linking and backlinking
 - [ ] tags
@@ -233,6 +234,97 @@ func init() {
 ```
 
 The frontend calls it via `pluginAction(token, noteId, "do_something", null)` from `api.js`.
+
+### Using the Job System
+
+Background work — cron tasks, one-shot operations, anything that should survive restarts — runs through the **job system** (`internal/jobs/`). Every job is persisted in SQLite, retried on failure, and visible in the frontend's job queue panel.
+
+#### Cron Jobs (Scheduled)
+
+Return them from `CronJobs()`. The server picks them up automatically:
+
+```go
+func (p *YourPlugin) CronJobs() []notetype.CronJob {
+    return []notetype.CronJob{{
+        Name:     "weekly_cleanup",
+        Schedule: "@daily",   // @every 1h, @daily, @hourly
+        Task: func(db *sql.DB, payload []byte) (string, error) {
+            // payload is always nil for cron-triggered runs.
+            n, err := db.Exec(`DELETE FROM ct_yourtype_stale WHERE ...`)
+            if err != nil {
+                return "", err
+            }
+            rows, _ := n.RowsAffected()
+            return fmt.Sprintf("Cleaned up %d stale rows", rows), nil
+        },
+    }}
+}
+```
+
+**Task signature**: `func(db *sql.DB, payload []byte) (string, error)`
+- `db` — the database handle (use this, not a captured closure variable).
+- `payload` — `nil` for cron jobs; JSON bytes for ad-hoc jobs.
+- Returns a human-readable result string (stored in `job_runs.result`) or an error.
+
+Every cron-triggered run creates a row in `job_runs` with a status: `planned` → `running` → `done` (or `errored`). Failed runs are retryable from the frontend.
+
+#### Ad-Hoc Jobs (On-Demand)
+
+For work triggered by user actions or RPC calls, enqueue a job at runtime.
+
+**Register** the job definition once (e.g. in your `init()` or an action handler). Plugins register through the server's `ActionHandler` pattern — see the internal VSS indexing job for a pattern, or use `RegisterPluginActionHandler` and call the server's jobManager:
+
+```go
+// In your plugin action handler:
+func handleGenerateReport(db *sql.DB, noteID int64, _ string, _ json.RawMessage) (any, error) {
+    // Enqueue a one-shot job. The caller needs a reference to the Manager,
+    // which is available on the Server struct. For now, ad-hoc jobs are
+    // best registered via action handlers that receive *sql.DB.
+    //
+    // Future: the Manager will be exposed through a registry similar to
+    // RegisterPluginActionHandler. In the meantime, cron-based jobs cover
+    // the majority of use cases.
+    return map[string]string{"status": "enqueued"}, nil
+}
+```
+
+#### Job Visibility
+
+All job runs appear in the **frontend sidebar panel** (`JobQueue.vue`):
+
+- ⚙ icon with a badge showing the count of `planned` + `running` jobs.
+- Clicking opens a dropdown listing the 50 most recent runs.
+- Each row shows: status icon (⏳⟳✓✗⊘), plugin/job name, timestamp, result or error.
+- **Errored** and **cancelled** runs have a ↻ retry button.
+
+#### API Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/jobs` | List last 50 runs + `pending_count` |
+| `POST` | `/jobs/:id/retry` | Re-queue an errored/cancelled run |
+| `POST` | `/jobs/:id/cancel` | Cancel a planned (not-yet-running) job |
+
+#### Architecture
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐
+│ Scheduler │───▶│  Queue   │───▶│  Worker  │───▶ job task
+│ (ticks)  │    │ (SQLite) │    │  (2 by   │
+└──────────┘    └──────────┘    │  default) │
+                                └──────────┘
+                                      │
+                                 ┌────▼──────┐
+                                 │ job_runs   │
+                                 │ (history)  │
+                                 └────────────┘
+```
+
+**Key guarantees**:
+- **Atomic dequeue** — Workers claim jobs via compare-and-swap (`UPDATE WHERE id=? AND status='planned'`). SQLite serializes writes, so no two workers ever grab the same job.
+- **Zombie recovery** — On startup, any job stuck in `running` (from a crashed server) is reset to `planned` so it re-executes.
+- **Data retention** — A built-in `@daily` janitor deletes job runs older than 30 days, preventing unbounded table growth.
+- **WAL + busy timeout** — The DB opens with `_journal_mode=WAL&_busy_timeout=5000` so concurrent worker writes don't fail with `database is locked`.
 
 ### Existing Plugins (Reference)
 

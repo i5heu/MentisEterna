@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/i5heu/MentisEterna/internal/db"
 )
@@ -85,17 +84,20 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 }
 
 // helperCreateNoteSync creates a note and ensures the embedding is
-// stored before returning. It waits for the async goroutine from createNote
-// to finish, then calls syncEmbeddingAfterEdit synchronously to be safe.
+// stored before returning. It calls syncEmbeddingTask synchronously.
 func helperCreateNoteSync(t *testing.T, s *Server, title, body string, parentID *int64) Note {
 	t.Helper()
 	n := helperCreateNote(t, s, title, body, parentID)
-	// Wait for the async syncEmbeddingAfterEdit goroutine from createNote.
-	// The mock embedder is fast, so 100ms is more than enough.
-	time.Sleep(100 * time.Millisecond)
-	// Call synchronously to be certain the embedding is stored.
-	// This is safe because syncEmbeddingAfterEdit does DELETE then INSERT.
-	s.syncEmbeddingAfterEdit(n.ID, title, body)
+	// Call the embedding task synchronously to be certain the embedding is stored.
+	payload, _ := json.Marshal(map[string]interface{}{
+		"note_id": n.ID,
+		"title":   title,
+		"body":    body,
+	})
+	_, err := s.syncEmbeddingTask(s.db.DB, payload)
+	if err != nil {
+		t.Logf("syncEmbeddingTask: %v", err)
+	}
 	return n
 }
 
@@ -627,10 +629,16 @@ func TestSearchAfterUpdateUsesNewBody(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: expected 200, got %d", w.Code)
 	}
-	// Wait for the async syncEmbeddingAfterEdit goroutine from updateNote to finish.
-	// The mock embedder is fast, so 100ms is sufficient.
-	time.Sleep(100 * time.Millisecond)
-	s.syncEmbeddingAfterEdit(n.ID, "Doc", "updated content about airplanes")
+	// Call the embedding task synchronously to be certain the embedding is stored.
+	payload2, _ := json.Marshal(map[string]interface{}{
+		"note_id": n.ID,
+		"title":   "Doc",
+		"body":    "updated content about airplanes",
+	})
+	_, err := s.syncEmbeddingTask(s.db.DB, payload2)
+	if err != nil {
+		t.Fatalf("syncEmbeddingTask: %v", err)
+	}
 
 	// Search for "airplanes" should now find the note.
 	r2 := httptest.NewRequest(http.MethodGet, "/notes/search?q=airplanes", nil)

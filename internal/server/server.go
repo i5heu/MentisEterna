@@ -102,6 +102,16 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Fatalf("Failed to start job manager: %v", err)
 	}
 
+	// Register ad-hoc VSS embedding index job (on-demand, not cron).
+	if s.db.VSSAvailable() && s.llm != nil {
+		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{{
+			Name: "vss_index",
+			Task: s.syncEmbeddingTask,
+		}}); err != nil {
+			log.Fatalf("Failed to register VSS index job: %v", err)
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		s.handleLogin(w, r)

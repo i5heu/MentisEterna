@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -159,8 +160,8 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enrich with custom data and UI schema.
 	s.enrichNote(&n)
-	// Async VSS embedding sync
-	go s.syncEmbeddingAfterEdit(id, in.Title, in.Body)
+	// Async VSS embedding sync via job queue
+	s.enqueueVSSIndex(id, in.Title, in.Body)
 	writeJSON(w, http.StatusCreated, n)
 }
 
@@ -255,8 +256,8 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.enrichNote(&n)
-	// Async VSS embedding sync
-	go s.syncEmbeddingAfterEdit(id, in.Title, in.Body)
+	// Async VSS embedding sync via job queue
+	s.enqueueVSSIndex(id, in.Title, in.Body)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -484,28 +485,47 @@ func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// syncEmbeddingAfterEdit generates an embedding for the given note and upserts
-// into the vss_notes virtual table. It is intended to be called asynchronously.
-func (s *Server) syncEmbeddingAfterEdit(noteID int64, title, body string) {
-	if !s.db.VSSAvailable() || s.llm == nil {
-		return
+// syncEmbeddingTask is the job task handler for VSS embedding generation.
+// It accepts a JSON payload with "note_id", "title", and "body" fields.
+func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
+	var p struct {
+		NoteID int64  `json:"note_id"`
+		Title  string `json:"title"`
+		Body   string `json:"body"`
 	}
-	text := llm.CombineTitleBody(title, body)
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("vss_index: invalid payload: %w", err)
+	}
+
+	text := llm.CombineTitleBody(p.Title, p.Body)
 	vec, err := s.llm.GenerateEmbedding(text)
 	if err != nil {
-		log.Printf("vss: generate embedding for note %d: %v", noteID, err)
-		return
+		return "", fmt.Errorf("generate embedding: %w", err)
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
 	// vss0 virtual tables don't support UPDATE/INSERT OR REPLACE.
 	// Must DELETE then INSERT.
-	_, _ = s.db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, noteID)
-	_, err = s.db.Exec(
+	if _, err := db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.NoteID); err != nil {
+		return "", fmt.Errorf("delete old embedding: %w", err)
+	}
+	if _, err := db.Exec(
 		`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
-		noteID, vecJSON,
-	)
-	if err != nil {
-		log.Printf("vss: upsert embedding for note %d: %v", noteID, err)
+		p.NoteID, vecJSON,
+	); err != nil {
+		return "", fmt.Errorf("insert embedding: %w", err)
+	}
+	return fmt.Sprintf("Indexed note %d (%d chars)", p.NoteID, len(p.Body)), nil
+}
+
+// enqueueVSSIndex enqueues a vss_index job for the given note.
+func (s *Server) enqueueVSSIndex(noteID int64, title, body string) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"note_id": noteID,
+		"title":   title,
+		"body":    body,
+	})
+	if _, err := s.jobManager.Enqueue("_system", "vss_index", payload); err != nil {
+		log.Printf("vss: enqueue index for note %d: %v", noteID, err)
 	}
 }
 
