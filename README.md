@@ -15,18 +15,19 @@
 - [x] Pseudo-Plugins
   - [x] Test harness
 - [ ] cron system
-- [ ] Job Queue Indicator
+  - [ ] Job Queue Indicator
 - [ ] S3 Media Storage (Encrypted)
 - [ ] Note linking and backlinking
-- [ ] Encrypted Backup
-- [ ] SQLite AES-256 in OFB mode
-- [ ] Security Review and Auth hardening
-## TODO
+- [ ] tags
+  - [ ] index note type
 - [ ] Auto Title Generator
   - [ ] alternative OLLAMA url (needed to use anothert OLLAMA for tag and title generation, because local ollama is often CPU only)
+- [ ] SQLite AES-256 in OFB mode
+- [ ] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
+## TODO
+- [ ] Encrypted Backup
 - [ ] OCR for images and pdfs
 - [ ] speech to text notes
-- [ ] tags
 - [ ] better search (by title, path and tags)
 - [ ] mobile-app - sync?
 - [ ] UX Improvements
