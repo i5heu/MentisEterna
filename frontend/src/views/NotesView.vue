@@ -1241,24 +1241,45 @@ function onClickOutside(e) {
 
 // ── URL routing ──
 // URL scheme:
-//   /                    → no selection
-//   /note/123            → note 123 selected
-//   /note/123/thread/456 → note 123 in main, thread 456 in sidebar
-//   /note/new            → compose a new note
+//   /                                          → no selection
+//   /note/175:this:is:a:example                → note 175 selected (titles for history only)
+//   /note/175:this:is:a:example/thread/178:foo → note 175 with thread 178 in sidebar
+//   /note/new                                  → compose a new note
+// Only the numeric IDs are parsed on nav; titles are cosmetic.
 
 let squelchPopstate = false;
+
+function notePath(note) {
+    // Build "id:ancestor:ancestor:self" slug for a note
+    const chain = ancestors.value;
+    let slug = String(note.id);
+    for (const n of chain) {
+        slug += ":" + (n.title || "Untitled").replace(/[\/:]/g, "-");
+    }
+    return slug;
+}
+
+function threadNotePath(note) {
+    // Build "id:ancestor:ancestor:self" slug for the thread note
+    const chain = threadAncestors.value;
+    let slug = String(note.id);
+    for (const n of chain) {
+        slug += ":" + (n.title || "Untitled").replace(/[\/:]/g, "-");
+    }
+    return slug;
+}
 
 function buildURL() {
     let url = "/";
     if (selected.value) {
         if (selected.value.id) {
-            url = `/note/${selected.value.id}`;
+            url = `/note/${notePath(selected.value)}`;
         } else {
             url = "/note/new";
         }
     }
     if (threadNote.value) {
-        url += `/thread/${threadNote.value.id}`;
+        url += `/thread/${threadNotePath(threadNote.value)}`;
     }
     return url;
 }
@@ -1275,12 +1296,19 @@ function replaceURL() {
     window.history.replaceState({}, "", url);
 }
 
+// extractID pulls just the leading numeric ID from a slug like "175:foo:bar"
+function extractID(slug) {
+    if (!slug) return null;
+    const id = parseInt(slug.split(":")[0], 10);
+    return isNaN(id) || id <= 0 ? null : id;
+}
+
 async function loadFromURL() {
     const path = location.pathname;
-    // Match: /note/:id  or  /note/:id/thread/:tid  or  /note/new  or  /note/new/thread/:tid
-    const m = path.match(/^\/note\/(new|\d+)(?:\/thread\/(\d+))?\/?$/);
+    // Match: /note/<slug>  or  /note/<slug>/thread/<slug>
+    // Slugs: "new" or "123:title:title" — we only care about the numeric ID before any colon.
+    const m = path.match(/^\/note\/([^/]+)(?:\/thread\/([^/]+))?\/?$/);
     if (!m) {
-        // No note in URL — ensure clean state
         if (selected.value || threadNote.value) {
             selected.value = null;
             threadNote.value = null;
@@ -1289,34 +1317,27 @@ async function loadFromURL() {
         return;
     }
 
-    const noteId = m[1];
-    const threadId = m[2];
+    const noteSlug = m[1];
+    const threadSlug = m[2];
 
     // Handle /note/new
-    if (noteId === "new") {
+    if (noteSlug === "new") {
         if (!selected.value || selected.value.id !== null) {
             newNote();
         }
     } else {
-        const id = parseInt(noteId, 10);
-        if (isNaN(id) || id <= 0) return;
+        const id = extractID(noteSlug);
+        if (!id) return;
 
-        // Load the note if not already selected
         if (!selected.value || selected.value.id !== id) {
-            // Find in cache first
             let note = notes.value.find((n) => n.id === id);
             if (!note) {
-                // Fetch from server
                 try {
                     note = await fetchNote(props.token, id);
-                    if (note) {
-                        // Add to cache if not present
-                        if (!notes.value.some((n) => n.id === note.id)) {
-                            notes.value.push(note);
-                        }
+                    if (note && !notes.value.some((n) => n.id === note.id)) {
+                        notes.value.push(note);
                     }
                 } catch {
-                    // Note not found or network error — stay on current
                     replaceURL();
                     return;
                 }
@@ -1331,18 +1352,15 @@ async function loadFromURL() {
     }
 
     // Handle thread sidebar
-    if (threadId) {
-        const tid = parseInt(threadId, 10);
-        if (!isNaN(tid) && tid > 0) {
+    if (threadSlug) {
+        const tid = extractID(threadSlug);
+        if (tid) {
             if (!threadNote.value || threadNote.value.id !== tid) {
                 let tNote = notes.value.find((n) => n.id === tid);
                 if (!tNote) {
                     try {
                         tNote = await fetchNote(props.token, tid);
-                        if (
-                            tNote &&
-                            !notes.value.some((n) => n.id === tNote.id)
-                        ) {
+                        if (tNote && !notes.value.some((n) => n.id === tNote.id)) {
                             notes.value.push(tNote);
                         }
                     } catch {
@@ -1355,7 +1373,6 @@ async function loadFromURL() {
             }
         }
     } else {
-        // No thread in URL — close sidebar if open
         if (threadNote.value) {
             closeThreadSidebar();
         }
@@ -1369,8 +1386,8 @@ function onPopstate() {
     }
     loadFromURL();
 }
-</script>
 
+</script>
 <style scoped>
 .layout {
     display: flex;
