@@ -82,7 +82,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
 
 ## TODO Future
-- [ ] OCR for images and pdfs
+- [x] OCR for images and pdfs
 - [ ] speech to text notes
 - [ ] better search (by title, path and tags)
 - [ ] mobile-app - sync?
