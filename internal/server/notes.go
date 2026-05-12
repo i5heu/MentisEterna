@@ -17,16 +17,17 @@ import (
 )
 
 type Note struct {
-	ID         int64  `json:"id"`
-	Title      string `json:"title"`
-	ParentID   *int64 `json:"parent_id"`
-	Type       string `json:"type"`
-	Pinned     bool   `json:"pinned"`
-	Body       string `json:"body"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
-	CustomData any    `json:"custom_data,omitempty"`
-	UISchema   any    `json:"ui_schema,omitempty"`
+	ID         int64    `json:"id"`
+	Title      string   `json:"title"`
+	ParentID   *int64   `json:"parent_id"`
+	Type       string   `json:"type"`
+	Pinned     bool     `json:"pinned"`
+	Body       string   `json:"body"`
+	CreatedAt  string   `json:"created_at"`
+	UpdatedAt  string   `json:"updated_at"`
+	CustomData any      `json:"custom_data,omitempty"`
+	UISchema   any      `json:"ui_schema,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
 	// Attachments are files attached to this note.
 	Attachments []NoteFile `json:"attachments,omitempty"`
 }
@@ -64,7 +65,7 @@ func scanNote(row interface{ Scan(...any) error }) (Note, error) {
 	return n, err
 }
 
-// enrichNote attaches plugin-specific custom data and UI schema to a note.
+// enrichNote attaches plugin-specific custom data, UI schema, and tags to a note.
 func (s *Server) enrichNote(n *Note) {
 	if n == nil {
 		return
@@ -80,6 +81,59 @@ func (s *Server) enrichNote(n *Note) {
 	}
 	n.CustomData = customData
 	n.UISchema = plugin.UISchema()
+	// Load tags.
+	tags, err := loadTags(s.db.DB, n.ID)
+	if err != nil {
+		log.Printf("tags: load for note %d: %v", n.ID, err)
+	} else {
+		n.Tags = tags
+	}
+}
+
+// loadTags returns the tag names for a note.
+func loadTags(d *sql.DB, noteID int64) ([]string, error) {
+	rows, err := d.Query(`SELECT t.name FROM tags t JOIN tags_refs tr ON tr.tag_id = t.id WHERE tr.note_id = ? ORDER BY t.name`, noteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tags []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tags = append(tags, name)
+	}
+	return tags, rows.Err()
+}
+
+// saveTags replaces the tags for a note within a transaction.
+// Each tag name is trimmed; blank names are skipped.
+func saveTags(tx *sql.Tx, noteID int64, tags []string) error {
+	if _, err := tx.Exec(`DELETE FROM tags_refs WHERE note_id = ?`, noteID); err != nil {
+		return err
+	}
+	seen := make(map[string]bool)
+	for _, name := range tags {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		// Upsert the tag.
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO tags (name) VALUES (?)`, name); err != nil {
+			return err
+		}
+		// Resolve the tag ID and create the reference.
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO tags_refs (note_id, tag_id)
+			SELECT ?, id FROM tags WHERE name = ?
+		`, noteID, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadNoteAttachments loads attachment metadata for a note from the database.
@@ -149,6 +203,7 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		ParentID   *int64          `json:"parent_id"`
 		Type       string          `json:"type"`
 		CustomData json.RawMessage `json:"custom_data"`
+		Tags       []string        `json:"tags"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -195,6 +250,12 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
+	}
+
+	// Save tags.
+	if err := saveTags(tx, id, in.Tags); err != nil {
+		writeErr(w, err)
+		return
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -255,6 +316,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		ParentID   *int64          `json:"parent_id"`
 		Type       string          `json:"type"`
 		CustomData json.RawMessage `json:"custom_data"`
+		Tags       []string        `json:"tags"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -304,6 +366,12 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
+	}
+
+	// Save tags.
+	if err := saveTags(tx, id, in.Tags); err != nil {
+		writeErr(w, err)
+		return
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -801,4 +869,42 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, results)
+}
+
+// handleTags returns known tags filtered by an optional ?q= prefix query.
+// GET /tags?q=foo
+func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	var rows *sql.Rows
+	var err error
+	if q == "" {
+		rows, err = s.db.Query(`SELECT DISTINCT t.name FROM tags t JOIN tags_refs tr ON tr.tag_id = t.id ORDER BY t.name`)
+	} else {
+		rows, err = s.db.Query(`SELECT DISTINCT t.name FROM tags t JOIN tags_refs tr ON tr.tag_id = t.id WHERE t.name LIKE ? ORDER BY t.name LIMIT 20`, q+"%")
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			writeErr(w, err)
+			return
+		}
+		names = append(names, name)
+	}
+	if names == nil {
+		names = []string{}
+	}
+	writeJSON(w, http.StatusOK, names)
 }
