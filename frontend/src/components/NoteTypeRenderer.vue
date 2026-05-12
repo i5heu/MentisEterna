@@ -188,13 +188,86 @@
             </p>
         </div>
 
+        <!-- Index type: tag-based note index -->
+        <div v-if="note.type === 'index'" class="index-view">
+            <div v-if="editing" class="index-config">
+                <label class="config-row">
+                    <span class="config-label">Mode:</span>
+                    <select
+                        v-model="indexMode"
+                        class="config-select"
+                        @change="onIndexConfigChange"
+                    >
+                        <option value="global">Global (all notes)</option>
+                        <option value="local">Local (this branch)</option>
+                    </select>
+                </label>
+                <p class="config-hint">
+                    Global shows tagged notes from the entire workspace. Local
+                    shows only notes within the same parent and their
+                    descendants.
+                </p>
+            </div>
+            <div
+                v-if="
+                    indexData && indexData.entries && indexData.entries.length
+                "
+                class="index-entries"
+            >
+                <div
+                    v-for="entry in indexData.entries"
+                    :key="entry.tag"
+                    class="index-entry"
+                >
+                    <div class="index-tag-header">
+                        <span class="index-tag-name">🏷 {{ entry.tag }}</span>
+                        <span class="index-tag-count"
+                            >{{ entry.count }} note{{
+                                entry.count !== 1 ? "s" : ""
+                            }}</span
+                        >
+                    </div>
+                    <div class="index-note-list">
+                        <div
+                            v-for="n in entry.notes"
+                            :key="n.note_id"
+                            class="index-note-card"
+                            @click="$emit('selectNote', n.note_id)"
+                        >
+                            <span class="index-note-title">{{
+                                n.title || "Untitled"
+                            }}</span>
+                            <span class="index-note-date">{{
+                                n.created_at
+                                    ? new Date(
+                                          n.created_at,
+                                      ).toLocaleDateString()
+                                    : ""
+                            }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p v-else class="empty-hint">
+                No tags found.
+                <template v-if="indexMode === 'local'">
+                    Try switching to Global mode or tag some notes within this
+                    branch.
+                </template>
+                <template v-else>
+                    Add tags to your notes to see them indexed here.
+                </template>
+            </p>
+        </div>
+
         <!-- Generic custom data form (fallback for other types) -->
         <div
             v-if="
                 note.ui_schema &&
                 note.type !== 'recipe' &&
                 note.type !== 'recipe_overview' &&
-                note.type !== 'example'
+                note.type !== 'example' &&
+                note.type !== 'index'
             "
             class="custom-form"
         >
@@ -224,6 +297,8 @@ const ingredients = ref([]);
 const overviewData = ref(null);
 const generatingList = ref(false);
 const checklistItems = ref([]);
+const indexData = ref(null);
+const indexMode = ref("global");
 
 // Watch for note changes and initialize local state.
 watch(
@@ -252,6 +327,11 @@ watch(
                       checked: !!it.checked,
                   }))
                 : [];
+        }
+        if (n.type === "index") {
+            // custom_data is { mode, selected_tags, entries } from the backend.
+            indexData.value = n.custom_data || { entries: [] };
+            indexMode.value = indexData.value.mode || "global";
         }
     },
     { immediate: true },
@@ -321,6 +401,23 @@ async function generateGroceryList() {
         generatingList.value = false;
     }
 }
+
+function onIndexConfigChange() {
+    emit("update:customData", {
+        mode: indexMode.value,
+        selected_tags: indexData.value?.selected_tags || [],
+    });
+}
+
+// Emit custom data changes for index mode.
+watch(indexMode, () => {
+    if (props.note?.type === "index") {
+        emit("update:customData", {
+            mode: indexMode.value,
+            selected_tags: indexData.value?.selected_tags || [],
+        });
+    }
+});
 </script>
 
 <style scoped>
@@ -466,5 +563,119 @@ async function generateGroceryList() {
     font-size: 0.8rem;
     color: var(--pre-text-color);
     overflow-x: auto;
+}
+
+/* --- Index view --- */
+
+.index-view {
+    margin-bottom: 1rem;
+}
+
+.index-config {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--raised-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.config-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.config-label {
+    font-size: 0.8rem;
+    color: var(--font-color-secondary);
+    white-space: nowrap;
+}
+
+.config-select {
+    background: var(--input-bg, var(--html-bg));
+    color: var(--font-color);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    outline: none;
+}
+
+.config-select:focus {
+    border-color: var(--accent-teal);
+}
+
+.config-hint {
+    font-size: 0.75rem;
+    color: var(--font-color-secondary);
+    margin: 0;
+}
+
+.index-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.index-entry {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.index-tag-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    background: var(--raised-bg);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.index-tag-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--accent-teal);
+}
+
+.index-tag-count {
+    font-size: 0.75rem;
+    color: var(--font-color-secondary);
+}
+
+.index-note-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.index-note-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.45rem 0.75rem;
+    cursor: pointer;
+    transition: background 0.1s;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.index-note-card:last-child {
+    border-bottom: none;
+}
+
+.index-note-card:hover {
+    background: var(--panel-bg);
+}
+
+.index-note-title {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--font-color);
+}
+
+.index-note-date {
+    font-size: 0.75rem;
+    color: var(--font-color-secondary);
 }
 </style>
