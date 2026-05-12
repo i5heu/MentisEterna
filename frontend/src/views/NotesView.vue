@@ -326,16 +326,23 @@
                                     v-model="editBody"
                                     class="body-textarea"
                                     placeholder="Write your note here… (drag files here)"
-                                    @input="onBodyInput"
-                                    @click="onBodyCaretMove"
-                                    @keyup="onBodyCaretMove"
-                                    @scroll="updateLinkPopupPosition"
+                                    @input="onLinkEditorInput('body')"
+                                    @click="
+                                        onLinkEditorCaretMove('body', $event)
+                                    "
+                                    @keyup="
+                                        onLinkEditorCaretMove('body', $event)
+                                    "
+                                    @scroll="onLinkEditorScroll('body')"
                                     @dragover.prevent
                                     @drop.prevent="onBodyDrop"
                                 />
                                 <!-- [[ Link search popup -->
                                 <div
-                                    v-if="linkSearchVisible"
+                                    v-if="
+                                        linkSearchVisible &&
+                                        linkSearchTarget === 'body'
+                                    "
                                     class="link-search-popup"
                                     :style="linkPopupStyle"
                                 >
@@ -527,10 +534,15 @@
                     />
                     <div class="composer-body-row">
                         <textarea
+                            ref="newReplyTextarea"
                             v-model="newReplyBody"
                             class="composer-textarea"
                             placeholder="Write a reply…"
                             rows="2"
+                            @input="onLinkEditorInput('reply')"
+                            @click="onLinkEditorCaretMove('reply', $event)"
+                            @keyup="onLinkEditorCaretMove('reply', $event)"
+                            @scroll="onLinkEditorScroll('reply')"
                             @keydown.enter.meta.exact="sendReply"
                             @keydown.enter.ctrl.exact="sendReply"
                         />
@@ -541,6 +553,82 @@
                         >
                             {{ sendingReply ? "…" : "Send" }}
                         </button>
+                        <div
+                            v-if="
+                                linkSearchVisible &&
+                                linkSearchTarget === 'reply'
+                            "
+                            class="link-search-popup"
+                            :style="linkPopupStyle"
+                        >
+                            <div
+                                v-if="!linkSearching && !linkSearchQuery.trim()"
+                                class="link-search-status"
+                            >
+                                Start typing to search notes…
+                            </div>
+                            <div
+                                v-else-if="linkSearching"
+                                class="link-search-status"
+                            >
+                                Searching…
+                            </div>
+                            <div
+                                v-for="(r, idx) in linkSearchResults"
+                                :key="r.id"
+                                class="link-search-item"
+                                :class="{
+                                    highlighted: idx === linkSearchIndex,
+                                }"
+                                :style="
+                                    idx === linkSearchIndex
+                                        ? {
+                                              background: '#2f2000',
+                                              color: '#fff',
+                                              boxShadow:
+                                                  'inset 4px 0 0 #ffb400',
+                                              outline:
+                                                  '1px solid rgba(255, 180, 0, 0.35)',
+                                          }
+                                        : null
+                                "
+                                @click="selectLinkResult(r)"
+                                @mouseenter="linkSearchIndex = idx"
+                            >
+                                <span
+                                    class="link-search-title"
+                                    :style="
+                                        idx === linkSearchIndex
+                                            ? {
+                                                  fontWeight: '700',
+                                              }
+                                            : null
+                                    "
+                                    >{{ r.title || "Untitled" }}</span
+                                >
+                                <span
+                                    class="link-search-relevance"
+                                    :style="
+                                        idx === linkSearchIndex
+                                            ? {
+                                                  color: 'rgba(255, 255, 255, 0.92)',
+                                              }
+                                            : null
+                                    "
+                                    >{{ relevancePct(r.distance) }}</span
+                                >
+                            </div>
+                            <div
+                                v-if="
+                                    !linkSearching &&
+                                    linkSearchQuery.trim() &&
+                                    linkSearchResults.length === 0
+                                "
+                                class="link-search-status"
+                            >
+                                No notes found
+                            </div>
+                        </div>
                     </div>
                 </div>
             </template>
@@ -662,10 +750,15 @@
                 />
                 <div class="composer-body-row">
                     <textarea
+                        ref="threadReplyTextarea"
                         v-model="threadReplyBody"
                         class="composer-textarea"
                         placeholder="Write a reply…"
                         rows="2"
+                        @input="onLinkEditorInput('threadReply')"
+                        @click="onLinkEditorCaretMove('threadReply', $event)"
+                        @keyup="onLinkEditorCaretMove('threadReply', $event)"
+                        @scroll="onLinkEditorScroll('threadReply')"
                     />
                     <button
                         class="btn-primary composer-send"
@@ -674,6 +767,79 @@
                     >
                         {{ threadSendingReply ? "…" : "Send" }}
                     </button>
+                    <div
+                        v-if="
+                            linkSearchVisible &&
+                            linkSearchTarget === 'threadReply'
+                        "
+                        class="link-search-popup"
+                        :style="linkPopupStyle"
+                    >
+                        <div
+                            v-if="!linkSearching && !linkSearchQuery.trim()"
+                            class="link-search-status"
+                        >
+                            Start typing to search notes…
+                        </div>
+                        <div
+                            v-else-if="linkSearching"
+                            class="link-search-status"
+                        >
+                            Searching…
+                        </div>
+                        <div
+                            v-for="(r, idx) in linkSearchResults"
+                            :key="r.id"
+                            class="link-search-item"
+                            :class="{ highlighted: idx === linkSearchIndex }"
+                            :style="
+                                idx === linkSearchIndex
+                                    ? {
+                                          background: '#2f2000',
+                                          color: '#fff',
+                                          boxShadow: 'inset 4px 0 0 #ffb400',
+                                          outline:
+                                              '1px solid rgba(255, 180, 0, 0.35)',
+                                      }
+                                    : null
+                            "
+                            @click="selectLinkResult(r)"
+                            @mouseenter="linkSearchIndex = idx"
+                        >
+                            <span
+                                class="link-search-title"
+                                :style="
+                                    idx === linkSearchIndex
+                                        ? {
+                                              fontWeight: '700',
+                                          }
+                                        : null
+                                "
+                                >{{ r.title || "Untitled" }}</span
+                            >
+                            <span
+                                class="link-search-relevance"
+                                :style="
+                                    idx === linkSearchIndex
+                                        ? {
+                                              color: 'rgba(255, 255, 255, 0.92)',
+                                          }
+                                        : null
+                                "
+                                >{{ relevancePct(r.distance) }}</span
+                            >
+                        </div>
+                        <div
+                            v-if="
+                                !linkSearching &&
+                                linkSearchQuery.trim() &&
+                                linkSearchResults.length === 0
+                            "
+                            class="link-search-status"
+                        >
+                            No notes found
+                        </div>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -783,6 +949,8 @@ const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
 const bodyTextarea = ref(null);
+const newReplyTextarea = ref(null);
+const threadReplyTextarea = ref(null);
 
 // Tags state
 const editTags = ref([]);
@@ -833,8 +1001,34 @@ const linkSearchResults = ref([]);
 const linkSearching = ref(false);
 const linkSearchIndex = ref(-1);
 const linkSearchVisible = ref(false);
+const linkSearchTarget = ref(null);
 const linkPopupStyle = ref({ left: "20px", top: "20px" });
 let linkSearchTimeout = null;
+
+function getLinkSearchContext(target = linkSearchTarget.value) {
+    switch (target) {
+        case "body":
+            return {
+                textarea: bodyTextarea,
+                text: editBody,
+                onChange: () => {
+                    dirty.value = true;
+                },
+            };
+        case "reply":
+            return {
+                textarea: newReplyTextarea,
+                text: newReplyBody,
+            };
+        case "threadReply":
+            return {
+                textarea: threadReplyTextarea,
+                text: threadReplyBody,
+            };
+        default:
+            return null;
+    }
+}
 
 // Children state
 const children = ref([]);
@@ -1520,27 +1714,39 @@ function relevancePct(distance) {
 }
 
 // ── [[ Link search helpers ──
-function onBodyInput() {
-    dirty.value = true;
+function onLinkEditorInput(target) {
+    const context = getLinkSearchContext(target);
+    if (!context) return;
+    linkSearchTarget.value = target;
+    context.onChange?.();
     updateLinkSearchFromCursor();
 }
 
-function onBodyCaretMove(e) {
-    if (!linkSearchVisible.value) return;
+function onLinkEditorCaretMove(target, e) {
     if (
         e?.type === "keyup" &&
         ["ArrowUp", "ArrowDown", "Enter", "Escape", "Tab"].includes(e.key)
     ) {
         return;
     }
+    linkSearchTarget.value = target;
     updateLinkSearchFromCursor();
 }
 
+function onLinkEditorScroll(target) {
+    if (!linkSearchVisible.value || linkSearchTarget.value !== target) return;
+    updateLinkPopupPosition();
+}
+
 function updateLinkSearchFromCursor() {
-    const el = bodyTextarea.value;
-    if (!el) return;
+    const context = getLinkSearchContext();
+    const el = context?.textarea.value;
+    if (!context || !el) {
+        closeLinkSearch();
+        return;
+    }
     const pos = el.selectionStart ?? 0;
-    const textBefore = editBody.value.slice(0, pos);
+    const textBefore = context.text.value.slice(0, pos);
     // Find the last [[ before the cursor that hasn't been closed with ]]
     const lastOpen = textBefore.lastIndexOf("[[");
     const lastClose = textBefore.lastIndexOf("]]");
@@ -1632,7 +1838,7 @@ function getTextareaCaretPosition(textarea, position) {
 }
 
 function updateLinkPopupPosition() {
-    const el = bodyTextarea.value;
+    const el = getLinkSearchContext()?.textarea.value;
     if (!el || !linkSearchVisible.value) return;
 
     const { left: caretLeft, top: caretTop } = getTextareaCaretPosition(
@@ -1689,15 +1895,17 @@ function closeLinkSearch() {
     linkSearchQuery.value = "";
     linkSearchResults.value = [];
     linkSearchIndex.value = -1;
+    linkSearchTarget.value = null;
     clearTimeout(linkSearchTimeout);
 }
 
 function selectLinkResult(note) {
-    const el = bodyTextarea.value;
-    if (!el) return;
-    const pos = el.selectionStart;
-    const textBefore = editBody.value.slice(0, pos);
-    const textAfter = editBody.value.slice(pos);
+    const context = getLinkSearchContext();
+    const el = context?.textarea.value;
+    if (!context || !el) return;
+    const pos = el.selectionStart ?? 0;
+    const textBefore = context.text.value.slice(0, pos);
+    const textAfter = context.text.value.slice(pos);
     // Find the last [[ before cursor
     const lastOpen = textBefore.lastIndexOf("[[");
     if (lastOpen === -1) return;
@@ -1705,7 +1913,7 @@ function selectLinkResult(note) {
     const newText =
         textBefore.slice(0, lastOpen) +
         `[${note.title || "Untitled"}](/note/${note.id})`;
-    editBody.value = newText + textAfter;
+    context.text.value = newText + textAfter;
     closeLinkSearch();
     // Place cursor after the inserted link
     requestAnimationFrame(() => {
@@ -1714,7 +1922,7 @@ function selectLinkResult(note) {
         el.setSelectionRange(cursorPos, cursorPos);
         updateLinkPopupPosition();
     });
-    dirty.value = true;
+    context.onChange?.();
 }
 
 // ── Keyboard shortcut handler ──
@@ -3248,9 +3456,11 @@ function onPopstate() {
 }
 
 .composer-body-row {
+    position: relative;
     display: flex;
     align-items: flex-end;
     gap: 0.5rem;
+    overflow: visible;
 }
 
 .composer-textarea {
@@ -3264,6 +3474,11 @@ function onPopstate() {
     resize: none;
     line-height: 1.5;
     font-family: inherit;
+    min-height: 36px;
+}
+
+.composer-textarea:focus {
+    min-height: 250px;
 }
 
 .composer-send {
