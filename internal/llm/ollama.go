@@ -114,6 +114,7 @@ func (c *EmbeddingClient) GenerateEmbedding(text string) ([]float64, error) {
 type generateRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
+	System string `json:"system"`
 	Stream bool   `json:"stream"`
 }
 
@@ -124,22 +125,36 @@ type generateResponse struct {
 // GenerateTitle asks the LLM to produce a short, concise title given a note's
 // text content. It uses the Ollama /api/generate endpoint.
 func (c *ChatClient) GenerateTitle(text string) (string, error) {
-	systemPrompt := `You are a title generator for a personal note-taking app.
-Given note content, output ONLY the title. Nothing else.
+	systemPrompt := `You are a highly constrained, automated backend microservice responsible for generating note titles. Your sole function is to receive raw note content and output a single, strictly formatted text string.
 
-The title will be shown as raw text to the user.
+CRITICAL RULES:
+1. MAXIMUM LENGTH: The output must not exceed 30 characters.
+2. ALLOWED CHARACTERS: Strictly limited to alphanumeric characters, hyphens, spaces and underscores "[a-zA-Z0-9_-]". Absolutely NO emojis, and NO punctuation.
+3. WORD SEPARATION: Because spaces are forbidden, you must use kebab-case (e.g., my-new-note) or snake_case (e.g., my_new_note) to separate words.
+4. CONTENT EXTRACTION: Identify the core subject, action, or entity. Discard filler words (a, the, and).
+5. FALLBACK: If the input is empty, completely unreadable, or lacks clear meaning, output exactly: Untitled
+6. ZERO-SHOT OUTPUT: You must output ONLY the final string. NO markdown code blocks (do not use '''), NO quotation marks, NO preamble ("Here is the title:"), and NO conversational text.
 
-Rules:
-- The title must be at most 30 characters.
-- Use only characters a-z, A-Z, 0-9, hyphens, and underscores. No spaces, no punctuation.
-- Output the title and nothing else: no quotes, no labels, no explanations, no preamble, no markdown, no formatting.
-- If the content is empty or unclear, use "Untitled".`
+EXAMPLES:
+Input: "Need to remember to buy milk, eggs, and bread from the store tomorrow."
+Output: grocery-list
 
-	prompt := systemPrompt + "\n\nNote content:\n" + text
+Input: "Meeting with the design team regarding the new UI wireframes for the mobile app."
+Output: design-team-ui-wireframes
+
+Input: "12345 67890"
+Output: 12345-67890
+
+Input: ""
+Output: Untitled
+
+INPUT TO PROCESS:
+[Insert User Note Content Here]`
 
 	reqBody := generateRequest{
 		Model:  c.Model,
-		Prompt: prompt,
+		System: systemPrompt,
+		Prompt: text,
 		Stream: false,
 	}
 	payload, err := json.Marshal(reqBody)
