@@ -209,9 +209,9 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(in.Title) == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
-		return
+	userProvidedTitle := strings.TrimSpace(in.Title) != ""
+	if !userProvidedTitle {
+		in.Title = "Untitled"
 	}
 	if in.Type == "" {
 		in.Type = "standard"
@@ -283,6 +283,10 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	// Async VSS embedding sync via job queue
 	s.enqueueVSSIndex(id, in.Title, in.Body)
+	// Async title generation (only if the user didn't provide one)
+	if !userProvidedTitle {
+		s.enqueueTitleGeneration(id, in.Body)
+	}
 	writeJSON(w, http.StatusCreated, n)
 }
 
@@ -322,9 +326,9 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(in.Title) == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
-		return
+	userProvidedTitle := strings.TrimSpace(in.Title) != ""
+	if !userProvidedTitle {
+		in.Title = "Untitled"
 	}
 	if in.Type == "" {
 		in.Type = "standard"
@@ -398,6 +402,10 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	// Async VSS embedding sync via job queue
 	s.enqueueVSSIndex(id, in.Title, in.Body)
+	// Async title generation (only if the user didn't provide one)
+	if !userProvidedTitle {
+		s.enqueueTitleGeneration(id, in.Body)
+	}
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -734,6 +742,53 @@ func (s *Server) enqueueVSSIndex(noteID int64, title, body string) {
 	})
 	if _, err := s.jobManager.Enqueue("_system", "vss_index", payload); err != nil {
 		log.Printf("vss: enqueue index for note %d: %v", noteID, err)
+	}
+}
+
+// generateTitleTask is the job task handler for auto-generating a note title.
+// It accepts a JSON payload with "note_id" and "body" fields.
+func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
+	if s.chatClient == nil {
+		return "", fmt.Errorf("generate_title: no chat client configured")
+	}
+	var p struct {
+		NoteID int64  `json:"note_id"`
+		Body   string `json:"body"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("generate_title: invalid payload: %w", err)
+	}
+
+	title, err := s.chatClient.GenerateTitle(p.Body)
+	if err != nil {
+		return "", fmt.Errorf("generate title: %w", err)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "Empty title generated, keeping Untitled", nil
+	}
+	// Truncate to a reasonable length.
+	if len(title) > 200 {
+		title = title[:200]
+	}
+
+	if _, err := db.Exec(`UPDATE notes SET title = ? WHERE id = ?`, title, p.NoteID); err != nil {
+		return "", fmt.Errorf("update title: %w", err)
+	}
+	return fmt.Sprintf("Generated title for note %d: %q", p.NoteID, title), nil
+}
+
+// enqueueTitleGeneration enqueues a generate_title job for the given note.
+func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
+	if s.jobManager == nil || s.chatClient == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"note_id": noteID,
+		"body":    body,
+	})
+	if _, err := s.jobManager.Enqueue("_system", "generate_title", payload); err != nil {
+		log.Printf("title: enqueue generation for note %d: %v", noteID, err)
 	}
 }
 

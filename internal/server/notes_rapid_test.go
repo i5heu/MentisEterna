@@ -22,7 +22,7 @@ func newServerRapid(t *testing.T) *Server {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { d.Close() })
-	return New(d, ":0", nil)
+	return New(d, ":0", nil, nil)
 }
 
 func rapidCreateNote(rt *rapid.T, s *Server, title, body string, parentID *int64) Note {
