@@ -25,10 +25,10 @@
   - [ ] OLLAMA url configurable via env var
 - [ ] SQLite AES-256 in OFB mode
 - [ ] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
+- [ ] Encrypted Backup
 
 ## TODO Future
 - [ ] support AsciiDoc and Markdown (with live preview)
-- [ ] Encrypted Backup
 - [ ] OCR for images and pdfs
 - [ ] speech to text notes
 - [ ] better search (by title, path and tags)
