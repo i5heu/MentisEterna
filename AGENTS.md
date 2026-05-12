@@ -7,6 +7,8 @@ Personal note-taking app with vector search. Go backend + Vue 3 frontend, SQLite
 ```
 cmd/server/      — main binary (Go HTTP server)
 cmd/backfill/    — one-shot tool: generate missing embeddings for existing notes
+cmd/restore/     — one-shot tool: download + decrypt a backup from S3
+internal/backup/ — AES-256-GCM encrypted database backups to S3
 internal/db/     — SQLite wrapper, migrations, auth, session management
 internal/llm/    — Ollama embedding client (interface: Embedder)
 internal/server/ — HTTP handlers, WebAuthn, SPA static serving
@@ -117,6 +119,7 @@ go test ./pkg/notetype/... -v                        # verbose: see every sub-te
 go build ./cmd/server/       # build server binary
 go run ./cmd/server/         # run server (default: :8080, DB: mentis.db)
 go run ./cmd/backfill/       # backfill embeddings for notes missing them
+go run ./cmd/restore/ backups/mentis-2026-05-12T03-00-00.db.enc mentis_restored.db  # restore a backup
 go test ./...                # run all tests
 go test ./internal/db/       # test a specific package
 go test ./internal/server/ -run TestNotesSearch  # run a single test
@@ -143,6 +146,9 @@ npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 | `OLLAMA_EMBEDDING_MAX_CHARS` | `16384` | Max runes per embedding request (avoids context overflow) |
 | `OLLAMA_CHAT_MODEL` | `hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M` | Chat/generation model (title generation) |
 | `VSS_EXT_PATH` | auto-detected | Directory containing `vector0.so` and `vss0.so` |
+| `BACKUP_ENCRYPTION_KEY` | none (backups disabled) | hex-encoded 64-char AES-256 key for encrypted backups |
+| `MEDIA_CACHE_DIR` | required for media | Directory for local file cache (also required for backups) |
+| `MEDIA_S3_ENDPOINTS` | required for media | JSON array of S3 endpoint configs (also used for backups) |
 
 ## Key Quirks
 
@@ -161,6 +167,57 @@ INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
 **Auth**: Password-based (SHA-512, stored in `auth` table) + WebAuthn passkeys. Sessions last 24 hours. `initAdminPassword()` runs at server startup.
 
 **Static serving**: Go server serves `FrontEndDist/` as an SPA (falls back to `index.html` for unknown paths). Must `npm run build` to reflect frontend changes in production mode.
+
+## Encrypted Backups
+
+Backups use AES-256-GCM encryption and upload to all configured S3 endpoints via a `@every 12h` cron job (twice daily).
+
+### Encryption Format
+
+```
+[12-byte random nonce][ciphertext + 16-byte GCM auth tag]
+```
+
+Each backup generates a fresh random nonce, so identical plaintext produces different ciphertext every time.
+
+### Setup
+
+1. **Generate a key**:
+   ```bash
+   go run -exec '' 2>/dev/null - <<'EOF'
+   package main
+   import ("fmt"; "github.com/i5heu/MentisEterna/internal/backup")
+   func main() { k, _ := backup.GenerateKey(); fmt.Println(k) }
+   EOF
+   ```
+
+2. **Set the environment variable**:
+   ```bash
+   export BACKUP_ENCRYPTION_KEY="<64-character hex key>"
+   ```
+   Also requires `MEDIA_CACHE_DIR` and `MEDIA_S3_ENDPOINTS` to be set.
+
+3. **Start the server** — backups run automatically every 12 hours.
+
+### Restoration
+
+```bash
+go run ./cmd/restore/ backups/mentis-2026-05-12T03-00-00.db.enc mentis_restored.db
+```
+
+The restore tool tries all configured S3 endpoints until one succeeds, then decrypts using the key from `BACKUP_ENCRYPTION_KEY`.
+
+### Safe Snapshotting
+
+Backups use SQLite's **Online Backup API** (`sqlite3_backup_init/step/finish` via `go-sqlite3`) to create a consistent point-in-time snapshot. This is safe even while the database is being actively written to in WAL mode — it's the same mechanism used by `.backup` in the `sqlite3` CLI.
+
+### Architecture
+
+```
+internal/backup/crypto.go   — AES-256-GCM Encrypt/Decrypt, KeyFromHex, GenerateKey
+internal/backup/backup.go   — Service orchestrator (snapshot + encrypt + upload)
+cmd/restore/main.go         — CLI tool (download + decrypt → output file)
+```
 
 ## Testing Conventions
 

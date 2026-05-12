@@ -779,6 +779,22 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 	return fmt.Sprintf("Generated title for note %d: %q", p.NoteID, title), nil
 }
 
+// backupTask is the job task handler for encrypted database backups.
+// It performs a safe SQLite snapshot, encrypts it with AES-256-GCM, and
+// uploads to all configured S3 endpoints. The job payload is unused — the
+// task always performs a full backup.
+func (s *Server) backupTask(db *sql.DB, _ []byte) (string, error) {
+	if s.backupService == nil {
+		return "", fmt.Errorf("backup: service not configured")
+	}
+	ctx := context.Background()
+	remoteKey, err := s.backupService.Run(ctx)
+	if err != nil {
+		return "", fmt.Errorf("backup: %w", err)
+	}
+	return fmt.Sprintf("Backup uploaded to %s", remoteKey), nil
+}
+
 // enqueueTitleGeneration enqueues a generate_title job for the given note.
 func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
 	if s.jobManager == nil || s.chatClient == nil {

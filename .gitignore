@@ -9,3 +9,5 @@ FrontEndDist/
 lib/
 start.sh
 /tmp/*
+/server
+/restore
