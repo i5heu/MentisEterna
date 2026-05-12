@@ -23,7 +23,7 @@
   - [x] index note type
 - [x] Auto Title Generator
   - [x] OLLAMA url configurable via env var
-- [ ] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
+- [x] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
 - [ ] Encrypted Backup
 
 ## TODO Future
