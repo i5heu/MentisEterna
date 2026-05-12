@@ -18,6 +18,7 @@
   - [x] Job Queue Indicator in sidebar
   - [x] Semantic indexing via job queue
 - [x] S3 Media Storage (Encrypted)
+- [ ] use AsciiDoc instead of markdown (or support both)
 - [ ] Note linking and backlinking
 - [ ] tags
   - [ ] index note type
