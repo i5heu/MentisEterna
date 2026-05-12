@@ -118,7 +118,10 @@ func (d *DB) migrate() error {
 	if err := d.migrateNotes(); err != nil {
 		return err
 	}
-	return d.ensureMediaTables()
+	if err := d.ensureMediaTables(); err != nil {
+		return err
+	}
+	return d.migrateTags()
 }
 
 func (d *DB) ensureAuthTables() error {
@@ -327,6 +330,26 @@ func (d *DB) ensureMediaTables() error {
 		CREATE INDEX IF NOT EXISTS idx_file_s3_next_retry ON file_s3(state, next_retry_at);
 		CREATE INDEX IF NOT EXISTS idx_files_refs_note_id ON files_refs(note_id);
 		CREATE INDEX IF NOT EXISTS idx_files_refs_file_id ON files_refs(file_id);
+	`)
+	return err
+}
+
+func (d *DB) migrateTags() error {
+	_, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS tags (
+			id   INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT    NOT NULL UNIQUE
+		);
+
+		CREATE TABLE IF NOT EXISTS tags_refs (
+			note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+			tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+			PRIMARY KEY (note_id, tag_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+		CREATE INDEX IF NOT EXISTS idx_tags_refs_note_id ON tags_refs(note_id);
+		CREATE INDEX IF NOT EXISTS idx_tags_refs_tag_id ON tags_refs(tag_id);
 	`)
 	return err
 }

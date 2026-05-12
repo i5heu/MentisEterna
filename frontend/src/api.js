@@ -42,6 +42,7 @@ export async function createNote(
     parentId,
     type,
     customData,
+    tags,
 ) {
     return request("/notes", {
         method: "POST",
@@ -52,6 +53,7 @@ export async function createNote(
             parent_id: parentId ?? null,
             type: type || "standard",
             custom_data: customData || null,
+            tags: tags || [],
         }),
     });
 }
@@ -64,6 +66,7 @@ export async function updateNote(
     parentId,
     type,
     customData,
+    tags,
 ) {
     return request(`/notes/${id}`, {
         method: "PUT",
@@ -74,6 +77,7 @@ export async function updateNote(
             parent_id: parentId ?? null,
             type: type || "standard",
             custom_data: customData || null,
+            tags: tags || [],
         }),
     });
 }
@@ -109,6 +113,11 @@ export async function setNotePin(token, id, pinned) {
         headers: authHeaders(token),
         body: JSON.stringify({ pinned }),
     });
+}
+
+export async function fetchTags(token, query) {
+    const q = query ? `?q=${encodeURIComponent(query)}` : "";
+    return request(`/tags${q}`, { headers: authHeaders(token) });
 }
 
 export async function pluginAction(token, noteId, action, params) {

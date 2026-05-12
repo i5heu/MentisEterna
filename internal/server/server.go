@@ -235,6 +235,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
 	mux.HandleFunc("/webauthn/login/finish", s.handleWebAuthnLoginFinish)
 
+	// Tag autocomplete
+	mux.HandleFunc("/tags", s.handleTags)
+
 	// Job routes
 	mux.HandleFunc("/jobs", s.handleJobs)
 	mux.HandleFunc("/jobs/", s.handleJobByID)

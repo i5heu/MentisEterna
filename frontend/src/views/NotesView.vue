@@ -142,6 +142,60 @@
                                 </option>
                             </select>
                         </div>
+                        <div v-if="isEditing" class="tag-row">
+                            <span class="parent-label">Tags:</span>
+                            <div class="tag-list">
+                                <span
+                                    v-for="(tag, i) in editTags"
+                                    :key="i"
+                                    class="tag-chip"
+                                >
+                                    {{ tag }}
+                                    <button
+                                        class="tag-remove"
+                                        @click="
+                                            editTags.splice(i, 1);
+                                            dirty = true;
+                                        "
+                                        title="Remove tag"
+                                    >
+                                        ×
+                                    </button>
+                                </span>
+                                <div class="tag-input-wrapper">
+                                    <input
+                                        v-model="tagSearch"
+                                        class="tag-input"
+                                        placeholder="Add tag…"
+                                        @input="onTagInput()"
+                                        @keydown.enter.prevent="
+                                            addTagFromSearch()
+                                        "
+                                        @keydown.backspace="onTagBackspace()"
+                                        @keydown.escape="tagOptions = []"
+                                        @focus="onTagInput()"
+                                    />
+                                    <div
+                                        v-if="tagOptions.length > 0"
+                                        class="tag-dropdown"
+                                    >
+                                        <div
+                                            v-for="(opt, i) in tagOptions"
+                                            :key="opt"
+                                            class="tag-dropdown-item"
+                                            @click="addTag(opt)"
+                                            :ref="
+                                                (el) => {
+                                                    if (el) el._tagIndex = i;
+                                                }
+                                            "
+                                        >
+                                            {{ opt }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <div v-if="isEditing" class="parent-row">
                             <span class="parent-label">Parent:</span>
                             <div class="parent-picker-wrapper">
@@ -706,6 +760,7 @@ import {
     fetchAncestors,
     searchNotes,
     setNotePin,
+    fetchTags,
     beginPasskeyRegistration,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
@@ -730,6 +785,11 @@ const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
 const bodyTextarea = ref(null);
+
+// Tags state
+const editTags = ref([]);
+const tagSearch = ref("");
+const tagOptions = ref([]);
 
 function insertAtCursor(text) {
     const el = bodyTextarea.value;
@@ -917,6 +977,7 @@ async function selectNote(note) {
         editBody.value = full.body;
         noteType.value = full.type || "standard";
         customData.value = full.custom_data || null;
+        editTags.value = full.tags || [];
     } catch {
         // Fallback to the sidebar data if fetch fails.
         selected.value = note;
@@ -924,6 +985,7 @@ async function selectNote(note) {
         editBody.value = note.body;
         noteType.value = note.type || "standard";
         customData.value = note.custom_data || null;
+        editTags.value = note.tags || [];
     }
     dirty.value = false;
     saveError.value = "";
@@ -953,6 +1015,7 @@ async function selectSearchResult(sr) {
     editBody.value = sr.body;
     noteType.value = sr.type || "standard";
     customData.value = null;
+    editTags.value = sr.tags || [];
     dirty.value = false;
     saveError.value = "";
     showHistory.value = false;
@@ -988,6 +1051,7 @@ function newNote(parentNote = null) {
     editBody.value = "";
     noteType.value = "standard";
     customData.value = null;
+    editTags.value = [];
     dirty.value = true;
     saveError.value = "";
     showHistory.value = false;
@@ -1229,6 +1293,43 @@ function selectThreadChild(child) {
     openThreadSidebar(child);
 }
 
+// --- Tag functions ---
+
+async function onTagInput() {
+    const q = tagSearch.value.trim();
+    try {
+        const result = await fetchTags(props.token, q || "");
+        tagOptions.value = Array.isArray(result) ? result : [];
+    } catch {
+        tagOptions.value = [];
+    }
+}
+
+function addTag(name) {
+    name = name.trim();
+    if (!name) return;
+    if (!editTags.value.includes(name)) {
+        editTags.value.push(name);
+        dirty.value = true;
+    }
+    tagSearch.value = "";
+    tagOptions.value = [];
+}
+
+function addTagFromSearch() {
+    const trimmed = tagSearch.value.trim();
+    if (trimmed) {
+        addTag(trimmed);
+    }
+}
+
+function onTagBackspace() {
+    if (tagSearch.value === "" && editTags.value.length > 0) {
+        editTags.value.pop();
+        dirty.value = true;
+    }
+}
+
 async function save() {
     saveError.value = "";
     saving.value = true;
@@ -1243,6 +1344,7 @@ async function save() {
                 selected.value.parent_id,
                 noteType.value,
                 customData.value,
+                editTags.value,
             );
             if (showHistory.value) {
                 history.value = await fetchNoteHistory(props.token, updated.id);
@@ -1255,6 +1357,7 @@ async function save() {
                 selected.value.parent_id,
                 noteType.value,
                 customData.value,
+                editTags.value,
             );
         }
         // Reload the full note list so sort order is correct.
@@ -2187,6 +2290,98 @@ function onPopstate() {
 
 .type-select:focus {
     border-color: var(--accent-teal);
+}
+
+.tag-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    margin-bottom: 0.25rem;
+}
+
+.tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem;
+    flex: 1;
+}
+
+.tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    background: var(--accent-teal);
+    color: #fff;
+    border-radius: 12px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.tag-remove {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    padding: 0;
+    font-size: 0.85rem;
+    line-height: 1;
+    margin-left: 0.1rem;
+}
+
+.tag-remove:hover {
+    color: #fff;
+}
+
+.tag-input-wrapper {
+    position: relative;
+    flex: 1;
+    min-width: 100px;
+}
+
+.tag-input {
+    width: 100%;
+    border: 1px dashed var(--border-color);
+    background: transparent;
+    color: var(--font-color);
+    padding: 0.2rem 0.4rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    outline: none;
+    font-family: inherit;
+}
+
+.tag-input:focus {
+    border-color: var(--accent-teal);
+}
+
+.tag-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 2px;
+    background: var(--raised-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+    z-index: 50;
+    box-shadow: 0 4px 12px var(--shadow-color);
+}
+
+.tag-dropdown-item {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+    color: var(--font-color);
+    transition: background 0.1s;
+}
+
+.tag-dropdown-item:hover {
+    background: var(--panel-bg);
 }
 
 .parent-row {
