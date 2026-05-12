@@ -1393,8 +1393,14 @@ function onBodyInput() {
     updateLinkSearchFromCursor();
 }
 
-function onBodyCaretMove() {
+function onBodyCaretMove(e) {
     if (!linkSearchVisible.value) return;
+    if (
+        e?.type === "keyup" &&
+        ["ArrowUp", "ArrowDown", "Enter", "Escape", "Tab"].includes(e.key)
+    ) {
+        return;
+    }
     updateLinkSearchFromCursor();
 }
 
@@ -1409,9 +1415,17 @@ function updateLinkSearchFromCursor() {
     if (lastOpen !== -1 && lastOpen > lastClose) {
         const query = textBefore.slice(lastOpen + 2);
         if (!query.includes("]]") && !query.includes("\n")) {
+            const queryUnchanged =
+                linkSearchVisible.value && query === linkSearchQuery.value;
+
             linkSearchQuery.value = query;
             linkSearchVisible.value = true;
             updateLinkPopupPosition();
+
+            if (queryUnchanged) {
+                return;
+            }
+
             clearTimeout(linkSearchTimeout);
             if (!query.trim()) {
                 linkSearching.value = false;
