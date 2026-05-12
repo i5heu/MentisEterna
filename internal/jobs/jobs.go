@@ -54,6 +54,13 @@ type ListResponse struct {
 	PendingCount int   `json:"pending_count"`
 }
 
+type jobDefMeta struct {
+	ID       int64
+	PluginID string
+	Name     string
+	Schedule string
+}
+
 // Manager manages the job system lifecycle.
 type Manager struct {
 	db      *sql.DB
@@ -62,7 +69,9 @@ type Manager struct {
 	done    chan struct{}
 
 	// tasks maps job_definition.id → task function.
+	// defs caches job definition metadata for logging and scheduler startup.
 	tasks   map[int64]func(*sql.DB, []byte) (string, error)
+	defs    map[int64]jobDefMeta
 	tasksMu sync.RWMutex
 }
 
@@ -78,6 +87,7 @@ func NewManager(db *sql.DB, workers int) *Manager {
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 		tasks:   make(map[int64]func(*sql.DB, []byte) (string, error)),
+		defs:    make(map[int64]jobDefMeta),
 	}
 }
 
@@ -127,7 +137,10 @@ func (m *Manager) upsertDefs(pluginID string, jobs []CronJob) error {
 
 		m.tasksMu.Lock()
 		m.tasks[id] = job.Task
+		m.defs[id] = jobDefMeta{ID: id, PluginID: pluginID, Name: job.Name, Schedule: job.Schedule}
 		m.tasksMu.Unlock()
+
+		log.Printf("jobs: registered definition %s schedule=%q", formatJobMeta(jobDefMeta{ID: id, PluginID: pluginID, Name: job.Name}), job.Schedule)
 	}
 	return nil
 }
@@ -162,7 +175,10 @@ func (m *Manager) zombieRecovery() error {
 	// 3. Mark planned runs for unregistered definitions as errored.
 	if len(registered) > 0 {
 		rows, err := m.db.Query(
-			`SELECT id, job_id FROM job_runs WHERE status = 'planned'`,
+			`SELECT jr.id, jr.job_id, COALESCE(jd.plugin_id, ''), COALESCE(jd.name, '')
+			 FROM job_runs jr
+			 LEFT JOIN job_definitions jd ON jd.id = jr.job_id
+			 WHERE jr.status = 'planned'`,
 		)
 		if err != nil {
 			return fmt.Errorf("zombie recovery: list planned: %w", err)
@@ -170,11 +186,14 @@ func (m *Manager) zombieRecovery() error {
 		var orphaned int
 		for rows.Next() {
 			var runID, jobID int64
-			if err := rows.Scan(&runID, &jobID); err != nil {
+			var pluginID, jobName string
+			if err := rows.Scan(&runID, &jobID, &pluginID, &jobName); err != nil {
 				rows.Close()
 				return fmt.Errorf("zombie recovery: scan planned: %w", err)
 			}
 			if !registered[jobID] {
+				meta := jobDefMeta{ID: jobID, PluginID: pluginID, Name: jobName}
+				log.Printf("jobs: zombie recovery marking stale planned run=%d %s as errored: no registered task", runID, formatJobMeta(meta))
 				m.db.Exec(
 					`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
 					StatusErrored, "No task registered for this job definition", runID,
@@ -218,13 +237,15 @@ func janitorTask(db *sql.DB, _ []byte) (string, error) {
 // Start begins the job system: zombie recovery, scheduler goroutines, and workers.
 // It assumes UpsertDefinitions has already been called for all plugins.
 func (m *Manager) Start() error {
+	if err := m.registerBuiltinJobs(); err != nil {
+		return fmt.Errorf("register builtin jobs: %w", err)
+	}
+
 	if err := m.zombieRecovery(); err != nil {
 		return err
 	}
 
-	if err := m.registerBuiltinJobs(); err != nil {
-		return fmt.Errorf("register builtin jobs: %w", err)
-	}
+	log.Printf("jobs: starting manager workers=%d registered_definitions=%d", m.workers, m.registeredDefinitionCount())
 
 	// Launch scheduler goroutines for each job definition.
 	rows, err := m.db.Query(`SELECT id, schedule FROM job_definitions WHERE enabled = 1`)
@@ -240,8 +261,14 @@ func (m *Manager) Start() error {
 		if err := rows.Scan(&id, &schedule); err != nil {
 			return fmt.Errorf("scan job definition: %w", err)
 		}
+		meta := m.lookupDefinition(id)
 		// Empty schedule means ad-hoc only (no cron), skip scheduler.
 		if schedule == "" {
+			log.Printf("jobs: scheduler skipped for ad-hoc definition %s", formatJobMeta(meta))
+			continue
+		}
+		if !m.hasTask(id) {
+			log.Printf("jobs: scheduler skipped for unregistered definition %s schedule=%q", formatJobMeta(meta), schedule)
 			continue
 		}
 		wg.Add(1)
@@ -303,7 +330,8 @@ func (m *Manager) Enqueue(pluginID, jobName string, payload []byte) (int64, erro
 		return 0, fmt.Errorf("enqueue job run: %w", err)
 	}
 	id, _ := res.LastInsertId()
-	log.Printf("jobs: enqueued run %d for %s/%s", id, pluginID, jobName)
+	meta := m.lookupDefinition(jobID)
+	log.Printf("jobs: enqueued run=%d %s payload_bytes=%d payload_preview=%q", id, formatJobMeta(meta), len(payload), previewText(string(payload), 160))
 	return id, nil
 }
 
@@ -390,7 +418,8 @@ func (m *Manager) RetryRun(runID int64) (int64, error) {
 		return 0, fmt.Errorf("retry insert: %w", err)
 	}
 	id, _ := res.LastInsertId()
-	log.Printf("jobs: retried run %d as run %d", runID, id)
+	meta := m.lookupDefinition(jobID)
+	log.Printf("jobs: retried run=%d as run=%d %s payload_bytes=%d payload_preview=%q", runID, id, formatJobMeta(meta), len(derefString(payload)), previewText(derefString(payload), 160))
 	return id, nil
 }
 
@@ -409,7 +438,10 @@ func (m *Manager) CancelRun(runID int64) error {
 	if n == 0 {
 		return fmt.Errorf("cancel: run %d not found or not in planned status", runID)
 	}
-	log.Printf("jobs: cancelled run %d", runID)
+	var jobID int64
+	_ = m.db.QueryRow(`SELECT job_id FROM job_runs WHERE id = ?`, runID).Scan(&jobID)
+	meta := m.lookupDefinition(jobID)
+	log.Printf("jobs: cancelled run=%d %s", runID, formatJobMeta(meta))
 	return nil
 }
 
@@ -417,13 +449,14 @@ func (m *Manager) CancelRun(runID int64) error {
 func (m *Manager) runScheduler(defID int64, schedule string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	meta := m.lookupDefinition(defID)
 	d, ok := parseSimpleSchedule(schedule)
 	if !ok {
-		log.Printf("jobs: scheduler for def %d: unsupported schedule %q", defID, schedule)
+		log.Printf("jobs: scheduler unsupported %s schedule=%q", formatJobMeta(meta), schedule)
 		return
 	}
 
-	log.Printf("jobs: scheduler for def %d started (schedule=%s)", defID, schedule)
+	log.Printf("jobs: scheduler started %s schedule=%q", formatJobMeta(meta), schedule)
 
 	for {
 		// Calculate next tick.
@@ -441,7 +474,7 @@ func (m *Manager) runScheduler(defID int64, schedule string, wg *sync.WaitGroup)
 
 		select {
 		case <-m.stop:
-			log.Printf("jobs: scheduler for def %d stopping", defID)
+			log.Printf("jobs: scheduler stopping %s", formatJobMeta(meta))
 			return
 		case <-time.After(sleep):
 		}
@@ -449,26 +482,34 @@ func (m *Manager) runScheduler(defID int64, schedule string, wg *sync.WaitGroup)
 		// Check if definition still exists and is enabled.
 		var enabled bool
 		err := m.db.QueryRow(`SELECT enabled FROM job_definitions WHERE id = ?`, defID).Scan(&enabled)
-		if err != nil || !enabled {
+		if err != nil {
+			log.Printf("jobs: scheduler lookup failed %s: %v", formatJobMeta(meta), err)
+			continue
+		}
+		if !enabled {
+			log.Printf("jobs: scheduler saw disabled definition %s", formatJobMeta(meta))
 			continue
 		}
 
-		_, err = m.db.Exec(`INSERT INTO job_runs (job_id, status) VALUES (?, ?)`, defID, StatusPlanned)
+		res, err := m.db.Exec(`INSERT INTO job_runs (job_id, status) VALUES (?, ?)`, defID, StatusPlanned)
 		if err != nil {
-			log.Printf("jobs: scheduler for def %d: insert planned run: %v", defID, err)
+			log.Printf("jobs: scheduler enqueue failed %s: %v", formatJobMeta(meta), err)
+			continue
 		}
+		runID, _ := res.LastInsertId()
+		log.Printf("jobs: scheduler enqueued run=%d %s", runID, formatJobMeta(meta))
 	}
 }
 
 // runWorker is a persistent worker goroutine that polls for planned jobs.
 func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 	defer wg.Done()
-	log.Printf("jobs: worker %d started", id)
+	log.Printf("jobs: worker=%d started", id)
 
 	for {
 		select {
 		case <-m.stop:
-			log.Printf("jobs: worker %d stopping", id)
+			log.Printf("jobs: worker=%d stopping", id)
 			return
 		default:
 		}
@@ -487,12 +528,14 @@ func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 			continue
 		}
 
-		m.tasksMu.RLock()
-		task := m.tasks[jobID]
-		m.tasksMu.RUnlock()
+		task, meta, hasTask := m.taskAndDefinition(jobID)
+		if meta.ID == 0 {
+			meta = m.lookupDefinition(jobID)
+		}
+		log.Printf("jobs: worker=%d claimed run=%d %s payload_bytes=%d payload_preview=%q", id, runID, formatJobMeta(meta), len(payload), previewText(string(payload), 160))
 
-		if task == nil {
-			log.Printf("jobs: worker %d: no task registered for job_id %d, marking run %d as errored", id, jobID, runID)
+		if !hasTask || task == nil {
+			log.Printf("jobs: worker=%d no task registered run=%d %s", id, runID, formatJobMeta(meta))
 			m.db.Exec(
 				`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
 				StatusErrored, "No task registered for this job definition", runID,
@@ -502,10 +545,11 @@ func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 
 		// Execute the task with panic recovery.
 		func() {
+			started := time.Now()
 			defer func() {
 				if r := recover(); r != nil {
 					errMsg := fmt.Sprintf("panic: %v", r)
-					log.Printf("jobs: worker %d: task for run %d panicked: %v", id, runID, r)
+					log.Printf("jobs: worker=%d panicked run=%d %s duration=%s panic=%q", id, runID, formatJobMeta(meta), time.Since(started), previewText(errMsg, 240))
 					m.db.Exec(
 						`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
 						StatusErrored, errMsg, runID,
@@ -515,15 +559,16 @@ func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 
 			result, taskErr := task(m.db, payload)
 			now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+			duration := time.Since(started)
 			if taskErr != nil {
 				errStr := taskErr.Error()
-				log.Printf("jobs: worker %d: run %d errored: %s", id, runID, errStr)
+				log.Printf("jobs: worker=%d errored run=%d %s duration=%s error=%q", id, runID, formatJobMeta(meta), duration, previewText(errStr, 240))
 				m.db.Exec(
 					`UPDATE job_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?`,
 					StatusErrored, now, errStr, runID,
 				)
 			} else {
-				log.Printf("jobs: worker %d: run %d done: %s", id, runID, result)
+				log.Printf("jobs: worker=%d done run=%d %s duration=%s result=%q", id, runID, formatJobMeta(meta), duration, previewText(result, 240))
 				m.db.Exec(
 					`UPDATE job_runs SET status = ?, finished_at = ?, result = ? WHERE id = ?`,
 					StatusDone, now, result, runID,
@@ -580,6 +625,71 @@ func (m *Manager) atomicDequeue() (jobID, runID int64, payload []byte, ok bool) 
 }
 
 // --- Helpers ---
+
+func (m *Manager) registeredDefinitionCount() int {
+	m.tasksMu.RLock()
+	defer m.tasksMu.RUnlock()
+	return len(m.defs)
+}
+
+func (m *Manager) hasTask(jobID int64) bool {
+	m.tasksMu.RLock()
+	defer m.tasksMu.RUnlock()
+	_, ok := m.tasks[jobID]
+	return ok
+}
+
+func (m *Manager) taskAndDefinition(jobID int64) (func(*sql.DB, []byte) (string, error), jobDefMeta, bool) {
+	m.tasksMu.RLock()
+	defer m.tasksMu.RUnlock()
+	task, ok := m.tasks[jobID]
+	meta := m.defs[jobID]
+	return task, meta, ok
+}
+
+func (m *Manager) lookupDefinition(jobID int64) jobDefMeta {
+	m.tasksMu.RLock()
+	meta, ok := m.defs[jobID]
+	m.tasksMu.RUnlock()
+	if ok {
+		return meta
+	}
+
+	meta.ID = jobID
+	_ = m.db.QueryRow(
+		`SELECT plugin_id, name, schedule FROM job_definitions WHERE id = ?`,
+		jobID,
+	).Scan(&meta.PluginID, &meta.Name, &meta.Schedule)
+	return meta
+}
+
+func formatJobMeta(meta jobDefMeta) string {
+	if meta.ID == 0 && meta.PluginID == "" && meta.Name == "" {
+		return "def_id=0"
+	}
+	if meta.PluginID == "" && meta.Name == "" {
+		return fmt.Sprintf("def_id=%d", meta.ID)
+	}
+	return fmt.Sprintf("job=%s/%s def_id=%d", meta.PluginID, meta.Name, meta.ID)
+}
+
+func previewText(s string, maxRunes int) string {
+	if maxRunes <= 0 || s == "" {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "..."
+}
+
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
 
 func parseTimePtr(s *string) *time.Time {
 	if s == nil {
