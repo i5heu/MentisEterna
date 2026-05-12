@@ -20,7 +20,7 @@
 - [x] S3 Media Storage (Encrypted)
 - [x] Note linking and backlinking
 - [x] tags
-  - [ ] index note type
+  - [x] index note type
 - [ ] Auto Title Generator
   - [ ] alternative OLLAMA url (needed to use anothert OLLAMA for tag and title generation, because local ollama is often CPU only)
 - [ ] SQLite AES-256 in OFB mode
