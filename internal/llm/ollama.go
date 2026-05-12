@@ -112,10 +112,11 @@ func (c *EmbeddingClient) GenerateEmbedding(text string) ([]float64, error) {
 // --- Chat / Generation ---
 
 type generateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	System string `json:"system"`
-	Stream bool   `json:"stream"`
+	Model   string         `json:"model"`
+	Prompt  string         `json:"prompt"`
+	System  string         `json:"system"`
+	Stream  bool           `json:"stream"`
+	Options map[string]any `json:"options,omitempty"`
 }
 
 type generateResponse struct {
@@ -156,6 +157,9 @@ INPUT TO PROCESS:
 		System: systemPrompt,
 		Prompt: text,
 		Stream: false,
+		Options: map[string]any{
+			"num_predict": 40,
+		},
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
