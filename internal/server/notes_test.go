@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/llm"
 )
 
 // mockEmbedder is a deterministic Embedder for tests.
@@ -81,7 +82,7 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 	}
 
 	m := newMockEmbedder()
-	return New(d, ":0", m, nil)
+	return New(d, ":0", m, nil, nil)
 }
 
 // helperCreateNoteSync creates a note and ensures the embedding is
@@ -773,6 +774,81 @@ func TestSearchResultContainsAllFields(t *testing.T) {
 	}
 	// Distance is always present (can be 0 for exact match).
 	_ = sr.Distance
+}
+
+// TestSearchFindsNoteByOCRText verifies that OCR text from uploaded files
+// is indexed and searchable via vss_files_ocr.
+func TestSearchFindsNoteByOCRText(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	// Create a note.
+	n := helperCreateNoteSync(t, s, "Photo Note", "A note with a scanned photo", nil)
+
+	// Create a file referencing this note.
+	res, err := s.db.Exec(`
+		INSERT INTO files (original_note_id, storage_key, filename, mime_type, size_bytes,
+		                   plaintext_sha256, ciphertext_sha256, aes_key, aes_nonce)
+		VALUES (?, 'ocr-search-key', 'scan.png', 'image/png', 100,
+		        'aa', 'bb', x'0001', x'0002')
+	`, n.ID)
+	if err != nil {
+		t.Fatalf("insert file: %v", err)
+	}
+	fileID, _ := res.LastInsertId()
+
+	// Create a files_refs row linking the file to the note.
+	_, err = s.db.Exec(`INSERT INTO files_refs (note_id, file_id, ref_kind) VALUES (?, ?, 'attachment')`, n.ID, fileID)
+	if err != nil {
+		t.Fatalf("insert ref: %v", err)
+	}
+
+	// Store OCR result for the file.
+	ocrText := "Invoice #12345 from Acme Corp"
+	_, err = s.db.Exec(`INSERT INTO files_ocr (file_id, ocr_text, model) VALUES (?, ?, 'glm-ocr:latest')`, fileID, ocrText)
+	if err != nil {
+		t.Fatalf("insert ocr: %v", err)
+	}
+
+	// Generate embedding for the OCR text and insert into vss_files_ocr.
+	vec, err := s.llm.GenerateEmbedding(llm.TruncateForEmbedding(ocrText))
+	if err != nil {
+		t.Fatalf("generate ocr embedding: %v", err)
+	}
+	vecJSON := llm.EmbeddingToJSON(vec)
+	_, err = s.db.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, fileID)
+	if err != nil {
+		t.Fatalf("delete old ocr embedding: %v", err)
+	}
+	_, err = s.db.Exec(`INSERT INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`, fileID, vecJSON)
+	if err != nil {
+		t.Fatalf("insert ocr embedding: %v", err)
+	}
+
+	// Search for text that only appears in the OCR content.
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=Acme+Corp+invoice", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var results []SearchResult
+	if err := json.NewDecoder(w.Body).Decode(&results); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// The note should appear in results because the OCR text matches.
+	found := false
+	for _, sr := range results {
+		if sr.ID == n.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected note %d to appear in search results for OCR text, got %d results", n.ID, len(results))
+	}
 }
 
 // --- Note lifecycle + file retention tests ---

@@ -380,3 +380,103 @@ func TestUploadAttachmentWithoutMedia(t *testing.T) {
 		t.Errorf("expected 503 without media, got %d", w.Code)
 	}
 }
+
+// --- OCR endpoint tests ---
+
+func TestHandleFileOCRReturnsNotFoundWhenNoResult(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Upload a file
+	ct, body := multipartBody("file", "no-ocr.txt", "text/plain", []byte("hello"))
+	req := httptest.NewRequest(http.MethodPost, "/notes/1/files", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+
+	// Manually get file ID
+	var fileID int64
+	d.QueryRow(`SELECT id FROM files WHERE filename = 'no-ocr.txt'`).Scan(&fileID)
+
+	// Request OCR for this file (should be 404 since no OCR was run)
+	req2 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/files/%d/ocr", fileID), nil)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	s.handleFileOCR(w2, req2)
+
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for missing OCR result, got %d", w2.Code)
+	}
+}
+
+func TestHandleFileOCRReturnsResultWhenExists(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Upload a file
+	ct, body := multipartBody("file", "ocr-me.png", "image/png", []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0})
+	req := httptest.NewRequest(http.MethodPost, "/notes/1/files", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+
+	// Get file ID
+	var fileID int64
+	d.QueryRow(`SELECT id FROM files WHERE filename = 'ocr-me.png'`).Scan(&fileID)
+
+	// Manually insert OCR result
+	d.Exec(`INSERT INTO files_ocr (file_id, ocr_text, model) VALUES (?, ?, ?)`,
+		fileID, "recognized text", "glm-ocr:latest")
+
+	// Request OCR
+	req2 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/files/%d/ocr", fileID), nil)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	s.handleFileOCR(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	// Verify response contains ocr_text
+	if !bytes.Contains(w2.Body.Bytes(), []byte(`"ocr_text":"recognized text"`)) {
+		t.Errorf("expected OCR text in response, got: %s", w2.Body.String())
+	}
+}
+
+func TestHandleFileOCRRequiresValidFile(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/files/99999/ocr", nil)
+	w := httptest.NewRecorder()
+	s.handleFileOCR(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for non-existent file, got %d", w.Code)
+	}
+}
+
+func TestHandleFileOCRWithoutMedia(t *testing.T) {
+	s := &Server{db: nil, mediaService: nil}
+	req := httptest.NewRequest(http.MethodGet, "/files/1/ocr", nil)
+	w := httptest.NewRecorder()
+	s.handleFileOCR(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 without media, got %d", w.Code)
+	}
+}
+
+func TestIsAPIPathIncludesFilesRoute(t *testing.T) {
+	if !isAPIPath("/files/42/ocr") {
+		t.Error("expected /files/42/ocr to be an API path")
+	}
+	if !isAPIPath("/files/") {
+		t.Error("expected /files/ to be an API path")
+	}
+	if !isAPIPath("/files/1") {
+		t.Error("expected /files/1 to be an API path")
+	}
+}

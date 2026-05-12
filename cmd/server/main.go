@@ -30,7 +30,8 @@ func main() {
 
 	embeddingClient := llm.NewEmbeddingClient()
 	chatClient := llm.NewChatClient()
-	if err := server.New(database, envOr("ADDR", ":8080"), embeddingClient, chatClient).Start(ctx); err != nil {
+	ocrClient := llm.NewOCRClient()
+	if err := server.New(database, envOr("ADDR", ":8080"), embeddingClient, chatClient, ocrClient).Start(ctx); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 	log.Println("server stopped, database closed")

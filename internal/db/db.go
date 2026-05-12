@@ -121,6 +121,9 @@ func (d *DB) migrate() error {
 	if err := d.ensureMediaTables(); err != nil {
 		return err
 	}
+	if err := d.ensureOCRTables(); err != nil {
+		return err
+	}
 	return d.migrateTags()
 }
 
@@ -232,6 +235,9 @@ func (d *DB) migrateNotes() error {
 	if d.vssAvailable {
 		if err := d.ensureVSSDimension(2560); err != nil {
 			return fmt.Errorf("vss_notes: %w", err)
+		}
+		if err := d.ensureVSSFilesOCR(2560); err != nil {
+			return fmt.Errorf("vss_files_ocr: %w", err)
 		}
 	}
 
@@ -354,6 +360,22 @@ func (d *DB) migrateTags() error {
 	return err
 }
 
+func (d *DB) ensureOCRTables() error {
+	_, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS files_ocr (
+			file_id    INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+			ocr_text   TEXT    NOT NULL DEFAULT '',
+			model      TEXT    NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			error      TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_files_ocr_file_id ON files_ocr(file_id);
+	`)
+	return err
+}
+
 // ensureVSSDimension ensures the vss_notes virtual table uses the expected
 // embedding dimension. If the table doesn't exist it creates it. If it exists
 // with a different dimension it drops and recreates it (embeddings need to be
@@ -403,6 +425,48 @@ func (d *DB) ensureVSSDimension(expectedDim int) error {
 
 	// Clean up the test row.
 	_, _ = d.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, testRowID)
+	return nil
+}
+
+// ensureVSSFilesOCR ensures the vss_files_ocr virtual table exists with the
+// expected embedding dimension. rowid = files.id for direct file lookup.
+func (d *DB) ensureVSSFilesOCR(expectedDim int) error {
+	var name string
+	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='vss_files_ocr'`).Scan(&name)
+	if err != nil {
+		if _, createErr := d.Exec(`
+			CREATE VIRTUAL TABLE IF NOT EXISTS vss_files_ocr USING vss0(
+				ocr_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
+			)
+		`); createErr != nil {
+			return fmt.Errorf("create vss_files_ocr: %w", createErr)
+		}
+		return nil
+	}
+
+	// Probe dimension with a dummy row.
+	parts := make([]string, expectedDim)
+	for i := range parts {
+		parts[i] = "0"
+	}
+	dummyJSON := "[" + strings.Join(parts, ",") + "]"
+	testRowID := int64(-1)
+	_, insertErr := d.Exec(`INSERT INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`, testRowID, dummyJSON)
+	if insertErr != nil {
+		log.Printf("vss_files_ocr dimension mismatch detected, recreating table")
+		if _, dropErr := d.Exec(`DROP TABLE IF EXISTS vss_files_ocr`); dropErr != nil {
+			return fmt.Errorf("drop old vss_files_ocr: %w", dropErr)
+		}
+		if _, createErr := d.Exec(`
+			CREATE VIRTUAL TABLE vss_files_ocr USING vss0(
+				ocr_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
+			)
+		`); createErr != nil {
+			return fmt.Errorf("recreate vss_files_ocr: %w", createErr)
+		}
+		return nil
+	}
+	_, _ = d.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, testRowID)
 	return nil
 }
 
