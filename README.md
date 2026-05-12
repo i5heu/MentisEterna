@@ -18,7 +18,6 @@
   - [x] Job Queue Indicator in sidebar
   - [x] Semantic indexing via job queue
 - [x] S3 Media Storage (Encrypted)
-- [ ] use AsciiDoc instead of markdown (or support both)
 - [ ] Note linking and backlinking
 - [ ] tags
   - [ ] index note type
@@ -28,6 +27,7 @@
 - [ ] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
 
 ## TODO Future
+- [ ] support AsciiDoc and Markdown (with live preview)
 - [ ] Encrypted Backup
 - [ ] OCR for images and pdfs
 - [ ] speech to text notes
