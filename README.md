@@ -18,7 +18,7 @@
   - [x] Job Queue Indicator in sidebar
   - [x] Semantic indexing via job queue
 - [x] S3 Media Storage (Encrypted)
-- [ ] Note linking and backlinking
+- [x] Note linking and backlinking
 - [ ] tags
   - [ ] index note type
 - [ ] Auto Title Generator
