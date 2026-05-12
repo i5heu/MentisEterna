@@ -308,15 +308,45 @@
                                             highlighted:
                                                 idx === linkSearchIndex,
                                         }"
+                                        :style="
+                                            idx === linkSearchIndex
+                                                ? {
+                                                      background: '#2f2000',
+                                                      color: '#fff',
+                                                      boxShadow:
+                                                          'inset 4px 0 0 #ffb400',
+                                                      outline:
+                                                          '1px solid rgba(255, 180, 0, 0.35)',
+                                                  }
+                                                : null
+                                        "
                                         @click="selectLinkResult(r)"
                                         @mouseenter="linkSearchIndex = idx"
                                     >
-                                        <span class="link-search-title">{{
-                                            r.title || "Untitled"
-                                        }}</span>
-                                        <span class="link-search-relevance">{{
-                                            relevancePct(r.distance)
-                                        }}</span>
+                                        <span
+                                            class="link-search-title"
+                                            :style="
+                                                idx === linkSearchIndex
+                                                    ? {
+                                                          fontWeight: '700',
+                                                      }
+                                                    : null
+                                            "
+                                            >{{ r.title || "Untitled" }}</span
+                                        >
+                                        <span
+                                            class="link-search-relevance"
+                                            :style="
+                                                idx === linkSearchIndex
+                                                    ? {
+                                                          color: 'rgba(255, 255, 255, 0.92)',
+                                                      }
+                                                    : null
+                                            "
+                                            >{{
+                                                relevancePct(r.distance)
+                                            }}</span
+                                        >
                                     </div>
                                     <div
                                         v-if="
@@ -2326,20 +2356,29 @@ function onPopstate() {
     cursor: pointer;
     border-bottom: 1px solid var(--border-color);
     font-size: 0.85rem;
+    transition:
+        background 0.12s,
+        box-shadow 0.12s,
+        outline-color 0.12s;
 }
 
 .link-search-item:last-child {
     border-bottom: none;
 }
 
-.link-search-item:hover,
+.link-search-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
 .link-search-item.highlighted {
-    background: var(--accent-amber);
+    background: #2f2000;
     color: #fff;
+    box-shadow: inset 4px 0 0 #ffb400;
+    outline: 1px solid rgba(255, 180, 0, 0.35);
 }
 
 .link-search-item.highlighted .link-search-relevance {
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(255, 255, 255, 0.92);
 }
 
 .link-search-title {
