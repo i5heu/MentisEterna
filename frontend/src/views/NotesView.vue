@@ -2000,55 +2000,59 @@ function onPopstate() {
     font-size: 0.95rem;
 }
 
-.markdown-body h1,
-.markdown-body h2,
-.markdown-body h3,
-.markdown-body h4,
-.markdown-body h5,
-.markdown-body h6 {
+.markdown-body {
+    width: 100%;
+}
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4),
+.markdown-body :deep(h5),
+.markdown-body :deep(h6) {
     color: var(--header-title-color);
     margin: 1.3em 0 0.5em;
     line-height: 1.25;
 }
 
-.markdown-body h1 {
+.markdown-body :deep(h1) {
     font-size: 1.8rem;
     border-bottom: 1px solid var(--border-color);
     padding-bottom: 0.3em;
 }
-.markdown-body h2 {
+.markdown-body :deep(h2) {
     font-size: 1.5rem;
     border-bottom: 1px solid var(--border-color);
     padding-bottom: 0.25em;
 }
-.markdown-body h3 {
+.markdown-body :deep(h3) {
     font-size: 1.25rem;
 }
-.markdown-body h4 {
+.markdown-body :deep(h4) {
     font-size: 1.1rem;
 }
 
-.markdown-body p {
+.markdown-body :deep(p) {
     margin: 0.6em 0;
 }
 
-.markdown-body a {
+.markdown-body :deep(a) {
     color: var(--accent-teal);
     text-decoration: underline;
 }
 
-.markdown-body strong,
-.markdown-body b {
+.markdown-body :deep(strong),
+.markdown-body :deep(b) {
     color: #fff;
     font-weight: 700;
 }
 
-.markdown-body em,
-.markdown-body i {
+.markdown-body :deep(em),
+.markdown-body :deep(i) {
     color: var(--font-color);
 }
 
-.markdown-body code {
+.markdown-body :deep(code) {
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
     border-radius: 4px;
@@ -2059,7 +2063,7 @@ function onPopstate() {
         "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
 }
 
-.markdown-body pre {
+.markdown-body :deep(pre) {
     background: var(--panel-bg);
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -2068,7 +2072,7 @@ function onPopstate() {
     margin: 0.8em 0;
 }
 
-.markdown-body pre code {
+.markdown-body :deep(pre code) {
     background: none;
     border: none;
     padding: 0;
@@ -2076,7 +2080,7 @@ function onPopstate() {
     color: var(--pre-text-color);
 }
 
-.markdown-body blockquote {
+.markdown-body :deep(blockquote) {
     border-left: 3px solid var(--accent-teal);
     padding: 0.3em 0.8em;
     margin: 0.8em 0;
@@ -2085,42 +2089,42 @@ function onPopstate() {
     border-radius: 0 6px 6px 0;
 }
 
-.markdown-body ul,
-.markdown-body ol {
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
     padding-left: 1.5em;
     margin: 0.6em 0;
 }
 
-.markdown-body li {
+.markdown-body :deep(li) {
     margin: 0.25em 0;
 }
 
-.markdown-body hr {
+.markdown-body :deep(hr) {
     border: none;
     border-top: 1px solid var(--border-color);
     margin: 1.5em 0;
 }
 
-.markdown-body table {
+.markdown-body :deep(table) {
     border-collapse: collapse;
     width: 100%;
     margin: 0.8em 0;
 }
 
-.markdown-body th,
-.markdown-body td {
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
     border: 1px solid var(--border-color);
     padding: 0.45em 0.75em;
     text-align: left;
 }
 
-.markdown-body th {
+.markdown-body :deep(th) {
     background: var(--panel-bg);
     color: var(--header-title-color);
     font-weight: 600;
 }
 
-.markdown-body img {
+.markdown-body :deep(img) {
     max-width: 100%;
     border-radius: 6px;
     margin: 0.6em 0;
