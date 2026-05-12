@@ -810,6 +810,93 @@ func (s *Server) purgeTask(db *sql.DB, _ []byte) (string, error) {
 	return summary, nil
 }
 
+// ocrFileTask is the job task handler for OCR on uploaded files.
+// It accepts a JSON payload with "file_id" field.
+func (s *Server) ocrFileTask(db *sql.DB, payload []byte) (string, error) {
+	if s.ocrClient == nil || s.mediaService == nil {
+		return "", fmt.Errorf("ocr_file: OCR client or media service not configured")
+	}
+	var p struct {
+		FileID int64 `json:"file_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("ocr_file: invalid payload: %w", err)
+	}
+
+	ctx := context.Background()
+	result, err := s.mediaService.RunOCRForFile(ctx, p.FileID, s.ocrClient)
+	if err != nil {
+		return "", err
+	}
+	if result.Error != "" {
+		return fmt.Sprintf("OCR for file %d completed with error: %s", p.FileID, result.Error), nil
+	}
+
+	// OCR succeeded: generate and store the embedding for this OCR text.
+	s.enqueueOCREmbedding(p.FileID, result.OCRText)
+
+	return fmt.Sprintf("OCR for file %d completed: %d chars", p.FileID, len(result.OCRText)), nil
+}
+
+// enqueueOCR enqueues an OCR job for the given file ID, if it's an image type.
+func (s *Server) enqueueOCR(fileID int64) {
+	if s.jobManager == nil || s.mediaService == nil || s.ocrClient == nil {
+		return
+	}
+	s.mediaService.EnqueueOCR(fileID)
+}
+
+// syncOCREmbeddingTask generates a VSS embedding for OCR text and stores it
+// in vss_files_ocr (rowid = file_id). The payload is {"file_id": N, "ocr_text": "..."}.
+func (s *Server) syncOCREmbeddingTask(db *sql.DB, payload []byte) (string, error) {
+	if s.llm == nil {
+		return "", fmt.Errorf("ocr_embedding: no embedding client configured")
+	}
+	var p struct {
+		FileID  int64  `json:"file_id"`
+		OCRText string `json:"ocr_text"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("ocr_embedding: invalid payload: %w", err)
+	}
+	if p.OCRText == "" {
+		return fmt.Sprintf("Skipped embedding for file %d: empty OCR text", p.FileID), nil
+	}
+
+	text := llm.TruncateForEmbedding(p.OCRText)
+	vec, err := s.llm.GenerateEmbedding(text)
+	if err != nil {
+		return "", fmt.Errorf("generate OCR embedding: %w", err)
+	}
+	vecJSON := llm.EmbeddingToJSON(vec)
+
+	// vss0 virtual tables don't support UPDATE/INSERT OR REPLACE.
+	if _, err := db.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, p.FileID); err != nil {
+		return "", fmt.Errorf("delete old OCR embedding: %w", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`,
+		p.FileID, vecJSON,
+	); err != nil {
+		return "", fmt.Errorf("insert OCR embedding: %w", err)
+	}
+	return fmt.Sprintf("Indexed OCR for file %d (%d chars)", p.FileID, len(p.OCRText)), nil
+}
+
+// enqueueOCREmbedding enqueues a sync_ocr_embedding job for the given file.
+func (s *Server) enqueueOCREmbedding(fileID int64, ocrText string) {
+	if s.jobManager == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"file_id":  fileID,
+		"ocr_text": ocrText,
+	})
+	if _, err := s.jobManager.Enqueue("_system", "sync_ocr_embedding", payload); err != nil {
+		log.Printf("ocr: enqueue embedding for file %d: %v", fileID, err)
+	}
+}
+
 // enqueueTitleGeneration enqueues a generate_title job for the given note.
 func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
 	if s.jobManager == nil || s.chatClient == nil {
@@ -860,61 +947,133 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if vssCount == 0 {
-		writeJSON(w, http.StatusOK, []SearchResult{})
-		return
-	}
 
-	// Step 1: Use vss_search to get matching rowids and distances.
-	// IMPORTANT: vss_search must not be combined with JOINs - sqlite-vss hangs.
-	vssRows, err := s.db.Query(`
-		SELECT rowid, distance
-		FROM vss_notes
-		WHERE vss_search(body_embedding, ?)
-		ORDER BY distance ASC
-		LIMIT 10
-	`, vecJSON)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	defer vssRows.Close()
+	// Collect distances by note ID from both vss_notes and vss_files_ocr.
+	distByID := make(map[int64]float64)
 
-	type vssHit struct {
-		rowid    int64
-		distance float64
-	}
-	var hits []vssHit
-	for vssRows.Next() {
-		var h vssHit
-		if err := vssRows.Scan(&h.rowid, &h.distance); err != nil {
+	if vssCount > 0 {
+		// Step 1a: Search vss_notes (note body embeddings).
+		vssRows, err := s.db.Query(`
+			SELECT rowid, distance
+			FROM vss_notes
+			WHERE vss_search(body_embedding, ?)
+			ORDER BY distance ASC
+			LIMIT 10
+		`, vecJSON)
+		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		hits = append(hits, h)
-	}
-	if err := vssRows.Err(); err != nil {
-		writeErr(w, err)
-		return
+		for vssRows.Next() {
+			var rowid int64
+			var dist float64
+			if err := vssRows.Scan(&rowid, &dist); err != nil {
+				vssRows.Close()
+				writeErr(w, err)
+				return
+			}
+			distByID[rowid] = dist
+		}
+		vssRows.Close()
 	}
 
-	if len(hits) == 0 {
+	// Step 1b: Search vss_files_ocr (OCR text embeddings) and resolve to notes.
+	// Check if the OCR VSS table exists and has data.
+	var ocrVSSExists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='vss_files_ocr')`).Scan(&ocrVSSExists)
+	if ocrVSSExists {
+		var ocrCount int
+		s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_ocr`).Scan(&ocrCount)
+		if ocrCount > 0 {
+			ocrRows, err := s.db.Query(`
+				SELECT rowid, distance
+				FROM vss_files_ocr
+				WHERE vss_search(ocr_embedding, ?)
+				ORDER BY distance ASC
+				LIMIT 20
+			`, vecJSON)
+			if err == nil {
+				// Collect file IDs from OCR hits.
+				ocrDistByFile := map[int64]float64{}
+				for ocrRows.Next() {
+					var fileID int64
+					var dist float64
+					if err := ocrRows.Scan(&fileID, &dist); err != nil {
+						ocrRows.Close()
+						writeErr(w, err)
+						return
+					}
+					ocrDistByFile[fileID] = dist
+				}
+				ocrRows.Close()
+
+				// Resolve file IDs to note IDs via files_refs.
+				if len(ocrDistByFile) > 0 {
+					fileIDs := make([]int64, 0, len(ocrDistByFile))
+					for fid := range ocrDistByFile {
+						fileIDs = append(fileIDs, fid)
+					}
+					// Build IN clause.
+					filePlaceholders := make([]string, len(fileIDs))
+					fileArgs := make([]any, len(fileIDs))
+					for i, fid := range fileIDs {
+						filePlaceholders[i] = "?"
+						fileArgs[i] = fid
+					}
+					refRows, err := s.db.Query(`
+							SELECT DISTINCT fr.note_id, fr.file_id
+							FROM files_refs fr
+							JOIN files f ON f.id = fr.file_id
+							WHERE fr.file_id IN (`+strings.Join(filePlaceholders, ",")+`)
+							  AND f.deleted_at IS NULL
+						`, fileArgs...)
+					if err == nil {
+						for refRows.Next() {
+							var noteID, fileID int64
+							if err := refRows.Scan(&noteID, &fileID); err != nil {
+								refRows.Close()
+								writeErr(w, err)
+								return
+							}
+							dist := ocrDistByFile[fileID]
+							// Merge: keep the best (minimum) distance per note.
+							if existing, ok := distByID[noteID]; !ok || dist < existing {
+								distByID[noteID] = dist
+							}
+						}
+						refRows.Close()
+					}
+				}
+			}
+		}
+	}
+
+	if len(distByID) == 0 {
 		writeJSON(w, http.StatusOK, []SearchResult{})
 		return
 	}
 
-	// Step 2: Fetch full note data for each hit.
-	// Build a map for O(1) distance lookup.
-	distByID := make(map[int64]float64, len(hits))
-	for _, h := range hits {
-		distByID[h.rowid] = h.distance
+	// Collect top N (up to 10) note IDs sorted by distance.
+	type idDist struct {
+		id   int64
+		dist float64
 	}
+	sorted := make([]idDist, 0, len(distByID))
+	for id, dist := range distByID {
+		sorted = append(sorted, idDist{id, dist})
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].dist < sorted[j].dist })
+	limit := 10
+	if len(sorted) < limit {
+		limit = len(sorted)
+	}
+	sorted = sorted[:limit]
 
 	// Collect IDs in order for the IN clause.
-	ids := make([]any, len(hits))
-	placeholders := make([]string, len(hits))
-	for i, h := range hits {
-		ids[i] = h.rowid
+	ids := make([]any, len(sorted))
+	placeholders := make([]string, len(sorted))
+	for i, h := range sorted {
+		ids[i] = h.id
 		placeholders[i] = "?"
 	}
 

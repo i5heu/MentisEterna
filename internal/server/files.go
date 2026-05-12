@@ -56,6 +56,9 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enqueue OCR for image files
+	s.enqueueOCR(rec.ID)
+
 	nf := media.NoteFile{
 		ID:        rec.ID,
 		Filename:  rec.Filename,
@@ -116,6 +119,9 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enqueue OCR for image files
+	s.enqueueOCR(rec.ID)
+
 	url := fmt.Sprintf("/file/%d/%d", noteID, rec.ID)
 
 	// Build the markdown insertion string
@@ -165,6 +171,45 @@ func (s *Server) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Serve File OCR ---
+
+// handleFileOCR handles GET /files/:fileID/ocr
+// Returns the OCR result for a file.
+func (s *Server) handleFileOCR(w http.ResponseWriter, r *http.Request) {
+	if s.mediaService == nil {
+		http.Error(w, "media not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract file ID from /files/:fileID/ocr
+	path := strings.TrimPrefix(r.URL.Path, "/files/")
+	path = strings.TrimSuffix(path, "/ocr")
+	fileID, err := strconv.ParseInt(path, 10, 64)
+	if err != nil || fileID <= 0 {
+		http.Error(w, "invalid file id", http.StatusBadRequest)
+		return
+	}
+
+	// Verify file exists
+	var exists bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM files WHERE id = ? AND deleted_at IS NULL)`, fileID).Scan(&exists); err != nil || !exists {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	result, err := s.mediaService.GetOCRResult(fileID)
+	if err != nil {
+		http.Error(w, "OCR result not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // --- Serve File ---
