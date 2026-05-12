@@ -19,7 +19,7 @@
   - [x] Semantic indexing via job queue
 - [x] S3 Media Storage (Encrypted)
 - [x] Note linking and backlinking
-- [ ] tags
+- [x] tags
   - [ ] index note type
 - [ ] Auto Title Generator
   - [ ] alternative OLLAMA url (needed to use anothert OLLAMA for tag and title generation, because local ollama is often CPU only)
@@ -334,6 +334,7 @@ func TestMyCustomBehavior(t *testing.T) {
 - **Upserts**: SQLite VSS tables don't support `INSERT OR REPLACE` or `UPDATE`. Delete first, then insert.
 - **Payload shape**: `Validate`, `ProcessSave`, and `ProcessLoad` should all use the same JSON structure (wrap arrays in an object — e.g. `{"ingredients": [...]}` not `[...]`).
 - **Cron schedules**: Supports `@every 1h`, `@daily`, `@hourly`. The scheduler is lightweight — for full cron expressions, swap in `robfig/cron/v3`.
+- **❌ NEVER store plugin config or data in the note body (`updates` table)**. The note body is for user-written markdown content only. Plugin configuration and data MUST live in dedicated plugin tables (`ct_<pluginID>_*`). Reading from `updates.body` inside `ProcessLoad` to recover plugin state is a misuse and will not be accepted. Always create proper tables via `InitSchema` and persist through `ProcessSave`.
 
 ### Plugin Actions (RPC)
 
