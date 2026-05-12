@@ -266,16 +266,70 @@
                             <span class="message-badge">root</span>
                         </div>
                         <div class="message-body">
-                            <textarea
-                                v-if="isEditing"
-                                ref="bodyTextarea"
-                                v-model="editBody"
-                                class="body-textarea"
-                                placeholder="Write your note here… (drag files here)"
-                                @input="dirty = true"
-                                @dragover.prevent
-                                @drop.prevent="onBodyDrop"
-                            />
+                            <div v-if="isEditing" class="body-textarea-wrapper">
+                                <textarea
+                                    ref="bodyTextarea"
+                                    v-model="editBody"
+                                    class="body-textarea"
+                                    placeholder="Write your note here… (drag files here)"
+                                    @input="onBodyInput"
+                                    @click="onBodyCaretMove"
+                                    @keyup="onBodyCaretMove"
+                                    @scroll="updateLinkPopupPosition"
+                                    @dragover.prevent
+                                    @drop.prevent="onBodyDrop"
+                                />
+                                <!-- [[ Link search popup -->
+                                <div
+                                    v-if="linkSearchVisible"
+                                    class="link-search-popup"
+                                    :style="linkPopupStyle"
+                                >
+                                    <div
+                                        v-if="
+                                            !linkSearching &&
+                                            !linkSearchQuery.trim()
+                                        "
+                                        class="link-search-status"
+                                    >
+                                        Start typing to search notes…
+                                    </div>
+                                    <div
+                                        v-else-if="linkSearching"
+                                        class="link-search-status"
+                                    >
+                                        Searching…
+                                    </div>
+                                    <div
+                                        v-for="(r, idx) in linkSearchResults"
+                                        :key="r.id"
+                                        class="link-search-item"
+                                        :class="{
+                                            highlighted:
+                                                idx === linkSearchIndex,
+                                        }"
+                                        @click="selectLinkResult(r)"
+                                        @mouseenter="linkSearchIndex = idx"
+                                    >
+                                        <span class="link-search-title">{{
+                                            r.title || "Untitled"
+                                        }}</span>
+                                        <span class="link-search-relevance">{{
+                                            relevancePct(r.distance)
+                                        }}</span>
+                                    </div>
+                                    <div
+                                        v-if="
+                                            !linkSearching &&
+                                            linkSearchQuery.trim() &&
+                                            linkSearchResults.length === 0
+                                        "
+                                        class="link-search-status"
+                                    >
+                                        No notes found
+                                    </div>
+                                </div>
+                            </div>
                             <div
                                 v-else
                                 class="body-rendered markdown-body"
@@ -683,6 +737,15 @@ const searchResults = ref([]);
 const searching = ref(false);
 const highlightedIndex = ref(-1);
 let searchTimeout = null;
+
+// [[ Link search state
+const linkSearchQuery = ref("");
+const linkSearchResults = ref([]);
+const linkSearching = ref(false);
+const linkSearchIndex = ref(-1);
+const linkSearchVisible = ref(false);
+const linkPopupStyle = ref({ left: "20px", top: "20px" });
+let linkSearchTimeout = null;
 
 // Children state
 const children = ref([]);
@@ -1324,6 +1387,190 @@ function relevancePct(distance) {
     return pct + "% match";
 }
 
+// ── [[ Link search helpers ──
+function onBodyInput() {
+    dirty.value = true;
+    updateLinkSearchFromCursor();
+}
+
+function onBodyCaretMove() {
+    if (!linkSearchVisible.value) return;
+    updateLinkSearchFromCursor();
+}
+
+function updateLinkSearchFromCursor() {
+    const el = bodyTextarea.value;
+    if (!el) return;
+    const pos = el.selectionStart ?? 0;
+    const textBefore = editBody.value.slice(0, pos);
+    // Find the last [[ before the cursor that hasn't been closed with ]]
+    const lastOpen = textBefore.lastIndexOf("[[");
+    const lastClose = textBefore.lastIndexOf("]]");
+    if (lastOpen !== -1 && lastOpen > lastClose) {
+        const query = textBefore.slice(lastOpen + 2);
+        if (!query.includes("]]") && !query.includes("\n")) {
+            linkSearchQuery.value = query;
+            linkSearchVisible.value = true;
+            updateLinkPopupPosition();
+            clearTimeout(linkSearchTimeout);
+            if (!query.trim()) {
+                linkSearching.value = false;
+                linkSearchResults.value = [];
+                linkSearchIndex.value = -1;
+                return;
+            }
+            linkSearchTimeout = setTimeout(doLinkSearch, 150);
+            return;
+        }
+    }
+    closeLinkSearch();
+}
+
+function getTextareaCaretPosition(textarea, position) {
+    const div = document.createElement("div");
+    const span = document.createElement("span");
+    const style = window.getComputedStyle(textarea);
+    const props = [
+        "boxSizing",
+        "width",
+        "height",
+        "overflowX",
+        "overflowY",
+        "borderTopWidth",
+        "borderRightWidth",
+        "borderBottomWidth",
+        "borderLeftWidth",
+        "paddingTop",
+        "paddingRight",
+        "paddingBottom",
+        "paddingLeft",
+        "fontStyle",
+        "fontVariant",
+        "fontWeight",
+        "fontStretch",
+        "fontSize",
+        "fontSizeAdjust",
+        "lineHeight",
+        "fontFamily",
+        "textAlign",
+        "textTransform",
+        "textIndent",
+        "textDecoration",
+        "letterSpacing",
+        "wordSpacing",
+        "tabSize",
+        "MozTabSize",
+    ];
+
+    div.style.position = "absolute";
+    div.style.visibility = "hidden";
+    div.style.whiteSpace = "pre-wrap";
+    div.style.wordWrap = "break-word";
+    div.style.top = "0";
+    div.style.left = "0";
+
+    for (const prop of props) {
+        div.style[prop] = style[prop];
+    }
+
+    div.textContent = textarea.value.slice(0, position);
+    span.textContent = textarea.value.slice(position) || ".";
+    div.appendChild(span);
+    document.body.appendChild(div);
+
+    const left = span.offsetLeft - textarea.scrollLeft;
+    const top = span.offsetTop - textarea.scrollTop;
+
+    document.body.removeChild(div);
+    return { left, top };
+}
+
+function updateLinkPopupPosition() {
+    const el = bodyTextarea.value;
+    if (!el || !linkSearchVisible.value) return;
+
+    const { left: caretLeft, top: caretTop } = getTextareaCaretPosition(
+        el,
+        el.selectionStart ?? 0,
+    );
+    const style = window.getComputedStyle(el);
+    const lineHeight =
+        parseFloat(style.lineHeight) || parseFloat(style.fontSize) || 18;
+    const popupWidth = 320;
+    const popupHeight = 220;
+    const gap = 8;
+    const pad = 8;
+
+    let left = Math.max(pad, caretLeft);
+    let top = caretTop + lineHeight + gap;
+
+    const maxLeft = Math.max(pad, el.clientWidth - popupWidth - pad);
+    left = Math.min(left, maxLeft);
+
+    const rect = el.getBoundingClientRect();
+    const popupBottom = rect.top + top + popupHeight;
+    if (popupBottom > window.innerHeight - 12) {
+        top = Math.max(pad, caretTop - popupHeight - gap);
+    }
+
+    linkPopupStyle.value = {
+        left: `${left}px`,
+        top: `${top}px`,
+    };
+}
+
+async function doLinkSearch() {
+    const q = linkSearchQuery.value.trim();
+    if (!q) {
+        linkSearchResults.value = [];
+        linkSearchIndex.value = -1;
+        return;
+    }
+    linkSearching.value = true;
+    try {
+        linkSearchResults.value = await searchNotes(props.token, q);
+        linkSearchIndex.value = linkSearchResults.value.length > 0 ? 0 : -1;
+    } catch (e) {
+        linkSearchResults.value = [];
+        linkSearchIndex.value = -1;
+    } finally {
+        linkSearching.value = false;
+    }
+}
+
+function closeLinkSearch() {
+    linkSearchVisible.value = false;
+    linkSearchQuery.value = "";
+    linkSearchResults.value = [];
+    linkSearchIndex.value = -1;
+    clearTimeout(linkSearchTimeout);
+}
+
+function selectLinkResult(note) {
+    const el = bodyTextarea.value;
+    if (!el) return;
+    const pos = el.selectionStart;
+    const textBefore = editBody.value.slice(0, pos);
+    const textAfter = editBody.value.slice(pos);
+    // Find the last [[ before cursor
+    const lastOpen = textBefore.lastIndexOf("[[");
+    if (lastOpen === -1) return;
+    // Replace from [[ to cursor with the markdown link
+    const newText =
+        textBefore.slice(0, lastOpen) +
+        `[${note.title || "Untitled"}](/note/${note.id})`;
+    editBody.value = newText + textAfter;
+    closeLinkSearch();
+    // Place cursor after the inserted link
+    requestAnimationFrame(() => {
+        el.focus();
+        const cursorPos = newText.length;
+        el.setSelectionRange(cursorPos, cursorPos);
+        updateLinkPopupPosition();
+    });
+    dirty.value = true;
+}
+
 // ── Keyboard shortcut handler ──
 function onKeyDown(e) {
     const mod = isMac() ? e.metaKey : e.ctrlKey;
@@ -1337,8 +1584,13 @@ function onKeyDown(e) {
         return;
     }
 
-    // Esc => close modals / history / clear search / clear highlight / blur
+    // Esc => close link search / modals / history / clear search / clear highlight / blur
     if (e.key === "Escape") {
+        if (linkSearchVisible.value) {
+            e.preventDefault();
+            closeLinkSearch();
+            return;
+        }
         if (showHotkeys.value) {
             showHotkeys.value = false;
             return;
@@ -1417,8 +1669,32 @@ function onKeyDown(e) {
         return;
     }
 
-    // Arrow Up / Down => navigate sidebar list
+    // Arrow Up / Down => navigate link search popup or sidebar list
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        if (linkSearchVisible.value) {
+            const linkList = linkSearchResults.value;
+            if (linkList.length === 0) return;
+            e.preventDefault();
+            if (linkSearchIndex.value < 0) {
+                linkSearchIndex.value =
+                    e.key === "ArrowDown" ? 0 : linkList.length - 1;
+            } else if (e.key === "ArrowDown") {
+                linkSearchIndex.value =
+                    (linkSearchIndex.value + 1) % linkList.length;
+            } else {
+                linkSearchIndex.value =
+                    (linkSearchIndex.value - 1 + linkList.length) %
+                    linkList.length;
+            }
+            // Scroll highlighted item into view
+            requestAnimationFrame(() => {
+                const lel = document.querySelector(
+                    ".link-search-item.highlighted",
+                );
+                if (lel) lel.scrollIntoView({ block: "nearest" });
+            });
+            return;
+        }
         const list = sidebarList.value;
         if (list.length === 0) return;
         e.preventDefault();
@@ -1439,9 +1715,20 @@ function onKeyDown(e) {
         return;
     }
 
-    // Enter => open highlighted note, or first result if focus is in search input
-    // (Skip if the user is typing in the title or body editor)
+    // Enter => select link search result, or open highlighted note, or first result if focus is in search input
     if (e.key === "Enter") {
+        if (linkSearchVisible.value) {
+            const linkList = linkSearchResults.value;
+            if (
+                linkList.length > 0 &&
+                linkSearchIndex.value >= 0 &&
+                linkSearchIndex.value < linkList.length
+            ) {
+                e.preventDefault();
+                selectLinkResult(linkList[linkSearchIndex.value]);
+            }
+            return;
+        }
         const tag = document.activeElement?.tagName;
         const inSearch =
             document.activeElement?.classList.contains("search-input");
@@ -1993,6 +2280,73 @@ function onPopstate() {
 
 .body-textarea:focus {
     border-color: transparent;
+}
+
+/* Body textarea wrapper (for link search popup positioning) */
+.body-textarea-wrapper {
+    position: relative;
+    flex: 1;
+    display: flex;
+    overflow: visible;
+}
+
+/* [[ Link search popup */
+.link-search-popup {
+    position: absolute;
+    width: 320px;
+    max-width: min(320px, calc(100% - 16px));
+    max-height: 220px;
+    overflow-y: auto;
+    background: var(--raised-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    z-index: 50;
+}
+
+.link-search-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.55rem 0.85rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.85rem;
+}
+
+.link-search-item:last-child {
+    border-bottom: none;
+}
+
+.link-search-item:hover,
+.link-search-item.highlighted {
+    background: var(--accent-amber);
+    color: #fff;
+}
+
+.link-search-item.highlighted .link-search-relevance {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.link-search-title {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.link-search-relevance {
+    color: var(--font-color-secondary);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+    margin-left: 1rem;
+}
+
+.link-search-status {
+    padding: 0.55rem 0.85rem;
+    font-size: 0.8rem;
+    color: var(--font-color-secondary);
+    text-align: center;
 }
 
 /* Markdown rendered view */
