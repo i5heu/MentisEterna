@@ -136,7 +136,10 @@ func (m *Manager) upsertDefs(pluginID string, jobs []CronJob) error {
 
 // zombieRecovery resets any job_runs stuck in "running" status back to "planned".
 // This handles crashes where a worker died mid-execution.
+// Also marks planned runs as errored if their job definition has no registered task
+// (leftover runs from before a code fix, or from a removed plugin).
 func (m *Manager) zombieRecovery() error {
+	// 1. Reset runs stuck in "running" back to "planned".
 	res, err := m.db.Exec(
 		`UPDATE job_runs
 		 SET status = 'planned', started_at = NULL, error = 'Previous server instance crashed'
@@ -149,6 +152,44 @@ func (m *Manager) zombieRecovery() error {
 	if n > 0 {
 		log.Printf("jobs: zombie recovery reset %d stuck job(s)", n)
 	}
+
+	// 2. Collect the IDs of all currently registered tasks.
+	m.tasksMu.RLock()
+	registered := make(map[int64]bool, len(m.tasks))
+	for id := range m.tasks {
+		registered[id] = true
+	}
+	m.tasksMu.RUnlock()
+
+	// 3. Mark planned runs for unregistered definitions as errored.
+	if len(registered) > 0 {
+		rows, err := m.db.Query(
+			`SELECT id, job_id FROM job_runs WHERE status = 'planned'`,
+		)
+		if err != nil {
+			return fmt.Errorf("zombie recovery: list planned: %w", err)
+		}
+		var orphaned int
+		for rows.Next() {
+			var runID, jobID int64
+			if err := rows.Scan(&runID, &jobID); err != nil {
+				rows.Close()
+				return fmt.Errorf("zombie recovery: scan planned: %w", err)
+			}
+			if !registered[jobID] {
+				m.db.Exec(
+					`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
+					StatusErrored, "No task registered for this job definition", runID,
+				)
+				orphaned++
+			}
+		}
+		rows.Close()
+		if orphaned > 0 {
+			log.Printf("jobs: zombie recovery marked %d unregistered planned run(s) as errored", orphaned)
+		}
+	}
+
 	return nil
 }
 
