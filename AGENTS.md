@@ -1,6 +1,6 @@
 # MentisEterna — Agent Guide
 
-Personal note-taking app with vector search. Go backend + Vue 3 frontend, SQLite + VSS extensions, Ollama embeddings.
+Personal note-taking app with vector search. Go backend + Vue 3 frontend, SQLite + VSS extensions, LocalAI embeddings.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ cmd/backfill/    — one-shot tool: generate missing embeddings for existing not
 cmd/restore/     — one-shot tool: download + decrypt a backup from S3
 internal/backup/ — AES-256-GCM encrypted database backups to S3
 internal/db/     — SQLite wrapper, migrations, auth, session management
-internal/llm/    — Ollama embedding client (interface: Embedder)
+internal/llm/    — LocalAI embedding client (interface: Embedder)
 internal/server/ — HTTP handlers, WebAuthn, SPA static serving
 pkg/notetype/    — Note type plugin interface, registry, test harness, and built-in plugins
 frontend/        — Vue 3 + Vite app (dev proxy → :8080)
@@ -141,10 +141,11 @@ npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 |---|---|---|
 | `DB_PATH` | `mentis.db` | SQLite database path |
 | `ADDR` | `:8080` | HTTP listen address |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama instance URL |
-| `OLLAMA_EMBEDDING_MODEL` | `hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M` | Embedding model |
-| `OLLAMA_EMBEDDING_MAX_CHARS` | `16384` | Max runes per embedding request (avoids context overflow) |
-| `OLLAMA_CHAT_MODEL` | `hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M` | Chat/generation model (title generation) |
+| `LOCALAI_BASE_URL` | `http://localhost:8080` | LocalAI instance URL |
+| `LOCALAI_EMBEDDING_MODEL` | `text-embedding-ada-002` | Embedding model |
+| `LOCALAI_EMBEDDING_MAX_CHARS` | `16384` | Max runes per embedding request (avoids context overflow) |
+| `LOCALAI_CHAT_MODEL` | `gpt-3.5-turbo` | Chat/generation model (title generation) |
+| `LOCALAI_OCR_MODEL` | `gpt-4o-mini` | Multimodal vision model for OCR |
 | `VSS_EXT_PATH` | auto-detected | Directory containing `vector0.so` and `vss0.so` |
 | `BACKUP_ENCRYPTION_KEY` | none (backups disabled) | hex-encoded 64-char AES-256 key for encrypted backups |
 | `MEDIA_CACHE_DIR` | required for media | Directory for local file cache (also required for backups) |
@@ -162,7 +163,7 @@ INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
 
 **WebAuthn**: RPID is hardcoded to `localhost`, origins locked to `http://localhost:8080` and `https://localhost:8080`. Changing the host/port requires updating `internal/server/server.go`.
 
-**Embedding dimension**: 2560 (Qwen3-Embedding-4B). The mock embedder in tests also uses 2560 — keep them in sync if you change models.
+**Embedding dimension**: 2560. The mock embedder in tests uses 2560 — keep them in sync with whichever embedding model you use.
 
 **Auth**: Password-based (SHA-512, stored in `auth` table) + WebAuthn passkeys. Sessions last 24 hours. `initAdminPassword()` runs at server startup.
 
@@ -184,7 +185,7 @@ cmd/restore/main.go           — CLI tool (download + decrypt → output file)
 ## Testing Conventions
 
 - DB tests use `db.Open(t.TempDir()+"/test.db")` — real SQLite on temp files
-- Server tests use `db.OpenInMemory()` with a `mockEmbedder` (deterministic, no Ollama needed)
+- Server tests use `db.OpenInMemory()` with a `mockEmbedder` (deterministic, no LocalAI needed)
 - `newTestServer(t)` — basic server with no embedder (nil)
 - `newTestServerWithEmbedder(t)` — server with mock embedder + VSS (skips if VSS unavailable)
 - `createTestSession(t, s)` — sets admin password "testpass" and returns a session token
