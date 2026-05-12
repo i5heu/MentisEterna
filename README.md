@@ -23,7 +23,6 @@
   - [x] index note type
 - [x] Auto Title Generator
   - [x] OLLAMA url configurable via env var
-- [ ] SQLite AES-256 in OFB mode
 - [ ] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
 - [ ] Encrypted Backup
 
@@ -41,6 +40,7 @@
   - [ ] Fast note creation with AI parent selection
   - [ ] Fast Handnote import
 - [ ] support AsciiDoc and Markdown (with live preview)
+- [ ] SQLite AES-256 in OFB mode
 
 ## TODO Note Types
 - [x] Recipe (with ingredient table)
