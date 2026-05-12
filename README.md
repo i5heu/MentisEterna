@@ -28,7 +28,6 @@
 - [ ] Encrypted Backup
 
 ## TODO Future
-- [ ] support AsciiDoc and Markdown (with live preview)
 - [ ] OCR for images and pdfs
 - [ ] speech to text notes
 - [ ] better search (by title, path and tags)
@@ -41,6 +40,7 @@
   - [ ] Brainstorm and Research mode
   - [ ] Fast note creation with AI parent selection
   - [ ] Fast Handnote import
+- [ ] support AsciiDoc and Markdown (with live preview)
 
 ## TODO Note Types
 - [x] Recipe (with ingredient table)
