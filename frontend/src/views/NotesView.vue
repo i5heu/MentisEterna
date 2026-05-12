@@ -7,6 +7,8 @@
                     src="../assets/MentisEterna_logo.svg"
                     alt="Logo"
                     class="app-logo"
+                    title="Keyboard shortcuts (Shift+?)"
+                    @click="showHotkeys = !showHotkeys"
                 />
                 <span class="app-title">MentisEterna</span>
                 <button
@@ -894,15 +896,6 @@
                 </div>
             </div>
         </div>
-
-        <!-- "?" help button -->
-        <button
-            class="help-btn"
-            title="Keyboard shortcuts (Shift+?)"
-            @click="showHotkeys = !showHotkeys"
-        >
-            ?
-        </button>
     </div>
 </template>
 
@@ -2296,6 +2289,11 @@ function onPopstate() {
     width: 3rem;
     height: 3rem;
     border-radius: 25%;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+.app-logo:hover {
+    opacity: 0.8;
 }
 
 .app-title {
@@ -3171,36 +3169,6 @@ function onPopstate() {
 .hotkey-desc {
     font-size: 0.85rem;
     color: var(--font-color-secondary);
-}
-
-/* "?" help button */
-.help-btn {
-    position: fixed;
-    bottom: 1rem;
-    right: 1rem;
-    width: 2rem;
-    height: 2rem;
-    border-radius: 50%;
-    background: var(--raised-bg);
-    color: var(--font-color-secondary);
-    border: 1px solid var(--border-color);
-    font-size: 0.9rem;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-    transition:
-        background 0.15s,
-        color 0.15s,
-        border-color 0.15s;
-    cursor: pointer;
-}
-
-.help-btn:hover {
-    background: var(--accent-teal);
-    color: #fff;
-    border-color: var(--accent-teal);
 }
 
 /* Sidebar footer (passkey registration) */
