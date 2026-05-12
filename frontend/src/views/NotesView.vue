@@ -606,7 +606,11 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
-import { marked } from "marked";
+import MarkdownIt from "markdown-it";
+import markdownItFootnote from "markdown-it-footnote";
+const md = new MarkdownIt({ html: false, linkify: true, breaks: true }).use(
+    markdownItFootnote,
+);
 import {
     fetchNotes,
     fetchNote,
@@ -763,14 +767,14 @@ const isEditing = ref(false);
 const renderedBody = computed(() => {
     if (!editBody.value)
         return '<p style="color: var(--font-color-secondary);">Nothing to preview</p>';
-    return marked.parse(editBody.value);
+    return md.render(editBody.value);
 });
 
 // Render any markdown body (used for child messages)
 function renderMarkdown(body) {
     if (!body)
         return '<p style="color: var(--font-color-secondary);">Empty</p>';
-    return marked.parse(body);
+    return md.render(body);
 }
 
 function toggleEdit() {
@@ -2128,6 +2132,29 @@ function onPopstate() {
     max-width: 100%;
     border-radius: 6px;
     margin: 0.6em 0;
+}
+
+/* Footnotes */
+.markdown-body :deep(.footnote-ref) {
+    color: var(--accent-teal);
+    text-decoration: none;
+    font-size: 0.8em;
+}
+.markdown-body :deep(.footnote-backref) {
+    color: var(--accent-teal);
+    text-decoration: none;
+}
+.markdown-body :deep(section.footnotes) {
+    border-top: 1px solid var(--border-color);
+    margin-top: 2em;
+    padding-top: 1em;
+}
+.markdown-body :deep(section.footnotes ol) {
+    font-size: 0.88em;
+    color: var(--font-color-secondary);
+}
+.markdown-body :deep(section.footnotes li) {
+    margin: 0.4em 0;
 }
 
 .history-panel {
