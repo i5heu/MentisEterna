@@ -22,7 +22,7 @@
 - [x] tags
   - [x] index note type
 - [ ] Auto Title Generator
-  - [ ] OLLAMA url configurable via env var
+  - [x] OLLAMA url configurable via env var
 - [ ] SQLite AES-256 in OFB mode
 - [ ] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
 - [ ] Encrypted Backup

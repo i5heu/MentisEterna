@@ -81,7 +81,7 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 	}
 
 	m := newMockEmbedder()
-	return New(d, ":0", m)
+	return New(d, ":0", m, nil)
 }
 
 // helperCreateNoteSync creates a note and ensures the embedding is
@@ -233,8 +233,15 @@ func TestCreateNoteEmptyTitle(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/notes", strings.NewReader(`{"title":"   ","body":"b"}`))
 	w := httptest.NewRecorder()
 	s.createNote(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for blank title, got %d", w.Code)
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected 201 for blank title (falls back to Untitled), got %d: %s", w.Code, w.Body.String())
+	}
+	var n Note
+	if err := json.NewDecoder(w.Body).Decode(&n); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if n.Title != "Untitled" {
+		t.Errorf("expected title 'Untitled', got %q", n.Title)
 	}
 }
 
@@ -341,8 +348,15 @@ func TestUpdateNoteEmptyTitle(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/notes/%d", n.ID), strings.NewReader(`{"title":"","body":""}`))
 	w := httptest.NewRecorder()
 	s.updateNote(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for blank title (falls back to Untitled), got %d: %s", w.Code, w.Body.String())
+	}
+	var updated Note
+	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if updated.Title != "Untitled" {
+		t.Errorf("expected title 'Untitled', got %q", updated.Title)
 	}
 }
 

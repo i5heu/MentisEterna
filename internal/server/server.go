@@ -24,13 +24,14 @@ type Server struct {
 	db           *db.DB
 	addr         string
 	llm          llm.Embedder
+	chatClient   llm.Generator
 	webauthn     *webauthn.WebAuthn
 	sessionStore *webAuthnSessionStore
 	jobManager   *jobs.Manager
 	mediaService *media.Service
 }
 
-func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
+func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator) *Server {
 	wconfig := &webauthn.Config{
 		RPID:                  "localhost",
 		RPDisplayName:         "MentisEterna",
@@ -76,6 +77,7 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder) *Server {
 		db:           d,
 		addr:         addr,
 		llm:          embeddingClient,
+		chatClient:   chatClient,
 		webauthn:     w,
 		sessionStore: newWebAuthnSessionStore(),
 		jobManager:   jobMgr,
@@ -123,6 +125,16 @@ func (s *Server) Start(ctx context.Context) error {
 			Task: s.syncEmbeddingTask,
 		}}); err != nil {
 			log.Fatalf("Failed to register VSS index job: %v", err)
+		}
+	}
+
+	// Register ad-hoc title generation job (for notes saved without a title).
+	if s.chatClient != nil {
+		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{{
+			Name: "generate_title",
+			Task: s.generateTitleTask,
+		}}); err != nil {
+			log.Fatalf("Failed to register title generation job: %v", err)
 		}
 	}
 

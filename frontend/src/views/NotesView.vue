@@ -123,7 +123,7 @@
                         <input
                             v-model="editTitle"
                             class="title-input"
-                            placeholder="Note title"
+                            placeholder="Note title (leave blank to auto-generate)"
                             @input="dirty = true"
                         />
                         <div v-if="isEditing" class="type-row">
