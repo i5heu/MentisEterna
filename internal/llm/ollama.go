@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
+	"unicode/utf8"
 )
 
 // Embedder defines the interface for generating text embeddings.
@@ -199,6 +202,40 @@ func CombineTitleBody(title, body string) string {
 		return title
 	}
 	return title + "\n" + body
+}
+
+// maxEmbeddingChars is the fallback limit when OLLAMA_EMBEDDING_MAX_CHARS is not set.
+// Qwen3-Embedding-4B has a 32K token context; but Ollama reports context errors even
+// well below that threshold, so we default to a conservative 16K runes (≈ 4K tokens).
+const maxEmbeddingChars = 16 * 1024 // 16K runes
+
+// MaxEmbeddingChars returns the rune limit for embedding input. Read from the
+// OLLAMA_EMBEDDING_MAX_CHARS env var at init time; defaults to 16K if unset.
+var MaxEmbeddingChars = func() int {
+	if v := os.Getenv("OLLAMA_EMBEDDING_MAX_CHARS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return maxEmbeddingChars
+}()
+
+// TruncateForEmbedding ensures text does not exceed the embedding model's
+// context window. It trims to MaxEmbeddingChars runes, preserving valid UTF-8
+// and trying to break on a whitespace boundary.
+func TruncateForEmbedding(text string) string {
+	if utf8.RuneCountInString(text) <= MaxEmbeddingChars {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= MaxEmbeddingChars {
+		return text
+	}
+	truncated := string(runes[:MaxEmbeddingChars])
+	if idx := strings.LastIndexAny(truncated, " \t\n\r"); idx > MaxEmbeddingChars/2 {
+		return strings.TrimRight(truncated[:idx], " \t\n\r")
+	}
+	return strings.TrimRight(truncated, " \t\n\r")
 }
 
 func envOr(key, def string) string {

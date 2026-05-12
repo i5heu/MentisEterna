@@ -73,6 +73,7 @@ func main() {
 
 	for i, p := range all {
 		text := llm.CombineTitleBody(p.title, p.body)
+		text = llm.TruncateForEmbedding(text)
 		vec, err := client.GenerateEmbedding(text)
 		if err != nil {
 			log.Printf("ERROR note %d: %v", p.id, err)
