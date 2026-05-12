@@ -151,20 +151,23 @@ func (s *S3Store) List(ctx context.Context, ep EndpointConfig, prefix string) ([
 	var continuationToken string
 
 	for {
-		// Build the URL with query parameters.
-		u := s.objectURL(ep, "") // We'll add prefix via query params
+		u := s.objectURL(ep, "")
 		parsed, err := url.Parse(u)
 		if err != nil {
 			return nil, fmt.Errorf("parse base url: %w", err)
 		}
 
-		q := parsed.Query()
-		q.Set("list-type", "2")
-		q.Set("prefix", prefix)
+		// Build RawQuery with unencoded values. canonicalQueryString does
+		// the single encoding pass. Using url.Values.Encode() would
+		// double-encode because it encodes "/" as "%2F", and then
+		// canonicalQueryString re-encodes "%" to "%25".
+		var qparts []string
+		qparts = append(qparts, "list-type=2")
+		qparts = append(qparts, "prefix="+prefix)
 		if continuationToken != "" {
-			q.Set("continuation-token", continuationToken)
+			qparts = append(qparts, "continuation-token="+continuationToken)
 		}
-		parsed.RawQuery = q.Encode()
+		parsed.RawQuery = strings.Join(qparts, "&")
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 		if err != nil {

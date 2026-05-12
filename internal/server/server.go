@@ -290,8 +290,8 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// On-demand backup trigger
 	mux.HandleFunc("/backup/trigger", s.handleBackupTrigger)
+	mux.HandleFunc("/backup/purge", s.handleBackupPurge)
 
-	// File serving endpoint
 	mux.HandleFunc("/file/", s.serveFile)
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
@@ -404,6 +404,27 @@ func (s *Server) handleBackupTrigger(w http.ResponseWriter, r *http.Request) {
 		"status":  "queued",
 		"run_id":  runID,
 		"message": "Backup job enqueued. Check /jobs for progress.",
+	})
+}
+
+func (s *Server) handleBackupPurge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.backupService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Backups are not enabled. Set BACKUP_ENCRYPTION_KEY, MEDIA_CACHE_DIR, and MEDIA_S3_ENDPOINTS."})
+		return
+	}
+	runID, err := s.jobManager.Enqueue("_backup", "retention_purge", nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to enqueue purge: %v", err)})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"run_id":  runID,
+		"message": "Retention purge enqueued. Check /jobs for progress.",
 	})
 }
 
