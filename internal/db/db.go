@@ -124,6 +124,9 @@ func (d *DB) migrate() error {
 	if err := d.ensureOCRTables(); err != nil {
 		return err
 	}
+	if err := d.ensureSTTTables(); err != nil {
+		return err
+	}
 	return d.migrateTags()
 }
 
@@ -238,6 +241,9 @@ func (d *DB) migrateNotes() error {
 		}
 		if err := d.ensureVSSFilesOCR(2560); err != nil {
 			return fmt.Errorf("vss_files_ocr: %w", err)
+		}
+		if err := d.ensureVSSFilesSTT(2560); err != nil {
+			return fmt.Errorf("vss_files_stt: %w", err)
 		}
 	}
 
@@ -488,4 +494,63 @@ func (d *DB) tableColumns(table string) (map[string]bool, error) {
 		cols[name] = true
 	}
 	return cols, nil
+}
+
+// ensureSTTTables ensures the files_stt table exists.
+func (d *DB) ensureSTTTables() error {
+	_, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS files_stt (
+			file_id    INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+			stt_text   TEXT    NOT NULL DEFAULT '',
+			model      TEXT    NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			error      TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_files_stt_file_id ON files_stt(file_id);
+	`)
+	return err
+}
+
+// ensureVSSFilesSTT ensures the vss_files_stt virtual table exists with the
+// expected embedding dimension. rowid = files.id for direct file lookup.
+func (d *DB) ensureVSSFilesSTT(expectedDim int) error {
+	var name string
+	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='vss_files_stt'`).Scan(&name)
+	if err != nil {
+		if _, createErr := d.Exec(`
+			CREATE VIRTUAL TABLE IF NOT EXISTS vss_files_stt USING vss0(
+				stt_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
+			)
+		`); createErr != nil {
+			return fmt.Errorf("create vss_files_stt: %w", createErr)
+		}
+		return nil
+	}
+
+	// Probe dimension with a dummy row.
+	parts := make([]string, expectedDim)
+	for i := range parts {
+		parts[i] = "0"
+	}
+	dummyJSON := "[" + strings.Join(parts, ",") + "]"
+	testRowID := int64(-1)
+	_, insertErr := d.Exec(`INSERT INTO vss_files_stt(rowid, stt_embedding) VALUES (?, ?)`, testRowID, dummyJSON)
+	if insertErr != nil {
+		log.Printf("vss_files_stt dimension mismatch detected, recreating table")
+		if _, dropErr := d.Exec(`DROP TABLE IF EXISTS vss_files_stt`); dropErr != nil {
+			return fmt.Errorf("drop old vss_files_stt: %w", dropErr)
+		}
+		if _, createErr := d.Exec(`
+			CREATE VIRTUAL TABLE vss_files_stt USING vss0(
+				stt_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
+			)
+		`); createErr != nil {
+			return fmt.Errorf("recreate vss_files_stt: %w", createErr)
+		}
+		return nil
+	}
+	_, _ = d.Exec(`DELETE FROM vss_files_stt WHERE rowid = ?`, testRowID)
+	return nil
 }

@@ -457,6 +457,7 @@
                         <NoteAttachments
                             :attachments="selected.attachments"
                             :editing="isEditing"
+                            :token="token"
                             @remove="removeAttachment"
                         />
                     </div>
@@ -714,6 +715,7 @@
                     <NoteAttachments
                         :attachments="threadNote.attachments"
                         :editing="false"
+                        :token="token"
                     />
                 </div>
 

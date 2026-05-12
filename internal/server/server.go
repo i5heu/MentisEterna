@@ -29,6 +29,7 @@ type Server struct {
 	llm           llm.Embedder
 	chatClient    llm.Generator
 	ocrClient     llm.OCRer
+	sttClient     llm.STTer
 	webauthn      *webauthn.WebAuthn
 	sessionStore  *webAuthnSessionStore
 	jobManager    *jobs.Manager
@@ -36,7 +37,7 @@ type Server struct {
 	backupService *backup.Service
 }
 
-func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator, ocrClient llm.OCRer) *Server {
+func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
 	wconfig := &webauthn.Config{
 		RPID:                  "localhost",
 		RPDisplayName:         "MentisEterna",
@@ -102,6 +103,7 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		llm:           embeddingClient,
 		chatClient:    chatClient,
 		ocrClient:     ocrClient,
+		sttClient:     sttClient,
 		webauthn:      w,
 		sessionStore:  newWebAuthnSessionStore(),
 		jobManager:    jobMgr,
@@ -148,6 +150,7 @@ func (s *Server) Start(ctx context.Context) error {
 		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{
 			{Name: "vss_index", Task: s.syncEmbeddingTask},
 			{Name: "sync_ocr_embedding", Task: s.syncOCREmbeddingTask},
+			{Name: "sync_stt_embedding", Task: s.syncSTTEmbeddingTask},
 		}); err != nil {
 			log.Fatalf("Failed to register VSS index job: %v", err)
 		}
@@ -176,6 +179,7 @@ func (s *Server) Start(ctx context.Context) error {
 			{Name: "repair_file_replica", Task: s.mediaService.RepairReplicaTask},
 			{Name: "delete_file_replica", Task: s.mediaService.DeleteReplicaTask},
 			{Name: "ocr_file", Task: s.ocrFileTask},
+			{Name: "stt_file", Task: s.sttFileTask},
 		}); err != nil {
 			log.Fatalf("Failed to register media ad-hoc jobs: %v", err)
 		}
@@ -296,7 +300,15 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/backup/purge", s.handleBackupPurge)
 
 	mux.HandleFunc("/file/", s.serveFile)
-	mux.HandleFunc("/files/", s.handleFileOCR)
+
+	// Files routes: OCR and STT results
+	mux.HandleFunc("/files/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/stt") {
+			s.handleFileSTT(w, r)
+			return
+		}
+		s.handleFileOCR(w, r)
+	})
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 

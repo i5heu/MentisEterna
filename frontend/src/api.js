@@ -157,6 +157,14 @@ export async function deleteAttachment(token, noteId, fileId) {
     });
 }
 
+// --- STT / Transcription API ---
+
+export async function fetchSTTResult(token, fileId) {
+    return request(`/files/${fileId}/stt`, {
+        headers: authHeaders(token),
+    });
+}
+
 // --- WebAuthn / Passkey API ---
 
 function toBase64Url(buffer) {

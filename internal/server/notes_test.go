@@ -82,7 +82,7 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 	}
 
 	m := newMockEmbedder()
-	return New(d, ":0", m, nil, nil)
+	return New(d, ":0", m, nil, nil, nil)
 }
 
 // helperCreateNoteSync creates a note and ensures the embedding is

@@ -48,6 +48,7 @@ type NoteFile struct {
 	SizeBytes int64  `json:"size_bytes"`
 	URL       string `json:"url"`
 	IsImage   bool   `json:"is_image"`
+	IsAudio   bool   `json:"is_audio"`
 }
 
 // S3ReplicaRecord holds the state of a single S3 replica.
@@ -77,6 +78,16 @@ type ReplicaResult struct {
 func IsImage(mimeType string) bool {
 	switch mimeType {
 	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/tiff":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsAudio checks if the MIME type represents an audio file.
+func IsAudio(mimeType string) bool {
+	switch mimeType {
+	case "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/webm", "audio/flac", "audio/aac":
 		return true
 	default:
 		return false
