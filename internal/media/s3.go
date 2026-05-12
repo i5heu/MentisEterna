@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,7 @@ type ReplicaStore interface {
 	Put(ctx context.Context, endpoint EndpointConfig, key string, src io.Reader, size int64) (etag string, err error)
 	Get(ctx context.Context, endpoint EndpointConfig, key string) (io.ReadCloser, error)
 	Delete(ctx context.Context, endpoint EndpointConfig, key string) error
+	List(ctx context.Context, endpoint EndpointConfig, prefix string) ([]string, error)
 }
 
 // S3Store implements ReplicaStore using SigV4-signed HTTP requests.
@@ -127,6 +129,87 @@ func (s *S3Store) Delete(ctx context.Context, ep EndpointConfig, key string) err
 		return fmt.Errorf("s3 delete: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return nil
+}
+
+// listObjectsV2Response is a minimal XML struct for parsing S3 ListObjectsV2 responses.
+type listObjectsV2Response struct {
+	XMLName     xml.Name `xml:"ListBucketResult"`
+	Contents    []s3Object
+	IsTruncated bool
+	NextToken   string `xml:"NextContinuationToken"`
+}
+
+type s3Object struct {
+	Key string
+}
+
+// List returns all object keys under the given prefix using the ListObjectsV2 API.
+// Handles pagination automatically via continuation tokens.
+// Returns an empty slice (not error) if no objects exist under the prefix.
+func (s *S3Store) List(ctx context.Context, ep EndpointConfig, prefix string) ([]string, error) {
+	var allKeys []string
+	var continuationToken string
+
+	for {
+		// Build the URL with query parameters.
+		u := s.objectURL(ep, "") // We'll add prefix via query params
+		parsed, err := url.Parse(u)
+		if err != nil {
+			return nil, fmt.Errorf("parse base url: %w", err)
+		}
+
+		q := parsed.Query()
+		q.Set("list-type", "2")
+		q.Set("prefix", prefix)
+		if continuationToken != "" {
+			q.Set("continuation-token", continuationToken)
+		}
+		parsed.RawQuery = q.Encode()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := s.signRequest(req, ep, nil); err != nil {
+			return nil, fmt.Errorf("sign list: %w", err)
+		}
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("s3 list: %w", err)
+		}
+
+		if resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("s3 list: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read list body: %w", err)
+		}
+
+		var result listObjectsV2Response
+		if err := xml.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("parse list xml: %w (body=%s)", err, string(body))
+		}
+
+		for _, obj := range result.Contents {
+			if obj.Key != "" {
+				allKeys = append(allKeys, obj.Key)
+			}
+		}
+
+		if !result.IsTruncated {
+			break
+		}
+		continuationToken = result.NextToken
+	}
+
+	return allKeys, nil
 }
 
 // signRequest adds AWS Signature V4 authentication headers to the request.

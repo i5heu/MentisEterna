@@ -211,12 +211,30 @@ The restore tool tries all configured S3 endpoints until one succeeds, then decr
 
 Backups use SQLite's **Online Backup API** (`sqlite3_backup_init/step/finish` via `go-sqlite3`) to create a consistent point-in-time snapshot. This is safe even while the database is being actively written to in WAL mode — it's the same mechanism used by `.backup` in the `sqlite3` CLI.
 
+### Retention Policy
+
+Backups are automatically cleaned up by a `retention_purge` cron job (`@every 24h`).
+
+The default retention policy (`internal/backup/retention.go`):
+
+| Window | Rule |
+|---|---|
+| Last 7 days | Keep **all** backups |
+| 7 days – 3 months | Keep **1 per ISO week** (newest in each) |
+| 3 months – 5 years | Keep **1 per calendar month** (newest in each) |
+| Older than 5 years | **Delete all** |
+
+The algorithm processes backups newest-first, greedily keeping the newest backup in
+each time bucket. Keys that don't match the `backups/mentis-*.db.enc` naming pattern
+are silently skipped (they won't be deleted).
+
 ### Architecture
 
 ```
-internal/backup/crypto.go   — AES-256-GCM Encrypt/Decrypt, KeyFromHex, GenerateKey
-internal/backup/backup.go   — Service orchestrator (snapshot + encrypt + upload)
-cmd/restore/main.go         — CLI tool (download + decrypt → output file)
+internal/backup/crypto.go     — AES-256-GCM Encrypt/Decrypt, KeyFromHex, GenerateKey
+internal/backup/backup.go     — Service orchestrator (snapshot + encrypt + upload, retention purge)
+internal/backup/retention.go  — Retention policy classification and purge logic
+cmd/restore/main.go           — CLI tool (download + decrypt \u2192 output file)
 ```
 
 ## Testing Conventions

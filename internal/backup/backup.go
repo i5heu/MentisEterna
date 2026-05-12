@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mattn/go-sqlite3"
@@ -76,6 +77,61 @@ func (s *Service) Run(ctx context.Context) (string, error) {
 
 	log.Printf("backup: complete in %v (key=%s)", time.Since(start), remoteKey)
 	return remoteKey, nil
+}
+
+// Purge performs retention-based cleanup of old backups across all configured
+// S3 endpoints. It lists all backups under the "backups/" prefix, applies the
+// retention policy, and deletes backups that should be expired.
+//
+// Purge processes each endpoint independently — a failure on one endpoint does
+// not prevent cleanup on others.
+//
+// Returns a summary string describing how many backups were deleted on each
+// endpoint.
+func (s *Service) Purge(ctx context.Context) (string, error) {
+	log.Printf("backup/purge: starting retention cleanup")
+	start := time.Now()
+
+	policy := DefaultRetentionPolicy()
+	now := time.Now().UTC()
+
+	var parts []string
+	totalDeleted := 0
+
+	for _, ep := range s.Endpoints {
+		keys, err := s.Store.List(ctx, ep, "backups/")
+		if err != nil {
+			log.Printf("backup/purge: list on %s failed: %v", ep.ID, err)
+			parts = append(parts, fmt.Sprintf("%s: list error", ep.ID))
+			continue
+		}
+
+		if len(keys) == 0 {
+			log.Printf("backup/purge: no backups found on %s", ep.ID)
+			parts = append(parts, fmt.Sprintf("%s: 0 found, 0 deleted", ep.ID))
+			continue
+		}
+
+		_, toDelete := ClassifyBackups(keys, now, policy)
+
+		log.Printf("backup/purge: %s has %d total backups, %d to delete",
+			ep.ID, len(keys), len(toDelete))
+
+		deleted := 0
+		for _, key := range toDelete {
+			if err := s.Store.Delete(ctx, ep, key); err != nil {
+				log.Printf("backup/purge: delete %s on %s failed: %v", key, ep.ID, err)
+				continue
+			}
+			deleted++
+			log.Printf("backup/purge: deleted %s from %s", key, ep.ID)
+		}
+		totalDeleted += deleted
+		parts = append(parts, fmt.Sprintf("%s: %d found, %d deleted", ep.ID, len(keys), deleted))
+	}
+
+	log.Printf("backup/purge: complete in %v (%d total deleted)", time.Since(start), totalDeleted)
+	return fmt.Sprintf("Retention purge: %s", strings.Join(parts, "; ")), nil
 }
 
 // snapshot creates a consistent point-in-time copy of the database using
