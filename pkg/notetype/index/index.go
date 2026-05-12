@@ -27,15 +27,22 @@ type IndexPlugin struct{}
 
 func (p *IndexPlugin) ID() string { return pluginID }
 
-// InitSchema — the index plugin doesn't need its own tables; it queries
-// the tags / tags_refs / notes tables directly.
 func (p *IndexPlugin) InitSchema(db *sql.DB) error {
-	return nil
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS ct_index_config (
+			note_id INTEGER NOT NULL,
+			mode    TEXT    NOT NULL DEFAULT 'global',
+			selected_tags_json TEXT NOT NULL DEFAULT '[]',
+			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE,
+			PRIMARY KEY (note_id)
+		);
+	`)
+	return err
 }
 
 // --- Payload types ---
 
-// Payload is what the frontend sends when saving the index configuration.
+// Payload is what the frontend sends / ProcessLoad returns for the config.
 type Payload struct {
 	Mode         string   `json:"mode"`          // "global" or "local"
 	SelectedTags []string `json:"selected_tags"` // empty = show all
@@ -80,36 +87,58 @@ func (p *IndexPlugin) Validate(raw json.RawMessage) error {
 }
 
 func (p *IndexPlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, noteID int64, raw json.RawMessage) error {
-	// No plugin tables — configuration is stored entirely in the note's
-	// custom_data field, which the server persists automatically.
+	var payload Payload
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return fmt.Errorf("index: unmarshal payload: %w", err)
+		}
+	}
+	if payload.Mode == "" {
+		payload.Mode = "global"
+	}
+
+	tagsJSON, err := json.Marshal(payload.SelectedTags)
+	if err != nil {
+		return fmt.Errorf("index: marshal selected_tags: %w", err)
+	}
+
+	// Upsert: delete old row then insert new.
+	if _, err := tx.Exec(`DELETE FROM ct_index_config WHERE note_id = ?`, noteID); err != nil {
+		return fmt.Errorf("index: delete old config: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO ct_index_config (note_id, mode, selected_tags_json) VALUES (?, ?, ?)`,
+		noteID, payload.Mode, string(tagsJSON),
+	); err != nil {
+		return fmt.Errorf("index: insert config: %w", err)
+	}
+
 	return nil
 }
 
 func (p *IndexPlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
-	// The index configuration is stored in the note body as JSON.
-	// (There are no plugin tables for this type.)
-	var body string
-	err := db.QueryRow(`
-		SELECT COALESCE(u.body, '') FROM updates u
-		WHERE u.note_id = ?
-		ORDER BY u.id DESC LIMIT 1
-	`, noteID).Scan(&body)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("index: load body: %w", err)
+	var mode string
+	var tagsJSON string
+	err := db.QueryRow(
+		`SELECT mode, selected_tags_json FROM ct_index_config WHERE note_id = ?`,
+		noteID,
+	).Scan(&mode, &tagsJSON)
+	if err == sql.ErrNoRows {
+		mode = "global"
+		tagsJSON = "[]"
+	} else if err != nil {
+		return nil, fmt.Errorf("index: load config: %w", err)
 	}
 
-	var cfg Payload
-	if body != "" {
-		if err := json.Unmarshal([]byte(body), &cfg); err != nil {
-			// Body isn't valid JSON config — return defaults.
-			cfg = Payload{Mode: "global"}
+	var selectedTags []string
+	if tagsJSON != "" {
+		if err := json.Unmarshal([]byte(tagsJSON), &selectedTags); err != nil {
+			selectedTags = nil
 		}
 	}
-	if cfg.Mode == "" {
-		cfg.Mode = "global"
-	}
 
-	// Build the index.
+	cfg := Payload{Mode: mode, SelectedTags: selectedTags}
+
 	entries, err := buildIndex(db, noteID, cfg)
 	if err != nil {
 		return nil, err
@@ -138,7 +167,6 @@ func (p *IndexPlugin) CronJobs() []notetype.CronJob {
 // --- Index building ---
 
 func buildIndex(db *sql.DB, noteID int64, cfg Payload) ([]IndexEntry, error) {
-	// Determine which note IDs to include.
 	var noteIDs []int64
 
 	switch cfg.Mode {
@@ -149,16 +177,8 @@ func buildIndex(db *sql.DB, noteID int64, cfg Payload) ([]IndexEntry, error) {
 		}
 		noteIDs = ids
 	default:
-		// "global" — all notes.
-		noteIDs = nil
+		noteIDs = nil // global — all notes
 	}
-
-	// Build the query.
-	//
-	// We want: for each tag (optionally filtered to selected_tags),
-	// list the notes that use it, ordered by tag name then note title.
-	//
-	// If noteIDs is non-nil, restrict to those notes.
 
 	rows, err := queryTagIndex(db, cfg.SelectedTags, noteIDs)
 	if err != nil {
@@ -166,7 +186,6 @@ func buildIndex(db *sql.DB, noteID int64, cfg Payload) ([]IndexEntry, error) {
 	}
 	defer rows.Close()
 
-	// Group by tag.
 	type row struct {
 		tag       string
 		noteID    int64
@@ -211,14 +230,12 @@ func buildIndex(db *sql.DB, noteID int64, cfg Payload) ([]IndexEntry, error) {
 // localScopeIDs returns the IDs of the note itself, its siblings (notes
 // sharing the same parent_id), and all descendants of those siblings.
 func localScopeIDs(db *sql.DB, noteID int64) ([]int64, error) {
-	// 1. Find the parent_id of this note.
 	var parentID *int64
 	err := db.QueryRow(`SELECT parent_id FROM notes WHERE id = ?`, noteID).Scan(&parentID)
 	if err != nil {
 		return nil, fmt.Errorf("index: find parent of %d: %w", noteID, err)
 	}
 
-	// 2. Get all siblings (including self) — notes with the same parent_id.
 	var siblingIDs []int64
 	var rows *sql.Rows
 	if parentID == nil {
@@ -241,7 +258,6 @@ func localScopeIDs(db *sql.DB, noteID int64) ([]int64, error) {
 		return nil, err
 	}
 
-	// 3. Collect all descendants of each sibling via iterative BFS.
 	allIDs := make([]int64, len(siblingIDs))
 	copy(allIDs, siblingIDs)
 
@@ -250,7 +266,6 @@ func localScopeIDs(db *sql.DB, noteID int64) ([]int64, error) {
 
 	for len(queue) > 0 {
 		var children []int64
-		// Query children of the current queue batch.
 		childRows, err := db.Query(`
 			SELECT id FROM notes WHERE parent_id IN (
 				SELECT id FROM notes WHERE id IN (`+placeholders(len(queue))+`)
@@ -279,8 +294,6 @@ func localScopeIDs(db *sql.DB, noteID int64) ([]int64, error) {
 	return allIDs, nil
 }
 
-// queryTagIndex returns rows of (tag_name, note_id, note_title, parent_id, created_at)
-// optionally filtered to specific tags and/or note IDs.
 func queryTagIndex(db *sql.DB, selectedTags []string, noteIDs []int64) (*sql.Rows, error) {
 	baseQuery := `
 		SELECT t.name, n.id, n.title, n.parent_id,
@@ -297,7 +310,6 @@ func queryTagIndex(db *sql.DB, selectedTags []string, noteIDs []int64) (*sql.Row
 	var args []any
 
 	if len(selectedTags) > 0 {
-		// Build IN clause for tags.
 		conditions = append(conditions, "t.name IN ("+placeholders(len(selectedTags))+")")
 		for _, tag := range selectedTags {
 			args = append(args, tag)
@@ -322,8 +334,6 @@ func queryTagIndex(db *sql.DB, selectedTags []string, noteIDs []int64) (*sql.Row
 
 	return db.Query(query, args...)
 }
-
-// --- Helpers ---
 
 func placeholders(n int) string {
 	if n <= 0 {

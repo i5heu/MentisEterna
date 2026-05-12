@@ -56,6 +56,7 @@ Note types are plugin-based. Each type is a Go package in `pkg/notetype/<name>/`
 - **Payload shape**: `Validate`, `ProcessSave`, and `ProcessLoad` must all use the **same JSON structure**. Wrap arrays in an object: `{"items": [...]}` not `[...]`. The test harness catches shape mismatches automatically.
 - **Upserts in plugin tables**: DELETE old rows, then INSERT new ones. `INSERT OR REPLACE` with foreign keys can cause issues.
 - **Plugin actions (RPC)**: Call `server.RegisterPluginActionHandler("yourtype", handler)` in `init()` to expose custom `POST /notes/:id/action` endpoints. The frontend calls `pluginAction(token, noteId, "action_name", params)`.
+- **❌ NEVER store plugin config or data in the note body (`updates` table)**. The note body is for user-written markdown content only. Plugin configuration and data MUST be stored in dedicated plugin tables (`ct_<pluginID>_*`). Reading from `updates.body` inside `ProcessLoad` to recover plugin state is a misuse and unacceptable. Always create proper tables via `InitSchema` and persist through `ProcessSave`.
 
 ### Reference implementations
 
