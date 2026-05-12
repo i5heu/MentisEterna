@@ -53,10 +53,11 @@
   - [ ] Shows latest notes, current tasks, weather
 - [ ] Gridfinity note type
 - [ ] Car refuling log note type
-  - [ ] care refuleling log overview dashboard
+  - [ ] Car refuleling log overview dashboard
 - [ ] Wants and wishes note type
   - [ ] wants and wishes overview dashboard
-- [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note 
+- [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note
+- [ ] Jornal Note Type - daily journal with mood tracking, gratitude log, etc.
 
 ## Prerequisites
 
