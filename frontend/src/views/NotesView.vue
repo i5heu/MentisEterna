@@ -522,7 +522,7 @@
                     <input
                         v-model="newReplyTitle"
                         class="composer-title"
-                        placeholder="Reply title…"
+                        placeholder="Reply title (optional — auto-generated if blank)"
                         @keydown.enter.exact="sendReply"
                     />
                     <div class="composer-body-row">
@@ -536,7 +536,7 @@
                         />
                         <button
                             class="btn-primary composer-send"
-                            :disabled="!newReplyTitle.trim() || sendingReply"
+                            :disabled="sendingReply"
                             @click="sendReply"
                         >
                             {{ sendingReply ? "…" : "Send" }}
@@ -658,7 +658,7 @@
                 <input
                     v-model="threadReplyTitle"
                     class="composer-title"
-                    placeholder="Reply title…"
+                    placeholder="Reply title (optional — auto-generated if blank)"
                 />
                 <div class="composer-body-row">
                     <textarea
@@ -669,9 +669,7 @@
                     />
                     <button
                         class="btn-primary composer-send"
-                        :disabled="
-                            !threadReplyTitle.trim() || threadSendingReply
-                        "
+                        :disabled="threadSendingReply"
                         @click="sendThreadReply"
                     >
                         {{ threadSendingReply ? "…" : "Send" }}
@@ -1257,7 +1255,7 @@ function closeThreadSidebar() {
 }
 
 async function sendThreadReply() {
-    if (!threadReplyTitle.value.trim() || threadSendingReply.value) return;
+    if (threadSendingReply.value) return;
     if (!threadNote.value?.id) return;
     threadSendingReply.value = true;
     try {
@@ -1440,7 +1438,7 @@ async function removeAttachment(file) {
 
 // Send a reply (creates a new child note)
 async function sendReply() {
-    if (!newReplyTitle.value.trim() || sendingReply.value) return;
+    if (sendingReply.value) return;
     if (!selected.value?.id) {
         // If the current note is not yet saved, save it first
         if (dirty.value) await save();
