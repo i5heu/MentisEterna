@@ -58,6 +58,8 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 
 	// Enqueue OCR for image files
 	s.enqueueOCR(rec.ID)
+	// Enqueue STT for audio files
+	s.enqueueSTT(rec.ID)
 
 	nf := media.NoteFile{
 		ID:        rec.ID,
@@ -66,6 +68,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		SizeBytes: rec.SizeBytes,
 		URL:       fmt.Sprintf("/file/%d/%d", noteID, rec.ID),
 		IsImage:   media.IsImage(rec.MimeType),
+		IsAudio:   media.IsAudio(rec.MimeType),
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -121,6 +124,8 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 
 	// Enqueue OCR for image files
 	s.enqueueOCR(rec.ID)
+	// Enqueue STT for audio files
+	s.enqueueSTT(rec.ID)
 
 	url := fmt.Sprintf("/file/%d/%d", noteID, rec.ID)
 
@@ -140,6 +145,7 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 			SizeBytes: rec.SizeBytes,
 			URL:       url,
 			IsImage:   media.IsImage(rec.MimeType),
+			IsAudio:   media.IsAudio(rec.MimeType),
 		},
 		"markdown": markdown,
 		"results":  results,
@@ -206,6 +212,45 @@ func (s *Server) handleFileOCR(w http.ResponseWriter, r *http.Request) {
 	result, err := s.mediaService.GetOCRResult(fileID)
 	if err != nil {
 		http.Error(w, "OCR result not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// --- Serve File STT ---
+
+// handleFileSTT handles GET /files/:fileID/stt
+// Returns the STT result for a file.
+func (s *Server) handleFileSTT(w http.ResponseWriter, r *http.Request) {
+	if s.mediaService == nil {
+		http.Error(w, "media not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract file ID from /files/:fileID/stt
+	path := strings.TrimPrefix(r.URL.Path, "/files/")
+	path = strings.TrimSuffix(path, "/stt")
+	fileID, err := strconv.ParseInt(path, 10, 64)
+	if err != nil || fileID <= 0 {
+		http.Error(w, "invalid file id", http.StatusBadRequest)
+		return
+	}
+
+	// Verify file exists
+	var exists bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM files WHERE id = ? AND deleted_at IS NULL)`, fileID).Scan(&exists); err != nil || !exists {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	result, err := s.mediaService.GetSTTResult(fileID)
+	if err != nil {
+		http.Error(w, "STT result not found", http.StatusNotFound)
 		return
 	}
 

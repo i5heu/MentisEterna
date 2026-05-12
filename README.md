@@ -40,6 +40,7 @@ export LOCALAI_BASE_URL="http://localhost:8080"  # LocalAI server URL
 export LOCALAI_EMBEDDING_MODEL="Qwen3-Embedding-4B-GGUF"  # Model for embeddings
 export LOCALAI_CHAT_MODEL="gemma-3-4b-it"  # Model for title generation
 export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
+export LOCALAI_STT_MODEL="nemo-parakeet-tdt-0.6b"  # Whisper-compatible model for speech-to-text
 export MEDIA_CACHE_DIR="/var/mentis/cache"  # Local directory for encrypted file cache
 export MEDIA_S3_ENDPOINTS='[
   {

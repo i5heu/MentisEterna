@@ -146,6 +146,7 @@ npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 | `LOCALAI_EMBEDDING_MAX_CHARS` | `16384` | Max runes per embedding request (avoids context overflow) |
 | `LOCALAI_CHAT_MODEL` | `gpt-3.5-turbo` | Chat/generation model (title generation) |
 | `LOCALAI_OCR_MODEL` | `gpt-4o-mini` | Multimodal vision model for OCR |
+| `LOCALAI_STT_MODEL` | `nemo-parakeet-tdt-0.6b` | Whisper-compatible model for speech-to-text transcription |
 | `VSS_EXT_PATH` | auto-detected | Directory containing `vector0.so` and `vss0.so` |
 | `BACKUP_ENCRYPTION_KEY` | none (backups disabled) | hex-encoded 64-char AES-256 key for encrypted backups |
 | `MEDIA_CACHE_DIR` | required for media | Directory for local file cache (also required for backups) |

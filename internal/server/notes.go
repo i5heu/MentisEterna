@@ -40,6 +40,7 @@ type NoteFile struct {
 	SizeBytes int64  `json:"size_bytes"`
 	URL       string `json:"url"`
 	IsImage   bool   `json:"is_image"`
+	IsAudio   bool   `json:"is_audio"`
 }
 
 type NoteUpdate struct {
@@ -157,6 +158,7 @@ func (s *Server) loadNoteAttachments(noteID int64) ([]NoteFile, error) {
 		}
 		nf.URL = fmt.Sprintf("/file/%d/%d", noteID, nf.ID)
 		nf.IsImage = isImageMIME(nf.MimeType)
+		nf.IsAudio = isAudioMIME(nf.MimeType)
 		files = append(files, nf)
 	}
 	return files, rows.Err()
@@ -166,6 +168,16 @@ func (s *Server) loadNoteAttachments(noteID int64) ([]NoteFile, error) {
 func isImageMIME(mimeType string) bool {
 	switch mimeType {
 	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/tiff":
+		return true
+	default:
+		return false
+	}
+}
+
+// isAudioMIME returns true if the given MIME type represents an audio file.
+func isAudioMIME(mimeType string) bool {
+	switch mimeType {
+	case "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/webm", "audio/flac", "audio/aac":
 		return true
 	default:
 		return false
@@ -897,6 +909,93 @@ func (s *Server) enqueueOCREmbedding(fileID int64, ocrText string) {
 	}
 }
 
+// sttFileTask is the job task handler for STT on uploaded audio files.
+// It accepts a JSON payload with "file_id" field.
+func (s *Server) sttFileTask(db *sql.DB, payload []byte) (string, error) {
+	if s.sttClient == nil || s.mediaService == nil {
+		return "", fmt.Errorf("stt_file: STT client or media service not configured")
+	}
+	var p struct {
+		FileID int64 `json:"file_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("stt_file: invalid payload: %w", err)
+	}
+
+	ctx := context.Background()
+	result, err := s.mediaService.RunSTTForFile(ctx, p.FileID, s.sttClient)
+	if err != nil {
+		return "", err
+	}
+	if result.Error != "" {
+		return fmt.Sprintf("STT for file %d completed with error: %s", p.FileID, result.Error), nil
+	}
+
+	// STT succeeded: generate and store the embedding for this STT text.
+	s.enqueueSTTEmbedding(p.FileID, result.STTText)
+
+	return fmt.Sprintf("STT for file %d completed: %d chars", p.FileID, len(result.STTText)), nil
+}
+
+// enqueueSTT enqueues an STT job for the given file ID, if it's an audio type.
+func (s *Server) enqueueSTT(fileID int64) {
+	if s.jobManager == nil || s.mediaService == nil || s.sttClient == nil {
+		return
+	}
+	s.mediaService.EnqueueSTT(fileID)
+}
+
+// syncSTTEmbeddingTask generates a VSS embedding for STT text and stores it
+// in vss_files_stt (rowid = file_id). The payload is {"file_id": N, "stt_text": "..."}.
+func (s *Server) syncSTTEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
+	if s.llm == nil {
+		return "", fmt.Errorf("stt_embedding: no embedding client configured")
+	}
+	var p struct {
+		FileID  int64  `json:"file_id"`
+		STTText string `json:"stt_text"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("stt_embedding: invalid payload: %w", err)
+	}
+	if p.STTText == "" {
+		return fmt.Sprintf("Skipped embedding for file %d: empty STT text", p.FileID), nil
+	}
+
+	text := llm.TruncateForEmbedding(p.STTText)
+	vec, err := s.llm.GenerateEmbedding(text)
+	if err != nil {
+		return "", fmt.Errorf("generate STT embedding: %w", err)
+	}
+	vecJSON := llm.EmbeddingToJSON(vec)
+
+	// vss0 virtual tables don't support UPDATE/INSERT OR REPLACE.
+	if _, err := db.Exec(`DELETE FROM vss_files_stt WHERE rowid = ?`, p.FileID); err != nil {
+		return "", fmt.Errorf("delete old STT embedding: %w", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO vss_files_stt(rowid, stt_embedding) VALUES (?, ?)`,
+		p.FileID, vecJSON,
+	); err != nil {
+		return "", fmt.Errorf("insert STT embedding: %w", err)
+	}
+	return fmt.Sprintf("Indexed STT for file %d (%d chars)", p.FileID, len(p.STTText)), nil
+}
+
+// enqueueSTTEmbedding enqueues a sync_stt_embedding job for the given file.
+func (s *Server) enqueueSTTEmbedding(fileID int64, sttText string) {
+	if s.jobManager == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"file_id":  fileID,
+		"stt_text": sttText,
+	})
+	if _, err := s.jobManager.Enqueue("_system", "sync_stt_embedding", payload); err != nil {
+		log.Printf("stt: enqueue embedding for file %d: %v", fileID, err)
+	}
+}
+
 // enqueueTitleGeneration enqueues a generate_title job for the given note.
 func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
 	if s.jobManager == nil || s.chatClient == nil {
@@ -948,7 +1047,7 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect distances by note ID from both vss_notes and vss_files_ocr.
+	// Collect distances by note ID from vss_notes, vss_files_ocr, and vss_files_stt.
 	distByID := make(map[int64]float64)
 
 	if vssCount > 0 {
@@ -1036,6 +1135,77 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 								return
 							}
 							dist := ocrDistByFile[fileID]
+							// Merge: keep the best (minimum) distance per note.
+							if existing, ok := distByID[noteID]; !ok || dist < existing {
+								distByID[noteID] = dist
+							}
+						}
+						refRows.Close()
+					}
+				}
+			}
+		}
+	}
+
+	// Step 1c: Search vss_files_stt (STT text embeddings) and resolve to notes.
+	// Check if the STT VSS table exists and has data.
+	var sttVSSExists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='vss_files_stt')`).Scan(&sttVSSExists)
+	if sttVSSExists {
+		var sttCount int
+		s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_stt`).Scan(&sttCount)
+		if sttCount > 0 {
+			sttRows, err := s.db.Query(`
+				SELECT rowid, distance
+				FROM vss_files_stt
+				WHERE vss_search(stt_embedding, ?)
+				ORDER BY distance ASC
+				LIMIT 20
+			`, vecJSON)
+			if err == nil {
+				// Collect file IDs from STT hits.
+				sttDistByFile := map[int64]float64{}
+				for sttRows.Next() {
+					var fileID int64
+					var dist float64
+					if err := sttRows.Scan(&fileID, &dist); err != nil {
+						sttRows.Close()
+						writeErr(w, err)
+						return
+					}
+					sttDistByFile[fileID] = dist
+				}
+				sttRows.Close()
+
+				// Resolve file IDs to note IDs via files_refs.
+				if len(sttDistByFile) > 0 {
+					fileIDs := make([]int64, 0, len(sttDistByFile))
+					for fid := range sttDistByFile {
+						fileIDs = append(fileIDs, fid)
+					}
+					// Build IN clause.
+					filePlaceholders := make([]string, len(fileIDs))
+					fileArgs := make([]any, len(fileIDs))
+					for i, fid := range fileIDs {
+						filePlaceholders[i] = "?"
+						fileArgs[i] = fid
+					}
+					refRows, err := s.db.Query(`
+							SELECT DISTINCT fr.note_id, fr.file_id
+							FROM files_refs fr
+							JOIN files f ON f.id = fr.file_id
+							WHERE fr.file_id IN (`+strings.Join(filePlaceholders, ",")+`)
+							  AND f.deleted_at IS NULL
+						`, fileArgs...)
+					if err == nil {
+						for refRows.Next() {
+							var noteID, fileID int64
+							if err := refRows.Scan(&noteID, &fileID); err != nil {
+								refRows.Close()
+								writeErr(w, err)
+								return
+							}
+							dist := sttDistByFile[fileID]
 							// Merge: keep the best (minimum) distance per note.
 							if existing, ok := distByID[noteID]; !ok || dist < existing {
 								distByID[noteID] = dist
