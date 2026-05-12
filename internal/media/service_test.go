@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -64,6 +65,19 @@ func (f *fakeReplicaStore) Delete(ctx context.Context, ep EndpointConfig, key st
 	delete(f.objects, ep.ID+"/"+key)
 	delete(f.etags, ep.ID+"/"+key)
 	return nil
+}
+
+func (f *fakeReplicaStore) List(_ context.Context, ep EndpointConfig, prefix string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var keys []string
+	fullPrefix := ep.ID + "/" + prefix
+	for k := range f.objects {
+		if strings.HasPrefix(k, fullPrefix) {
+			keys = append(keys, strings.TrimPrefix(k, ep.ID+"/"))
+		}
+	}
+	return keys, nil
 }
 
 // --- Helpers ---

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/i5heu/MentisEterna/internal/db"
@@ -69,6 +70,17 @@ func (f *fakeMediaStore) Get(_ context.Context, ep media.EndpointConfig, key str
 func (f *fakeMediaStore) Delete(_ context.Context, ep media.EndpointConfig, key string) error {
 	delete(f.objects, ep.ID+"/"+key)
 	return nil
+}
+
+func (f *fakeMediaStore) List(_ context.Context, ep media.EndpointConfig, prefix string) ([]string, error) {
+	var keys []string
+	fullPrefix := ep.ID + "/" + prefix
+	for k := range f.objects {
+		if strings.HasPrefix(k, fullPrefix) {
+			keys = append(keys, strings.TrimPrefix(k, ep.ID+"/"))
+		}
+	}
+	return keys, nil
 }
 
 // createTestNoteWithSession creates a note and returns the note ID + session token.

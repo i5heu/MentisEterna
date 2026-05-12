@@ -179,14 +179,15 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Printf("media: jobs registered")
 	}
 
-	// Register encrypted backup cron job.
+	// Register encrypted backup and retention purge cron jobs.
 	if s.backupService != nil {
 		if err := s.jobManager.UpsertDefinitions("_backup", []jobs.CronJob{
 			{Name: "encrypted_backup", Schedule: "@every 12h", Task: s.backupTask},
+			{Name: "retention_purge", Schedule: "@every 24h", Task: s.purgeTask},
 		}); err != nil {
 			log.Fatalf("Failed to register backup job: %v", err)
 		}
-		log.Printf("backup: job registered (schedule: @daily)")
+		log.Printf("backup: jobs registered (encrypted_backup: @every 12h, retention_purge: @every 24h)")
 	}
 
 	// Start workers after all task registrations are complete.

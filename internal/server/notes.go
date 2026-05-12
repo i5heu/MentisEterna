@@ -795,6 +795,21 @@ func (s *Server) backupTask(db *sql.DB, _ []byte) (string, error) {
 	return fmt.Sprintf("Backup uploaded to %s", remoteKey), nil
 }
 
+// purgeTask is the job task handler for backup retention cleanup.
+// It lists all backups across all configured S3 endpoints, applies the
+// default retention policy, and deletes expired backups.
+func (s *Server) purgeTask(db *sql.DB, _ []byte) (string, error) {
+	if s.backupService == nil {
+		return "", fmt.Errorf("backup/purge: service not configured")
+	}
+	ctx := context.Background()
+	summary, err := s.backupService.Purge(ctx)
+	if err != nil {
+		return "", fmt.Errorf("backup/purge: %w", err)
+	}
+	return summary, nil
+}
+
 // enqueueTitleGeneration enqueues a generate_title job for the given note.
 func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
 	if s.jobManager == nil || s.chatClient == nil {
