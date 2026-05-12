@@ -711,6 +711,7 @@ func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
 	}
 
 	text := llm.CombineTitleBody(p.Title, p.Body)
+	text = llm.TruncateForEmbedding(text)
 	vec, err := s.llm.GenerateEmbedding(text)
 	if err != nil {
 		return "", fmt.Errorf("generate embedding: %w", err)
@@ -813,6 +814,7 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	query = llm.TruncateForEmbedding(query)
 	vec, err := s.llm.GenerateEmbedding(query)
 	if err != nil {
 		log.Printf("vss: search embedding: %v", err)

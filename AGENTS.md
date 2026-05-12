@@ -140,7 +140,8 @@ npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 | `ADDR` | `:8080` | HTTP listen address |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama instance URL |
 | `OLLAMA_EMBEDDING_MODEL` | `hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M` | Embedding model |
-| `OLLAMA_CHAT_MODEL` | `llama3.2:3b` | Chat/generation model (title generation) |
+| `OLLAMA_EMBEDDING_MAX_CHARS` | `16384` | Max runes per embedding request (avoids context overflow) |
+| `OLLAMA_CHAT_MODEL` | `hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M` | Chat/generation model (title generation) |
 | `VSS_EXT_PATH` | auto-detected | Directory containing `vector0.so` and `vss0.so` |
 
 ## Key Quirks
