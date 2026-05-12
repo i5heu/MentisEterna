@@ -320,7 +320,10 @@
                             <span class="message-badge">root</span>
                         </div>
                         <div class="message-body">
-                            <div v-if="isEditing" class="body-textarea-wrapper">
+                            <div
+                                v-if="isEditing && selected.type !== 'index'"
+                                class="body-textarea-wrapper"
+                            >
                                 <textarea
                                     ref="bodyTextarea"
                                     v-model="editBody"
@@ -415,7 +418,7 @@
                                 </div>
                             </div>
                             <div
-                                v-else
+                                v-else-if="selected.type !== 'index'"
                                 class="body-rendered markdown-body"
                                 v-html="renderedBody"
                             />
@@ -812,6 +815,7 @@ const typeOptions = [
     { value: "recipe", label: "Recipe" },
     { value: "recipe_overview", label: "Recipe Overview" },
     { value: "example", label: "Example (Checklist)" },
+    { value: "index", label: "Tag Index" },
 ];
 const saveError = ref("");
 const showDeleteModal = ref(false);
@@ -974,18 +978,19 @@ async function selectNote(note) {
         const full = await fetchNote(props.token, note.id);
         selected.value = full;
         editTitle.value = full.title;
-        editBody.value = full.body;
         noteType.value = full.type || "standard";
         customData.value = full.custom_data || null;
         editTags.value = full.tags || [];
+        // For index notes, the body is JSON config — don't show it as markdown.
+        editBody.value = full.type === "index" ? "" : full.body;
     } catch {
         // Fallback to the sidebar data if fetch fails.
         selected.value = note;
         editTitle.value = note.title;
-        editBody.value = note.body;
         noteType.value = note.type || "standard";
         customData.value = note.custom_data || null;
         editTags.value = note.tags || [];
+        editBody.value = note.type === "index" ? "" : note.body;
     }
     dirty.value = false;
     saveError.value = "";
@@ -1012,10 +1017,10 @@ async function selectSearchResult(sr) {
         updated_at: sr.updated_at,
     };
     editTitle.value = sr.title;
-    editBody.value = sr.body;
     noteType.value = sr.type || "standard";
     customData.value = null;
     editTags.value = sr.tags || [];
+    editBody.value = sr.type === "index" ? "" : sr.body;
     dirty.value = false;
     saveError.value = "";
     showHistory.value = false;
@@ -1334,13 +1339,19 @@ async function save() {
     saveError.value = "";
     saving.value = true;
     try {
+        // For index notes, store the config as the body.
+        let bodyToSave = editBody.value;
+        if (noteType.value === "index") {
+            bodyToSave = JSON.stringify(customData.value || { mode: "global" });
+        }
+
         let updated;
         if (selected.value.id) {
             updated = await updateNote(
                 props.token,
                 selected.value.id,
                 editTitle.value,
-                editBody.value,
+                bodyToSave,
                 selected.value.parent_id,
                 noteType.value,
                 customData.value,
@@ -1353,7 +1364,7 @@ async function save() {
             updated = await createNote(
                 props.token,
                 editTitle.value,
-                editBody.value,
+                bodyToSave,
                 selected.value.parent_id,
                 noteType.value,
                 customData.value,
