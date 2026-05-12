@@ -125,9 +125,15 @@ type generateResponse struct {
 // text content. It uses the Ollama /api/generate endpoint.
 func (c *ChatClient) GenerateTitle(text string) (string, error) {
 	systemPrompt := `You are a title generator for a personal note-taking app.
-Given the content of a note, produce a short, concise title (at most 80 characters)
-that captures the main topic. Return ONLY the title, with no quotes, prefixes, or
-additional commentary.`
+Given note content, output ONLY the title. Nothing else.
+
+The title will be shown as raw text to the user.
+
+Rules:
+- The title must be at most 30 characters.
+- Use only characters a-z, A-Z, 0-9, hyphens, and underscores. No spaces, no punctuation.
+- Output the title and nothing else: no quotes, no labels, no explanations, no preamble, no markdown, no formatting.
+- If the content is empty or unclear, use "Untitled".`
 
 	prompt := systemPrompt + "\n\nNote content:\n" + text
 

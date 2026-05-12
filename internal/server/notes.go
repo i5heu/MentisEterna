@@ -767,9 +767,9 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 	if title == "" {
 		return "Empty title generated, keeping Untitled", nil
 	}
-	// Truncate to a reasonable length.
-	if len(title) > 200 {
-		title = title[:200]
+	// Safety net: truncate to a reasonable length if the model misbehaves.
+	if len(title) > 60 {
+		title = title[:60]
 	}
 
 	if _, err := db.Exec(`UPDATE notes SET title = ? WHERE id = ?`, title, p.NoteID); err != nil {
