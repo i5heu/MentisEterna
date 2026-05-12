@@ -13,29 +13,30 @@ import (
 )
 
 // Embedder defines the interface for generating text embeddings.
-// This allows mocking in tests without requiring a running Ollama instance.
+// This allows mocking in tests without requiring a running LocalAI instance.
 type Embedder interface {
 	GenerateEmbedding(text string) ([]float64, error)
 }
 
 // Generator defines the interface for generating text via an LLM.
-// This allows mocking in tests without requiring a running Ollama instance.
+// This allows mocking in tests without requiring a running LocalAI instance.
 type Generator interface {
 	GenerateTitle(text string) (string, error)
 }
 
 // --- Shared HTTP client & base URL helpers ---
 
-// ollamaBaseURL returns the Ollama base URL, configurable via the
-// OLLAMA_BASE_URL environment variable (default: http://localhost:11434).
-func ollamaBaseURL() string {
-	if u := os.Getenv("OLLAMA_BASE_URL"); u != "" {
+// llmBaseURL returns the LocalAI base URL, configurable via the
+// LOCALAI_BASE_URL environment variable (default: http://localhost:8080).
+func llmBaseURL() string {
+	if u := os.Getenv("LOCALAI_BASE_URL"); u != "" {
 		return u
 	}
-	return "http://localhost:11434"
+	return "http://localhost:8080"
 }
 
-// EmbeddingClient communicates with an Ollama instance to generate embeddings.
+// EmbeddingClient communicates with a LocalAI instance to generate embeddings
+// via the OpenAI-compatible /v1/embeddings endpoint.
 type EmbeddingClient struct {
 	BaseURL string
 	Model   string
@@ -43,18 +44,19 @@ type EmbeddingClient struct {
 }
 
 // NewEmbeddingClient creates a client with sensible defaults. The base URL and
-// model can be overridden via environment variables OLLAMA_BASE_URL and
-// OLLAMA_EMBEDDING_MODEL.
+// model can be overridden via environment variables LOCALAI_BASE_URL and
+// LOCALAI_EMBEDDING_MODEL.
 func NewEmbeddingClient() *EmbeddingClient {
 	return &EmbeddingClient{
-		BaseURL: ollamaBaseURL(),
-		Model:   envOr("OLLAMA_EMBEDDING_MODEL", "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M"),
+		BaseURL: llmBaseURL(),
+		Model:   envOr("LOCALAI_EMBEDDING_MODEL", "text-embedding-ada-002"),
 		http:    &http.Client{},
 	}
 }
 
-// ChatClient communicates with an Ollama instance for text generation
-// (e.g., auto-generating note titles).
+// ChatClient communicates with a LocalAI instance for text generation
+// (e.g., auto-generating note titles) via the OpenAI-compatible
+// /v1/chat/completions endpoint.
 type ChatClient struct {
 	BaseURL string
 	Model   string
@@ -62,46 +64,49 @@ type ChatClient struct {
 }
 
 // NewChatClient creates a chat client with sensible defaults. The base URL
-// is configurable via OLLAMA_BASE_URL; the model via OLLAMA_CHAT_MODEL.
+// is configurable via LOCALAI_BASE_URL; the model via LOCALAI_CHAT_MODEL.
 func NewChatClient() *ChatClient {
 	return &ChatClient{
-		BaseURL: ollamaBaseURL(),
-		Model:   envOr("OLLAMA_CHAT_MODEL", "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"),
+		BaseURL: llmBaseURL(),
+		Model:   envOr("LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"),
 		http:    &http.Client{},
 	}
 }
 
+// OpenAI-compatible embedding request/response types.
 type embeddingRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
+	Model string `json:"model"`
+	Input string `json:"input"`
 }
 
 type embeddingResponse struct {
-	Embedding []float64 `json:"embedding"`
+	Data []struct {
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
 }
 
-// GenerateEmbedding hits the Ollama /api/embeddings endpoint and returns a
-// slice of float64 values representing the sentence embedding.
+// GenerateEmbedding hits the LocalAI /v1/embeddings endpoint (OpenAI-compatible)
+// and returns a slice of float64 values representing the sentence embedding.
 func (c *EmbeddingClient) GenerateEmbedding(text string) ([]float64, error) {
 	reqBody := embeddingRequest{
-		Model:  c.Model,
-		Prompt: text,
+		Model: c.Model,
+		Input: text,
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.BaseURL + "/api/embeddings"
+	url := c.BaseURL + "/v1/embeddings"
 	resp, err := c.http.Post(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("ollama request: %w", err)
+		return nil, fmt.Errorf("localai request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("localai returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var er embeddingResponse
@@ -109,25 +114,35 @@ func (c *EmbeddingClient) GenerateEmbedding(text string) ([]float64, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return er.Embedding, nil
+	if len(er.Data) == 0 {
+		return nil, fmt.Errorf("localai returned no embedding data")
+	}
+
+	return er.Data[0].Embedding, nil
 }
 
 // --- Chat / Generation ---
 
-type generateRequest struct {
-	Model   string         `json:"model"`
-	Prompt  string         `json:"prompt"`
-	System  string         `json:"system"`
-	Stream  bool           `json:"stream"`
-	Options map[string]any `json:"options,omitempty"`
+// OpenAI-compatible chat completion request/response types.
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
-type generateResponse struct {
-	Response string `json:"response"`
+type chatCompletionRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+}
+
+type chatCompletionResponse struct {
+	Choices []struct {
+		Message chatMessage `json:"message"`
+	} `json:"choices"`
 }
 
 // GenerateTitle asks the LLM to produce a short, concise title given a note's
-// text content. It uses the Ollama /api/generate endpoint.
+// text content. It uses the LocalAI /v1/chat/completions endpoint (OpenAI-compatible).
 func (c *ChatClient) GenerateTitle(text string) (string, error) {
 	systemPrompt := `You are a highly constrained, automated backend microservice responsible for generating note titles. Your sole function is to receive raw note content and output a single, strictly formatted text string.
 
@@ -155,38 +170,41 @@ Output: Untitled
 INPUT TO PROCESS:
 [Insert User Note Content Here]`
 
-	reqBody := generateRequest{
-		Model:  c.Model,
-		System: systemPrompt,
-		Prompt: text,
-		Stream: false,
-		Options: map[string]any{
-			"num_predict": 40,
+	reqBody := chatCompletionRequest{
+		Model: c.Model,
+		Messages: []chatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: text},
 		},
+		Stream: false,
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.BaseURL + "/api/generate"
+	url := c.BaseURL + "/v1/chat/completions"
 	resp, err := c.http.Post(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("ollama request: %w", err)
+		return "", fmt.Errorf("localai request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ollama returned %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("localai returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	var gr generateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
+	var cr chatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 
-	return gr.Response, nil
+	if len(cr.Choices) == 0 {
+		return "", fmt.Errorf("localai returned no choices")
+	}
+
+	return cr.Choices[0].Message.Content, nil
 }
 
 // EmbeddingToJSON marshals a float64 slice to a VSS-compatible JSON array
@@ -204,15 +222,14 @@ func CombineTitleBody(title, body string) string {
 	return title + "\n" + body
 }
 
-// maxEmbeddingChars is the fallback limit when OLLAMA_EMBEDDING_MAX_CHARS is not set.
-// Qwen3-Embedding-4B has a 32K token context; but Ollama reports context errors even
-// well below that threshold, so we default to a conservative 16K runes (≈ 4K tokens).
+// maxEmbeddingChars is the fallback limit when LOCALAI_EMBEDDING_MAX_CHARS is not set.
+// Defaults to a conservative 16K runes (≈ 4K tokens) to avoid context overflow.
 const maxEmbeddingChars = 16 * 1024 // 16K runes
 
 // MaxEmbeddingChars returns the rune limit for embedding input. Read from the
-// OLLAMA_EMBEDDING_MAX_CHARS env var at init time; defaults to 16K if unset.
+// LOCALAI_EMBEDDING_MAX_CHARS env var at init time; defaults to 16K if unset.
 var MaxEmbeddingChars = func() int {
-	if v := os.Getenv("OLLAMA_EMBEDDING_MAX_CHARS"); v != "" {
+	if v := os.Getenv("LOCALAI_EMBEDDING_MAX_CHARS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}

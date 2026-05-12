@@ -36,8 +36,10 @@ As I am building for a long time now on [OuroborosDB](https://github.com/i5heu/o
 ## Usage
 Environment variables:
 ```bash
-export OLLAMA_HOST="http://localhost:11434"  # Ollama server URL
-export OLLAMA_MODEL="hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M"  # Ollama model for embedding and generation
+export LOCALAI_BASE_URL="http://localhost:8080"  # LocalAI server URL
+export LOCALAI_EMBEDDING_MODEL="Qwen3-Embedding-4B-GGUF"  # Model for embeddings
+export LOCALAI_CHAT_MODEL="gemma-3-4b-it"  # Model for title generation
+export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
 export MEDIA_CACHE_DIR="/var/mentis/cache"  # Local directory for encrypted file cache
 export MEDIA_S3_ENDPOINTS='[
   {
@@ -55,6 +57,12 @@ export BACKUP_ENCRYPTION_KEY="your-encryption-key"  # Encryption key for backups
 
 Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
+**Models**:  
+`hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M`  
+`hf.co/ggml-org/GLM-OCR-GGUF:Q8_0`
+
+
+
 ## TODO MVP
 - [x] Pin notes 
 - [x] Chat like UI
@@ -69,7 +77,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] tags
   - [x] index note type
 - [x] Auto Title Generator
-  - [x] OLLAMA url configurable via env var
+  - [x] LocalAI URL configurable via env var
 - [x] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
 - [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
 
@@ -108,8 +116,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
 ## Prerequisites
 
-- Ollama: [Installation Guide](https://ollama.com/docs/installation)
-- Qwen/Qwen3-Embedding-4B-GGUF: `ollama pull hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M`
+- LocalAI: [Installation Guide](https://localai.io/basics/getting_started/)
+- An embedding model (e.g. `text-embedding-ada-002`) and a chat model (e.g. `gpt-3.5-turbo`) loaded in LocalAI
 
 ## S3 Media Storage
 

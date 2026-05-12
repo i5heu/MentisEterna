@@ -9,12 +9,12 @@ import (
 	"testing"
 )
 
-// mockOCRServer returns an httptest server that emulates the Ollama
-// /api/generate endpoint for OCR requests.
+// mockOCRServer returns an httptest server that emulates the LocalAI
+// /v1/chat/completions endpoint for OCR (multimodal vision) requests.
 func mockOCRServer(t *testing.T, response string, statusCode int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/generate" {
+		if r.URL.Path != "/v1/chat/completions" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -28,7 +28,7 @@ func mockOCRServer(t *testing.T, response string, statusCode int) *httptest.Serv
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"response":"` + response + `"}`))
+		w.Write([]byte(`{"choices":[{"message":{"content":"` + response + `"}}]}`))
 	}))
 }
 
@@ -38,7 +38,7 @@ func TestOCRClientRunOCR(t *testing.T) {
 
 	client := &OCRClient{
 		BaseURL: srv.URL,
-		Model:   "glm-ocr:latest",
+		Model:   "gpt-4o-mini",
 		http:    &http.Client{},
 	}
 
@@ -71,20 +71,28 @@ func TestOCRClientRunOCR(t *testing.T) {
 func TestOCRClientRunOCRSendsBase64Image(t *testing.T) {
 	var capturedBase64 string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Parse the request body to capture the base64 image
-		var req ocrGenerateRequest
+		// Parse the request body to capture the base64 image from the vision message
+		var req visionCompletionRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		if len(req.Images) > 0 {
-			capturedBase64 = req.Images[0]
+		if len(req.Messages) > 0 && len(req.Messages[0].Content) > 0 {
+			for _, part := range req.Messages[0].Content {
+				if part.Type == "image_url" && part.ImageURL != nil {
+					// Extract base64 from data URL: data:image/png;base64,<base64>
+					url := part.ImageURL.URL
+					if idx := strings.Index(url, ";base64,"); idx >= 0 {
+						capturedBase64 = url[idx+8:]
+					}
+				}
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"response":"OK"}`))
+		w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
 	}))
 	defer srv.Close()
 
 	client := &OCRClient{
 		BaseURL: srv.URL,
-		Model:   "glm-ocr:latest",
+		Model:   "gpt-4o-mini",
 		http:    &http.Client{},
 	}
 
@@ -110,7 +118,7 @@ func TestOCRClientRunOCRErrorOnHTTPError(t *testing.T) {
 
 	client := &OCRClient{
 		BaseURL: srv.URL,
-		Model:   "glm-ocr:latest",
+		Model:   "gpt-4o-mini",
 		http:    &http.Client{},
 	}
 
@@ -126,7 +134,7 @@ func TestOCRClientRunOCRErrorOnHTTPError(t *testing.T) {
 func TestOCRClientRunOCRErrorOnConnectionFailure(t *testing.T) {
 	client := &OCRClient{
 		BaseURL: "http://localhost:0", // invalid port
-		Model:   "glm-ocr:latest",
+		Model:   "gpt-4o-mini",
 		http:    &http.Client{},
 	}
 
@@ -138,7 +146,7 @@ func TestOCRClientRunOCRErrorOnConnectionFailure(t *testing.T) {
 
 func TestNewOCRClientDefaults(t *testing.T) {
 	// Test only that NewOCRClient returns a non-nil client with defaults.
-	// We can't test the actual Ollama connection here.
+	// We can't test the actual LocalAI connection here.
 	client := NewOCRClient()
 	if client == nil {
 		t.Fatal("expected non-nil client")

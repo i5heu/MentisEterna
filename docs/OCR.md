@@ -1,11 +1,11 @@
 # OCR (Optical Character Recognition)
 
-OCR automatically extracts text from uploaded images using Ollama's multimodal `glm-ocr:latest` model.
+OCR automatically extracts text from uploaded images using LocalAI's OpenAI-compatible vision API.
 
 ## Architecture
 
 ```
-files_ocr table  ←  media/ocr.go (OCR service)  ←  llm/ocr.go (OCR client)  →  Ollama /api/generate
+files_ocr table  ←  media/ocr.go (OCR service)  ←  llm/ocr.go (OCR client)  →  LocalAI /v1/chat/completions
        ↑                                                    ↑
        |                                          Job system triggers
   vss_files_ocr                                  ocr_file task after upload
@@ -19,7 +19,7 @@ files_ocr table  ←  media/ocr.go (OCR service)  ←  llm/ocr.go (OCR client)  
 ## How It Works
 
 1. **Upload triggers OCR** — When a file is uploaded (as an attachment or inline), the server enqueues a background `ocr_file` job if the MIME type is an image.
-2. **OCR job runs** — The job decrypts the file, sends the binary image data (base64-encoded) to Ollama's `/api/generate` endpoint with the configured OCR model, and stores the result in the `files_ocr` table.
+2. **OCR job runs** — The job decrypts the file, sends the binary image data as a base64 data URL to LocalAI's `/v1/chat/completions` endpoint (OpenAI-compatible multimodal vision), and stores the result in the `files_ocr` table.
 3. **Embedding generation** — After a successful OCR, a `sync_ocr_embedding` job generates a VSS vector from the OCR text and stores it in `vss_files_ocr` (separate from `vss_notes`).
 4. **Search** — The `/notes/search` endpoint queries both `vss_notes` (note body) and `vss_files_ocr` (OCR text). OCR file hits are resolved to their parent notes via `files_refs`. Results are merged by minimum distance per note.
 5. **Retrieve results** — Call `GET /files/:fileID/ocr` to get the recognized text.
@@ -41,7 +41,7 @@ CREATE TABLE files_ocr (
 
 - `file_id` is the primary key, one row per file.
 - `ocr_text` contains the recognized text.
-- `model` records which Ollama model was used.
+- `model` records which LocalAI model was used.
 - `error` is set when OCR fails (e.g., unsupported MIME type, model error, connection timeout).
 
 ### `vss_files_ocr` — Semantic search vectors
@@ -87,8 +87,8 @@ Returns the OCR result for a file.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_OCR_MODEL` | `glm-ocr:latest` | The multimodal model used for OCR |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama instance URL (shared with embeddings/chat) |
+| `LOCALAI_OCR_MODEL` | `gpt-4o-mini` | The multimodal model used for OCR |
+| `LOCALAI_BASE_URL` | `http://localhost:8080` | LocalAI instance URL (shared with embeddings/chat) |
 
 ## Supported Image Types
 
@@ -140,8 +140,8 @@ This means searching for "invoice" will find notes that have scanned images cont
 OCR is **best-effort** — failures don't block file upload. Errors are logged and stored in the `files_ocr.error` column. Common failure modes:
 
 - **Unsupported MIME type**: The file is not an image.
-- **Model not found**: `glm-ocr:latest` isn't pulled in Ollama (`ollama pull glm-ocr:latest`).
-- **Connection error**: Ollama is unreachable.
+- **Model not found**: The configured OCR model isn't loaded in LocalAI.
+- **Connection error**: LocalAI is unreachable.
 - **Decryption error**: File cache or S3 replica is unavailable.
 
 ## Testing
