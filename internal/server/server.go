@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/i5heu/MentisEterna/internal/backup"
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
@@ -21,14 +24,15 @@ import (
 )
 
 type Server struct {
-	db           *db.DB
-	addr         string
-	llm          llm.Embedder
-	chatClient   llm.Generator
-	webauthn     *webauthn.WebAuthn
-	sessionStore *webAuthnSessionStore
-	jobManager   *jobs.Manager
-	mediaService *media.Service
+	db            *db.DB
+	addr          string
+	llm           llm.Embedder
+	chatClient    llm.Generator
+	webauthn      *webauthn.WebAuthn
+	sessionStore  *webAuthnSessionStore
+	jobManager    *jobs.Manager
+	mediaService  *media.Service
+	backupService *backup.Service
 }
 
 func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator) *Server {
@@ -64,24 +68,43 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 
 	// Media subsystem: set up cache, S3 store, and the service orchestrator.
 	var mediaSvc *media.Service
+	var mediaEndpoints []media.EndpointConfig
 	mediaCfg, cfgErr := media.LoadConfigFromEnv()
 	if cfgErr != nil {
 		log.Printf("media: not enabled (%v)", cfgErr)
 	} else {
 		mediaSvc = media.NewService(d, mediaCfg)
+		mediaEndpoints = mediaCfg.Endpoints
 		// EnqueueFunc will be wired after jobMgr is started.
 		log.Printf("media: enabled with %d endpoint(s), cache=%s", len(mediaCfg.Endpoints), mediaCfg.CacheDir)
 	}
 
+	// Backup subsystem: AES-256-GCM encrypted SQLite backups to S3.
+	var backupSvc *backup.Service
+	if hexKey := os.Getenv("BACKUP_ENCRYPTION_KEY"); hexKey != "" {
+		key, keyErr := backup.KeyFromHex(hexKey)
+		if keyErr != nil {
+			log.Printf("backup: invalid BACKUP_ENCRYPTION_KEY (%v) — backups disabled", keyErr)
+		} else if len(mediaEndpoints) == 0 {
+			log.Printf("backup: encryption key set but no S3 endpoints configured — backups disabled")
+		} else {
+			backupSvc = backup.NewService(d.DB, media.NewS3Store(), mediaEndpoints, key)
+			log.Printf("backup: enabled with %d S3 endpoint(s)", len(mediaEndpoints))
+		}
+	} else {
+		log.Printf("backup: BACKUP_ENCRYPTION_KEY not set — backups disabled")
+	}
+
 	return &Server{
-		db:           d,
-		addr:         addr,
-		llm:          embeddingClient,
-		chatClient:   chatClient,
-		webauthn:     w,
-		sessionStore: newWebAuthnSessionStore(),
-		jobManager:   jobMgr,
-		mediaService: mediaSvc,
+		db:            d,
+		addr:          addr,
+		llm:           embeddingClient,
+		chatClient:    chatClient,
+		webauthn:      w,
+		sessionStore:  newWebAuthnSessionStore(),
+		jobManager:    jobMgr,
+		mediaService:  mediaSvc,
+		backupService: backupSvc,
 	}
 }
 
@@ -154,6 +177,16 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Fatalf("Failed to register media ad-hoc jobs: %v", err)
 		}
 		log.Printf("media: jobs registered")
+	}
+
+	// Register encrypted backup cron job.
+	if s.backupService != nil {
+		if err := s.jobManager.UpsertDefinitions("_backup", []jobs.CronJob{
+			{Name: "encrypted_backup", Schedule: "@every 12h", Task: s.backupTask},
+		}); err != nil {
+			log.Fatalf("Failed to register backup job: %v", err)
+		}
+		log.Printf("backup: job registered (schedule: @daily)")
 	}
 
 	// Start workers after all task registrations are complete.
@@ -254,6 +287,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/jobs", s.handleJobs)
 	mux.HandleFunc("/jobs/", s.handleJobByID)
 
+	// On-demand backup trigger
+	mux.HandleFunc("/backup/trigger", s.handleBackupTrigger)
+
 	// File serving endpoint
 	mux.HandleFunc("/file/", s.serveFile)
 
@@ -344,6 +380,30 @@ func (s *Server) handleJobByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// --- Backup Handler ---
+
+func (s *Server) handleBackupTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.backupService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Backups are not enabled. Set BACKUP_ENCRYPTION_KEY, MEDIA_CACHE_DIR, and MEDIA_S3_ENDPOINTS."})
+		return
+	}
+	// Enqueue a one-shot backup via the job system so it shows up in /jobs.
+	runID, err := s.jobManager.Enqueue("_backup", "encrypted_backup", nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to enqueue backup: %v", err)})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"run_id":  runID,
+		"message": "Backup job enqueued. Check /jobs for progress.",
+	})
 }
 
 // --- Helpers ---

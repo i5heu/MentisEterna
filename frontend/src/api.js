@@ -271,6 +271,13 @@ export async function cancelJob(token, runId) {
     });
 }
 
+export async function triggerBackup(token) {
+    return request("/backup/trigger", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 /**
  * Begin passkey login (discoverable / usernameless).
  */

@@ -1,12 +1,59 @@
 # MentisEterna
 
-> ⚠️⚠️⚠️ Do not use this. ⚠️⚠️⚠️   
-> This is a terrible generated mess of doom i created for prototyping. I only use it in a private VPN. It is absolutly not secure or safe to use.    
+> ☠️🚨⚠️⚠️⚠️ Do not use this. ⚠️⚠️⚠️🚨☠️   
+> This is a terrible generated mess of doom i created for prototyping.  
+> I only use it in a private VPN.   
+> It is absolutly not secure or safe to use.   
+
+
+As I am building for a long time now on [OuroborosDB](https://github.com/i5heu/ouroboros-db/) for personal knowledge management systems (PKM), I recognized that my inital ideas how a UI for it would look like where not overtaken by a desire for a radical diffrent way how i wanted to interact with my PKM. This is why i created this explorative project to test out a UI paradigm that i always have thought as the ideal but never had the chance to see it in action since no one bothered to build it a pkm in that way.
 
 <p align="center" style="margin: 2em;">
     <img width="280" height="280" style="border-radius: 3%; max-width: 100%" alt="Logo of OuroborosDB" src=".media/MentisEterna_logo.svg">
 </p>
 
+
+## Desgin Paradigm
+- **Minimum Decisions**: Any decision that doesn't have to be made is a good decision. The System should make as many decisions as possible for the user to reduce friction and cognitive load.
+- **Chat-like UI**: The interface mimics a conversation, each reply is a note. Nested Notes from threads.
+- **Note Types**: Everything is a Note except Files. Note types have different logic, schemas, renderers and jobs for lists, indexes, recipes, tasks, journals, etc.
+- **Every Thought a Note**: The UI encourages breaking down information into atomic, linked notes.
+- **Hotkey-Driven**: Every action has a hotkey. The UI is fully navigable and usable without a mouse.
+- **Knowledge Retrieval Maxxing**:
+  - Search must be meaningful and fast.
+    - Semantic search
+    - Search by title, content, tags, and note type.
+    - OCR - search of text in images and pdfs.
+    - Speech to text - search of spoken content in audio notes.
+  - UI must encourage linking and backlinking.
+  - Optional automatic title generation and tagging based on content.
+  - Editor must recomend related concepts from notes.
+  - Editor must recomend web links relatefd to the content.
+- **Automation as much as possible**: The system should automate everything it can to lower the friction of creating, maintaining and retrieving knowledge.
+- **Audio Notes**: Audio recording notes are first class citizens.
+
+
+## Usage
+Environment variables:
+```bash
+export OLLAMA_HOST="http://localhost:11434"  # Ollama server URL
+export OLLAMA_MODEL="hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M"  # Ollama model for embedding and generation
+export MEDIA_CACHE_DIR="/var/mentis/cache"  # Local directory for encrypted file cache
+export MEDIA_S3_ENDPOINTS='[
+  {
+    "id": "primary",
+    "bucket": "mentis-files",
+    "region": "nbg1",
+    "endpoint": "https://nbg1.your-objectstorage.com",
+    "access_key_id": "XXX",
+    "secret_access_key": "XXX",
+    "force_path_style": false
+  }
+]'  # JSON array of S3 endpoint configurations
+export BACKUP_ENCRYPTION_KEY="your-encryption-key"  # Encryption key for backups
+```
+
+Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
 ## TODO MVP
 - [x] Pin notes 
