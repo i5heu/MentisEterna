@@ -54,9 +54,10 @@ func makeKey(t time.Time) string {
 	return fmt.Sprintf("backups/mentis-%s.db.enc", t.UTC().Format("2006-01-02T15-04-05"))
 }
 
-func TestClassifyBackupsKeepLast7Days(t *testing.T) {
+func TestClassifyBackupsKeepLast7DaysMax3PerDay(t *testing.T) {
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
 
+	// 4 backups per day for 14 days.
 	var keys []string
 	for d := 0; d < 14; d++ {
 		for h := 0; h < 24; h += 6 {
@@ -67,18 +68,39 @@ func TestClassifyBackupsKeepLast7Days(t *testing.T) {
 
 	keep, del := ClassifyBackups(keys, now, DefaultRetentionPolicy())
 
+	// Within 7 days: max 3 per day. 7 days × 3 = 21. Older backups get
+	// further thinned by weekly/monthly rules.
+	keptPerDay := make(map[string]int)
 	dayCutoff := now.AddDate(0, 0, -7)
-	for _, k := range keys {
+	for _, k := range keep {
 		ts, _ := parseBackupTime(k)
-		if ts.After(dayCutoff) && !contains(keep, k) {
-			t.Errorf("backup at %v (within 7 days) was NOT kept: %s", ts, k)
+		if ts.After(dayCutoff) {
+			keptPerDay[ts.Format("2006-01-02")]++
 		}
+	}
+	for dk, count := range keptPerDay {
+		if count > 3 {
+			t.Errorf("day %s has %d backups kept (max 3): keep=%v del=%v", dk, count, keep, del)
+		}
+	}
+
+	// At least some within-window backups should be deleted now (the 4th
+	// per day).
+	deletedWithinWindow := 0
+	for _, k := range del {
+		ts, _ := parseBackupTime(k)
+		if ts.After(dayCutoff) {
+			deletedWithinWindow++
+		}
+	}
+	if deletedWithinWindow == 0 {
+		t.Error("expected some backups within the 7-day window to be deleted (max 3/day)")
 	}
 
 	if len(keep)+len(del) != len(keys) {
 		t.Errorf("keep(%d) + del(%d) != total(%d)", len(keep), len(del), len(keys))
 	}
-	t.Logf("keep=%d del=%d total=%d", len(keep), len(del), len(keys))
+	t.Logf("keep=%d del=%d total=%d deletedWithin7d=%d", len(keep), len(del), len(keys), deletedWithinWindow)
 }
 
 func TestClassifyBackupsOnePerWeek(t *testing.T) {

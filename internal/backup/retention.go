@@ -33,9 +33,9 @@ type RetentionPolicy struct {
 
 // DefaultRetentionPolicy returns the standard policy:
 //
-//	Last 7 days:   keep all backups
-//	7d – 3 months: keep 1 per week (newest in each ISO week)
-//	3m – 5 years:  keep 1 per month (newest in each calendar month)
+//	Last 7 days:   keep max 3 per calendar day (newest)
+//	7d – 3 months: keep 1 per ISO week (newest in each)
+//	3m – 5 years:  keep 1 per calendar month (newest in each)
 //	Older than 5y: delete all
 func DefaultRetentionPolicy() RetentionPolicy {
 	return RetentionPolicy{
@@ -54,9 +54,9 @@ type backupEntry struct {
 // and returns two slices: keys to keep and keys to delete.
 //
 // Algorithm (processes newest-first, greedily keeping the newest in each bucket):
-//  1. Backups within KeepLastDays → keep all
-//  2. Backups within WeeklyMonths → keep newest per ISO week
-//  3. Backups within MonthlyYears → keep newest per calendar month
+//  1. Backups within KeepLastDays → keep max 3 per calendar day (newest)
+//  2. Backups within WeeklyMonths → keep 1 per ISO week (newest)
+//  3. Backups within MonthlyYears → keep 1 per calendar month (newest)
 //  4. Everything older → delete
 //
 // Keys that don't match the expected naming pattern are silently skipped
@@ -83,6 +83,7 @@ func ClassifyBackups(keys []string, now time.Time, policy RetentionPolicy) (keep
 	})
 
 	keepSet := make(map[string]bool, len(backups))
+	keptDays := make(map[string]int)    // "2006-01-02" -> count
 	keptWeeks := make(map[string]bool)  // "2026-W20"
 	keptMonths := make(map[string]bool) // "2026-05"
 
@@ -91,9 +92,14 @@ func ClassifyBackups(keys []string, now time.Time, policy RetentionPolicy) (keep
 	monthCutoff := now.AddDate(-policy.MonthlyYears, 0, 0)
 
 	for _, b := range backups {
-		// Rule 1: Within the last N days → keep every backup.
+		// Rule 1: Within the last N days → keep max 3 per calendar day
+		// (the newest, since we iterate newest-first).
 		if b.t.After(dayCutoff) {
-			keepSet[b.key] = true
+			dk := b.t.Format("2006-01-02")
+			if keptDays[dk] < 3 {
+				keptDays[dk]++
+				keepSet[b.key] = true
+			}
 			continue
 		}
 

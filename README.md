@@ -71,7 +71,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Auto Title Generator
   - [x] OLLAMA url configurable via env var
 - [x] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
-- [ ] Encrypted Backup
+- [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
 
 ## TODO Future
 - [ ] OCR for images and pdfs
@@ -211,6 +211,27 @@ export MEDIA_S3_ENDPOINTS='[
   }
 ]'
 ```
+
+## Database Backups
+
+The SQLite database is backed up to S3 every 12 hours using **AES-256-GCM** encryption. Snapshots use the SQLite Online Backup API, so they're safe and consistent even while the database is being actively written to.
+
+**Automated retention** cleans up old backups every 24 hours:
+
+| Window | Rule |
+|---|---|
+| Last 7 days | Max 3 per day (newest) |
+| 7 days – 3 months | 1 per week (newest) |
+| 3 months – 5 years | 1 per month (newest) |
+| Older than 5 years | Deleted |
+
+On-demand backup and purge can be triggered via `POST /backup/trigger` and `POST /backup/purge`. Restore with:
+
+```bash
+go run ./cmd/restore/ backups/mentis-2026-07-22T03-00-05.db.enc mentis_restored.db
+```
+
+Full documentation: [`docs/Backups.md`](docs/Backups.md).
 
 ## Creating Custom Note Types
 
