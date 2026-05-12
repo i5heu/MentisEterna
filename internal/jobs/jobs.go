@@ -103,7 +103,7 @@ func (m *Manager) RegisterAdHoc(pluginID string, jobs []CronJob) error {
 
 func (m *Manager) upsertDefs(pluginID string, jobs []CronJob) error {
 	for _, job := range jobs {
-		res, err := m.db.Exec(
+		_, err := m.db.Exec(
 			`INSERT INTO job_definitions (plugin_id, name, schedule)
 			 VALUES (?, ?, ?)
 			 ON CONFLICT(plugin_id, name) DO UPDATE SET schedule = excluded.schedule`,
@@ -112,21 +112,19 @@ func (m *Manager) upsertDefs(pluginID string, jobs []CronJob) error {
 		if err != nil {
 			return fmt.Errorf("upsert job definition %s/%s: %w", pluginID, job.Name, err)
 		}
-		id, err := res.LastInsertId()
+
+		// Always look up the canonical definition ID after the upsert.
+		// LastInsertId is not reliable for SQLite ON CONFLICT DO UPDATE paths,
+		// and using it can register tasks under the wrong in-memory ID.
+		var id int64
+		err = m.db.QueryRow(
+			`SELECT id FROM job_definitions WHERE plugin_id = ? AND name = ?`,
+			pluginID, job.Name,
+		).Scan(&id)
 		if err != nil {
-			return fmt.Errorf("get last insert id for %s/%s: %w", pluginID, job.Name, err)
+			return fmt.Errorf("lookup job definition %s/%s: %w", pluginID, job.Name, err)
 		}
-		// ON CONFLICT ... DO UPDATE with RETURNING isn't supported by go-sqlite3,
-		// so if LastInsertId is 0, we need to look up the existing id.
-		if id == 0 {
-			err = m.db.QueryRow(
-				`SELECT id FROM job_definitions WHERE plugin_id = ? AND name = ?`,
-				pluginID, job.Name,
-			).Scan(&id)
-			if err != nil {
-				return fmt.Errorf("lookup job definition %s/%s: %w", pluginID, job.Name, err)
-			}
-		}
+
 		m.tasksMu.Lock()
 		m.tasks[id] = job.Task
 		m.tasksMu.Unlock()

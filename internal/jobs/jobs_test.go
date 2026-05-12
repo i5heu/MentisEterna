@@ -159,6 +159,59 @@ func TestZombieRecovery(t *testing.T) {
 	t.Logf("zombie recovery: status=%s error=%s", status, *errMsg)
 }
 
+func TestUpsertDefinitionsReusesExistingDefinitionID(t *testing.T) {
+	d := openTestDB(t)
+	m := NewManager(d, 1)
+
+	firstTask := func(db *sql.DB, payload []byte) (string, error) {
+		return "first", nil
+	}
+	secondTask := func(db *sql.DB, payload []byte) (string, error) {
+		return "second", nil
+	}
+
+	if err := m.UpsertDefinitions("test", []CronJob{{
+		Name:     "existing_job",
+		Schedule: "@daily",
+		Task:     firstTask,
+	}}); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+
+	var originalID int64
+	if err := d.QueryRow(`SELECT id FROM job_definitions WHERE plugin_id = 'test' AND name = 'existing_job'`).Scan(&originalID); err != nil {
+		t.Fatalf("lookup original id: %v", err)
+	}
+
+	if err := m.UpsertDefinitions("test", []CronJob{{
+		Name:     "existing_job",
+		Schedule: "@every 1h",
+		Task:     secondTask,
+	}}); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+
+	var updatedID int64
+	if err := d.QueryRow(`SELECT id FROM job_definitions WHERE plugin_id = 'test' AND name = 'existing_job'`).Scan(&updatedID); err != nil {
+		t.Fatalf("lookup updated id: %v", err)
+	}
+	if updatedID != originalID {
+		t.Fatalf("expected existing definition ID %d to be reused, got %d", originalID, updatedID)
+	}
+
+	task := m.tasks[originalID]
+	if task == nil {
+		t.Fatalf("expected task registered under existing definition id %d", originalID)
+	}
+	result, err := task(d, nil)
+	if err != nil {
+		t.Fatalf("task execution failed: %v", err)
+	}
+	if result != "second" {
+		t.Fatalf("expected updated task result %q, got %q", "second", result)
+	}
+}
+
 func TestErrorHandling(t *testing.T) {
 	d := openTestDB(t)
 	m := NewManager(d, 1)
