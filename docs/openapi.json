@@ -1,0 +1,1353 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "MentisEterna API",
+        "version": "1.0.0",
+        "description": "Personal note-taking app with vector search, note-type plugins, and file attachments. All API endpoints except `/login` and `/webauthn/*` require a Bearer token (obtained via password login or passkey login)."
+    },
+    "servers": [
+        { "url": "http://localhost:8080", "description": "Local development" }
+    ],
+    "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }],
+    "components": {
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "description": "Session token obtained from POST /login or passkey login."
+            },
+            "cookieAuth": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "auth_token",
+                "description": "Cookie set automatically after login. Used by browser-embedded resource requests (img, video, etc.)."
+            }
+        },
+        "schemas": {
+            "NoteSummary": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "title",
+                    "type",
+                    "pinned",
+                    "body",
+                    "created_at",
+                    "updated_at"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Unique note ID"
+                    },
+                    "title": { "type": "string", "description": "Note title" },
+                    "parent_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true,
+                        "description": "Parent note ID (null for root notes)"
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "Note type ID (e.g. 'standard', 'recipe', 'index')"
+                    },
+                    "pinned": {
+                        "type": "boolean",
+                        "description": "Whether the note is pinned"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Markdown body text (latest revision)"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "ISO 8601 creation timestamp"
+                    },
+                    "updated_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "ISO 8601 last-update timestamp"
+                    }
+                }
+            },
+            "NoteDetail": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "title",
+                    "type",
+                    "pinned",
+                    "body",
+                    "created_at",
+                    "updated_at",
+                    "tags"
+                ],
+                "properties": {
+                    "id": { "type": "integer", "format": "int64" },
+                    "title": { "type": "string" },
+                    "parent_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "type": { "type": "string" },
+                    "pinned": { "type": "boolean" },
+                    "body": { "type": "string" },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "updated_at": { "type": "string", "format": "date-time" },
+                    "plugin": { "$ref": "#/components/schemas/PluginDetail" },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Tag names attached to this note"
+                    },
+                    "attachments": {
+                        "type": "array",
+                        "items": { "$ref": "#/components/schemas/NoteFile" },
+                        "description": "File attachments"
+                    }
+                }
+            },
+            "PluginDetail": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "description": "Note type ID (echoed)"
+                    },
+                    "config": {
+                        "description": "Persisted plugin configuration (type-specific shape)"
+                    },
+                    "view": {
+                        "description": "Computed/derived view data (type-specific shape)"
+                    }
+                }
+            },
+            "NoteFile": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "filename",
+                    "mime_type",
+                    "size_bytes",
+                    "url",
+                    "is_image",
+                    "is_audio"
+                ],
+                "properties": {
+                    "id": { "type": "integer", "format": "int64" },
+                    "filename": { "type": "string" },
+                    "mime_type": { "type": "string" },
+                    "size_bytes": { "type": "integer", "format": "int64" },
+                    "url": {
+                        "type": "string",
+                        "description": "Relative URL to serve the file content"
+                    },
+                    "is_image": { "type": "boolean" },
+                    "is_audio": { "type": "boolean" }
+                }
+            },
+            "NoteUpdate": {
+                "type": "object",
+                "required": ["id", "note_id", "body", "created_at"],
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Update entry ID"
+                    },
+                    "note_id": { "type": "integer", "format": "int64" },
+                    "body": {
+                        "type": "string",
+                        "description": "Body content at this point in history"
+                    },
+                    "created_at": { "type": "string", "format": "date-time" }
+                }
+            },
+            "ChildNote": {
+                "allOf": [
+                    { "$ref": "#/components/schemas/NoteSummary" },
+                    {
+                        "type": "object",
+                        "required": ["child_count"],
+                        "properties": {
+                            "child_count": {
+                                "type": "integer",
+                                "format": "int64",
+                                "description": "Number of children this note has"
+                            },
+                            "attachments": {
+                                "type": "array",
+                                "items": {
+                                    "$ref": "#/components/schemas/NoteFile"
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+            "SearchResult": {
+                "allOf": [
+                    { "$ref": "#/components/schemas/NoteSummary" },
+                    {
+                        "type": "object",
+                        "required": ["distance"],
+                        "properties": {
+                            "distance": {
+                                "type": "number",
+                                "format": "double",
+                                "description": "Cosine distance from query embedding (lower = more relevant)"
+                            }
+                        }
+                    }
+                ]
+            },
+            "Manifest": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "label",
+                    "sort_order",
+                    "editor",
+                    "viewer",
+                    "has_config",
+                    "has_view",
+                    "has_actions"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Unique note type ID"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Human-readable name"
+                    },
+                    "description": { "type": "string" },
+                    "icon": { "type": "string" },
+                    "category": { "type": "string" },
+                    "sort_order": {
+                        "type": "integer",
+                        "description": "Determines ordering in type pickers"
+                    },
+                    "default_config": {
+                        "description": "Default config payload for new notes of this type"
+                    },
+                    "editor": { "$ref": "#/components/schemas/EditorMeta" },
+                    "viewer": { "$ref": "#/components/schemas/ViewerMeta" },
+                    "actions": {
+                        "type": "array",
+                        "items": { "$ref": "#/components/schemas/ActionMeta" }
+                    },
+                    "has_config": {
+                        "type": "boolean",
+                        "description": "Whether this type stores persistent configuration"
+                    },
+                    "has_view": {
+                        "type": "boolean",
+                        "description": "Whether this type generates computed view data"
+                    },
+                    "has_actions": {
+                        "type": "boolean",
+                        "description": "Whether this type supports RPC actions"
+                    }
+                }
+            },
+            "EditorMeta": {
+                "type": "object",
+                "required": ["mode"],
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["none", "schema", "custom"],
+                        "description": "How the frontend should render the editor"
+                    },
+                    "schema": {
+                        "description": "FormKit-compatible JSON schema (only when mode is 'schema')"
+                    }
+                }
+            },
+            "ViewerMeta": {
+                "type": "object",
+                "required": ["mode"],
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["none", "custom"],
+                        "description": "How the frontend should render the viewer"
+                    }
+                }
+            },
+            "ActionMeta": {
+                "type": "object",
+                "required": ["id", "label", "dangerous", "refresh_strategy"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Action identifier used in POST /notes/:id/actions/:id"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Human-readable action name"
+                    },
+                    "description": { "type": "string" },
+                    "params_schema": {
+                        "description": "JSON Schema for the params payload"
+                    },
+                    "dangerous": {
+                        "type": "boolean",
+                        "description": "Whether the action has destructive side effects"
+                    },
+                    "refresh_strategy": {
+                        "type": "string",
+                        "enum": ["none", "reload", "reload_view"],
+                        "description": "What the frontend should refresh after execution"
+                    },
+                    "success_message": {
+                        "type": "string",
+                        "description": "Message to show the user on success"
+                    }
+                }
+            },
+            "CreateNoteRequest": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Note title (defaults to 'Untitled' if empty/blank)"
+                    },
+                    "body": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Markdown body text"
+                    },
+                    "parent_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true,
+                        "description": "Parent note ID for threading"
+                    },
+                    "type": {
+                        "type": "string",
+                        "default": "standard",
+                        "description": "Note type ID"
+                    },
+                    "custom_data": {
+                        "description": "Plugin-specific config payload (validated by the note type)"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Tag names to attach"
+                    }
+                }
+            },
+            "UpdateNoteRequest": {
+                "allOf": [{ "$ref": "#/components/schemas/CreateNoteRequest" }]
+            },
+            "LoginRequest": {
+                "type": "object",
+                "required": ["username", "password"],
+                "properties": {
+                    "username": { "type": "string" },
+                    "password": { "type": "string" }
+                }
+            },
+            "LoginResponse": {
+                "type": "object",
+                "required": ["token", "expires_at"],
+                "properties": {
+                    "token": {
+                        "type": "string",
+                        "description": "Bearer token for subsequent requests"
+                    },
+                    "expires_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Token expiry timestamp"
+                    }
+                }
+            },
+            "PinRequest": {
+                "type": "object",
+                "required": ["pinned"],
+                "properties": {
+                    "pinned": { "type": "boolean" }
+                }
+            },
+            "PluginActionRequest": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Action identifier"
+                    },
+                    "params": { "description": "Action-specific parameters" }
+                }
+            },
+            "PluginActionV2Request": {
+                "type": "object",
+                "properties": {
+                    "params": { "description": "Action-specific parameters" }
+                }
+            },
+            "HealthResponse": {
+                "type": "object",
+                "required": ["status"],
+                "properties": {
+                    "status": { "type": "string", "example": "ok" }
+                }
+            },
+            "ErrorResponse": {
+                "type": "object",
+                "properties": {
+                    "error": { "type": "string" }
+                }
+            },
+            "JobRun": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer", "format": "int64" },
+                    "job_name": { "type": "string" },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "pending",
+                            "running",
+                            "completed",
+                            "failed",
+                            "cancelled"
+                        ]
+                    },
+                    "result": { "type": "string", "nullable": true },
+                    "error": { "type": "string", "nullable": true },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "started_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "finished_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    }
+                }
+            },
+            "JobListResponse": {
+                "type": "object",
+                "properties": {
+                    "runs": {
+                        "type": "array",
+                        "items": { "$ref": "#/components/schemas/JobRun" }
+                    },
+                    "total": { "type": "integer" }
+                }
+            },
+            "BackupTriggerResponse": {
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "example": "queued" },
+                    "run_id": { "type": "integer", "format": "int64" },
+                    "message": { "type": "string" }
+                }
+            },
+            "AttachmentUploadResponse": {
+                "type": "object",
+                "properties": {
+                    "file": { "$ref": "#/components/schemas/NoteFile" },
+                    "results": {
+                        "type": "object",
+                        "description": "Media processing results"
+                    }
+                }
+            },
+            "InlineUploadResponse": {
+                "type": "object",
+                "properties": {
+                    "file": { "$ref": "#/components/schemas/NoteFile" },
+                    "markdown": {
+                        "type": "string",
+                        "description": "Markdown snippet to insert into the note body"
+                    },
+                    "results": { "type": "object" }
+                }
+            }
+        }
+    },
+    "paths": {
+        "/health": {
+            "get": {
+                "summary": "Health check",
+                "operationId": "health",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": {
+                        "description": "Server is healthy",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HealthResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/login": {
+            "post": {
+                "summary": "Password login",
+                "operationId": "login",
+                "tags": ["Auth"],
+                "security": [],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/LoginRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Login successful. The response includes a Bearer token and sets an auth_token cookie.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/LoginResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Missing username/password or invalid JSON"
+                    },
+                    "401": { "description": "Invalid credentials" }
+                }
+            }
+        },
+        "/webauthn/register/begin": {
+            "get": {
+                "summary": "Begin passkey registration",
+                "operationId": "webauthnRegisterBegin",
+                "tags": ["Auth"],
+                "description": "Requires an existing session. Returns WebAuthn creation options.",
+                "responses": {
+                    "200": { "description": "Creation options JSON" },
+                    "401": { "description": "Not authenticated" }
+                }
+            }
+        },
+        "/webauthn/register/finish": {
+            "post": {
+                "summary": "Finish passkey registration",
+                "operationId": "webauthnRegisterFinish",
+                "tags": ["Auth"],
+                "description": "Completes WebAuthn registration with the attestation response from the browser.",
+                "responses": {
+                    "201": { "description": "Passkey registered successfully" },
+                    "400": { "description": "Invalid attestation" }
+                }
+            }
+        },
+        "/webauthn/login/begin": {
+            "get": {
+                "summary": "Begin passkey login",
+                "operationId": "webauthnLoginBegin",
+                "tags": ["Auth"],
+                "security": [],
+                "description": "Does not require a session. Returns WebAuthn request options for discoverable credentials.",
+                "responses": {
+                    "200": { "description": "Request options JSON" }
+                }
+            }
+        },
+        "/webauthn/login/finish": {
+            "post": {
+                "summary": "Finish passkey login",
+                "operationId": "webauthnLoginFinish",
+                "tags": ["Auth"],
+                "security": [],
+                "description": "Completes WebAuthn login with the assertion response from the browser. Returns a session token.",
+                "responses": {
+                    "200": {
+                        "description": "Login successful",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/LoginResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": { "description": "Invalid assertion" }
+                }
+            }
+        },
+        "/note-types": {
+            "get": {
+                "summary": "List note type catalog",
+                "operationId": "listNoteTypes",
+                "tags": ["Note Types"],
+                "description": "Returns the catalog of all available note types, including the synthetic 'standard' type. Each entry includes static metadata, editor/viewer modes, action definitions, and capability flags. Use this to populate type pickers and determine whether a type is schema-driven or custom-rendered.",
+                "responses": {
+                    "200": {
+                        "description": "List of note type manifests",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/Manifest"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/notes": {
+            "get": {
+                "summary": "List all notes",
+                "operationId": "listNotes",
+                "tags": ["Notes"],
+                "description": "Returns a lightweight summary of all notes, ordered by pinned status then last-updated time descending. Plugin data is not included in this response.",
+                "responses": {
+                    "200": {
+                        "description": "List of note summaries",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/NoteSummary"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "summary": "Create a note",
+                "operationId": "createNote",
+                "tags": ["Notes"],
+                "description": "Creates a new note. If title is empty/blank, it defaults to 'Untitled'. If type is empty, it defaults to 'standard'. Returns the full note detail with plugin config/view populated.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CreateNoteRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Note created",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/NoteDetail"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON or plugin validation failed"
+                    }
+                }
+            }
+        },
+        "/notes/search": {
+            "get": {
+                "summary": "Semantic search",
+                "operationId": "searchNotes",
+                "tags": ["Notes"],
+                "description": "Performs a semantic (vector) search across note bodies, OCR text, and STT text. Results are ranked by cosine distance. Falls back to empty results if VSS is unavailable.",
+                "parameters": [
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "required": true,
+                        "description": "Search query string",
+                        "schema": { "type": "string" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Search results sorted by relevance",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/SearchResult"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": { "description": "Missing or empty query parameter" }
+                }
+            }
+        },
+        "/notes/{id}": {
+            "get": {
+                "summary": "Get a note",
+                "operationId": "getNote",
+                "tags": ["Notes"],
+                "description": "Returns the full note detail including plugin config, plugin view, tags, and attachments.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Note detail",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/NoteDetail"
+                                }
+                            }
+                        }
+                    },
+                    "404": { "description": "Note not found" }
+                }
+            },
+            "put": {
+                "summary": "Update a note",
+                "operationId": "updateNote",
+                "tags": ["Notes"],
+                "description": "Updates a note's title, body, parent, type, custom_data, and tags. Creates a new history entry. Returns the full note detail.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UpdateNoteRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Note updated",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/NoteDetail"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON or plugin validation failed"
+                    },
+                    "404": { "description": "Note not found" }
+                }
+            },
+            "delete": {
+                "summary": "Delete a note",
+                "operationId": "deleteNote",
+                "tags": ["Notes"],
+                "description": "Deletes a note and all its history, plugin data (via CASCADE), and VSS embedding. Attached files with no remaining references are soft-deleted.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "204": { "description": "Note deleted" },
+                    "404": { "description": "Note not found" }
+                }
+            }
+        },
+        "/notes/{id}/history": {
+            "get": {
+                "summary": "Get note edit history",
+                "operationId": "getNoteHistory",
+                "tags": ["Notes"],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of history entries (newest first)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/NoteUpdate"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "description": "Note not found" }
+                }
+            }
+        },
+        "/notes/{id}/children": {
+            "get": {
+                "summary": "Get child notes",
+                "operationId": "getNoteChildren",
+                "tags": ["Notes"],
+                "description": "Returns all direct children of this note, ordered by creation date ascending. Each child includes a child_count.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of child notes",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/ChildNote"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "description": "Parent note not found" }
+                }
+            }
+        },
+        "/notes/{id}/ancestors": {
+            "get": {
+                "summary": "Get ancestor breadcrumb chain",
+                "operationId": "getNoteAncestors",
+                "tags": ["Notes"],
+                "description": "Returns the full ancestor chain from root to this note (root-first order).",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of ancestor notes (root → self)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/NoteSummary"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/notes/{id}/pin": {
+            "post": {
+                "summary": "Toggle pin status",
+                "operationId": "setNotePin",
+                "tags": ["Notes"],
+                "description": "Sets the pinned status of a note. Returns the full note detail.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PinRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Pin status updated",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/NoteDetail"
+                                }
+                            }
+                        }
+                    },
+                    "404": { "description": "Note not found" }
+                }
+            }
+        },
+        "/notes/{id}/action": {
+            "post": {
+                "summary": "Execute plugin action (legacy)",
+                "operationId": "pluginAction",
+                "tags": ["Plugin Actions"],
+                "deprecated": true,
+                "description": "Legacy action endpoint. Prefer `POST /notes/:id/actions/:actionID` for new integrations. Dispatches to the same unified handler.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PluginActionRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": { "description": "Action result (type-specific)" },
+                    "404": {
+                        "description": "Note not found or no actions for this type"
+                    }
+                }
+            }
+        },
+        "/notes/{id}/actions/{actionID}": {
+            "post": {
+                "summary": "Execute plugin action",
+                "operationId": "pluginActionV2",
+                "tags": ["Plugin Actions"],
+                "description": "Executes a named plugin action on a note. Action metadata (ID, params schema, etc.) is discoverable via GET /note-types.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" },
+                        "description": "Note ID"
+                    },
+                    {
+                        "name": "actionID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" },
+                        "description": "Action identifier (e.g. 'generate_grocery_list')"
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/PluginActionV2Request"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": { "description": "Action result (type-specific)" },
+                    "404": {
+                        "description": "Note not found, type not registered, or no action handler for this type"
+                    }
+                }
+            }
+        },
+        "/notes/{id}/files": {
+            "post": {
+                "summary": "Upload file attachment",
+                "operationId": "uploadAttachment",
+                "tags": ["Files"],
+                "description": "Uploads a file as a note attachment. The file is persisted to S3 (or local cache) and an attachment reference is created. OCR/STT is enqueued for images/audio.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" },
+                        "description": "Note ID"
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["file"],
+                                "properties": {
+                                    "file": {
+                                        "type": "string",
+                                        "format": "binary",
+                                        "description": "The file to upload"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "File uploaded",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AttachmentUploadResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": { "description": "Note not found" },
+                    "503": { "description": "Media service not configured" }
+                }
+            }
+        },
+        "/notes/{id}/files/inline": {
+            "post": {
+                "summary": "Upload inline file",
+                "operationId": "uploadInlineFile",
+                "tags": ["Files"],
+                "description": "Uploads a file for inline use in the note body. Returns a markdown snippet (![alt](url) for images, [name](url) otherwise). The file is reconciled into a permanent ref when the note body references it.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" },
+                        "description": "Note ID"
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["file"],
+                                "properties": {
+                                    "file": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Inline file uploaded",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/InlineUploadResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": { "description": "Note not found" },
+                    "503": { "description": "Media service not configured" }
+                }
+            }
+        },
+        "/notes/{id}/files/{fileID}": {
+            "delete": {
+                "summary": "Delete file attachment",
+                "operationId": "deleteAttachment",
+                "tags": ["Files"],
+                "description": "Removes the attachment reference between the note and file. If no other references exist, the file is soft-deleted.",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" },
+                        "description": "Note ID"
+                    },
+                    {
+                        "name": "fileID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" },
+                        "description": "File ID"
+                    }
+                ],
+                "responses": {
+                    "204": { "description": "Attachment reference removed" },
+                    "400": { "description": "Invalid path" },
+                    "503": { "description": "Media service not configured" }
+                }
+            }
+        },
+        "/file/{noteID}/{fileID}": {
+            "get": {
+                "summary": "Serve file content",
+                "operationId": "serveFile",
+                "tags": ["Files"],
+                "description": "Serves decrypted file content. The noteID is cosmetic for URL construction; only fileID controls access.",
+                "parameters": [
+                    {
+                        "name": "noteID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    },
+                    {
+                        "name": "fileID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "File content (binary, Content-Type set from stored MIME type)"
+                    },
+                    "404": { "description": "File not found" },
+                    "503": { "description": "Media service not configured" }
+                }
+            }
+        },
+        "/files/{fileID}/ocr": {
+            "get": {
+                "summary": "Get OCR result",
+                "operationId": "getFileOCR",
+                "tags": ["Files"],
+                "description": "Returns the OCR result for a file (if available).",
+                "parameters": [
+                    {
+                        "name": "fileID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": { "description": "OCR result" },
+                    "404": {
+                        "description": "File not found or no OCR result available"
+                    }
+                }
+            }
+        },
+        "/files/{fileID}/stt": {
+            "get": {
+                "summary": "Get STT result",
+                "operationId": "getFileSTT",
+                "tags": ["Files"],
+                "description": "Returns the speech-to-text result for a file (if available).",
+                "parameters": [
+                    {
+                        "name": "fileID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": { "description": "STT result" },
+                    "404": {
+                        "description": "File not found or no STT result available"
+                    }
+                }
+            }
+        },
+        "/tags": {
+            "get": {
+                "summary": "Tag autocomplete",
+                "operationId": "listTags",
+                "tags": ["Tags"],
+                "description": "Returns known tag names, optionally filtered by prefix.",
+                "parameters": [
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "required": false,
+                        "description": "Prefix filter (case-insensitive LIKE match)",
+                        "schema": { "type": "string" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of matching tag names",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs": {
+            "get": {
+                "summary": "List recent job runs",
+                "operationId": "listJobs",
+                "tags": ["Jobs"],
+                "description": "Returns the 50 most recent job runs.",
+                "responses": {
+                    "200": {
+                        "description": "List of job runs",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/JobListResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs/{runID}/retry": {
+            "post": {
+                "summary": "Retry a job run",
+                "operationId": "retryJob",
+                "tags": ["Jobs"],
+                "parameters": [
+                    {
+                        "name": "runID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job retried",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "retried": { "type": "boolean" },
+                                        "new_run_id": {
+                                            "type": "integer",
+                                            "format": "int64"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs/{runID}/cancel": {
+            "post": {
+                "summary": "Cancel a job run",
+                "operationId": "cancelJob",
+                "tags": ["Jobs"],
+                "parameters": [
+                    {
+                        "name": "runID",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer", "format": "int64" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job cancelled",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "cancelled": { "type": "boolean" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/backup/trigger": {
+            "post": {
+                "summary": "Trigger a backup",
+                "operationId": "triggerBackup",
+                "tags": ["Backup"],
+                "description": "Enqueues an on-demand encrypted database backup. Requires BACKUP_ENCRYPTION_KEY and S3 configuration.",
+                "responses": {
+                    "202": {
+                        "description": "Backup enqueued",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/BackupTriggerResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": { "description": "Backups not configured" }
+                }
+            }
+        },
+        "/backup/purge": {
+            "post": {
+                "summary": "Trigger retention purge",
+                "operationId": "triggerPurge",
+                "tags": ["Backup"],
+                "description": "Enqueues a retention policy purge that deletes expired backups across all S3 endpoints.",
+                "responses": {
+                    "202": {
+                        "description": "Purge enqueued",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/BackupTriggerResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": { "description": "Backups not configured" }
+                }
+            }
+        }
+    }
+}

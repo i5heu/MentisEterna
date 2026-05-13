@@ -109,15 +109,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func isAPIPath(p string) bool {
 	return p == "/health" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
+		p == "/note-types" ||
 		p == "/jobs" || strings.HasPrefix(p, "/jobs/") ||
 		strings.HasPrefix(p, "/webauthn/") || strings.HasPrefix(p, "/file/") ||
-		strings.HasPrefix(p, "/files/")
+		strings.HasPrefix(p, "/files/") ||
+		p == "/tags" || strings.HasPrefix(p, "/tags?")
 }
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// WebAuthn endpoints handle their own auth (or are public for login).
-		if r.URL.Path == "/login" || strings.HasPrefix(r.URL.Path, "/webauthn/") || !isAPIPath(r.URL.Path) {
+		if r.URL.Path == "/login" || r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/webauthn/") || !isAPIPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

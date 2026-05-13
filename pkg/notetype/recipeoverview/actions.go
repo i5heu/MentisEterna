@@ -9,26 +9,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/i5heu/MentisEterna/internal/server"
 )
 
-func init() {
-	server.RegisterPluginActionHandler("recipe_overview", handleAction)
-}
-
-func handleAction(db *sql.DB, noteID int64, action string, params json.RawMessage) (any, error) {
-	switch action {
-	case "generate_grocery_list":
-		return generateGroceryList(db, noteID, params)
-	case "delete_grocery_list":
-		return deleteGroceryList(db, params)
-	case "list_grocery_lists":
-		return listGroceryLists(db, noteID)
-	default:
-		return nil, fmt.Errorf("unknown action: %s", action)
-	}
-}
+// handleAction is now implemented directly on RecipeOverviewPlugin via the
+// notetype.ActionHandler interface (HandleAction method). These helper
+// functions are called by HandleAction.
 
 // generateGroceryListParams is the JSON body for the generate action.
 type generateGroceryListParams struct {

@@ -121,3 +121,40 @@ func (p *ExamplePlugin) UISchema() json.RawMessage {
 func (p *ExamplePlugin) CronJobs() []notetype.CronJob {
 	return nil
 }
+
+// --- New interfaces ---
+
+func (p *ExamplePlugin) Manifest() notetype.Manifest {
+	return notetype.Manifest{
+		ID:            "example",
+		Label:         "Checklist",
+		Description:   "A simple checklist with items",
+		Category:      "General",
+		SortOrder:     100,
+		DefaultConfig: json.RawMessage(`{"items":[]}`),
+		Editor:        notetype.EditorMeta{Mode: "custom", Schema: p.UISchema()},
+		Viewer:        notetype.ViewerMeta{Mode: "custom"},
+		HasConfig:     true,
+		HasView:       false,
+		HasActions:    false,
+	}
+}
+
+func (p *ExamplePlugin) ValidateConfig(payload json.RawMessage) error {
+	return p.Validate(payload)
+}
+
+func (p *ExamplePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error {
+	return p.ProcessSave(ctx, tx, userID, noteID, config)
+}
+
+func (p *ExamplePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
+	result, err := p.ProcessLoad(ctx, db, userID, noteID)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return json.RawMessage("null"), nil
+	}
+	return json.Marshal(result)
+}

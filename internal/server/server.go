@@ -217,6 +217,13 @@ func (s *Server) Start(ctx context.Context) error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/note-types", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			s.handleNoteTypes(w, r)
+		} else {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	mux.HandleFunc("/notes/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			s.searchNotes(w, r)
@@ -247,6 +254,11 @@ func (s *Server) Start(ctx context.Context) error {
 			} else {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
+			return
+		}
+		// POST /notes/:id/actions/:actionID (must be checked before /action)
+		if idx := strings.LastIndex(r.URL.Path, "/actions/"); idx >= 0 {
+			s.handlePluginActionV2(w, r)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/action") {
