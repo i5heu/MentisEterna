@@ -37,9 +37,10 @@ type generateGroceryListParams struct {
 	NumPeople int     `json:"num_people"`
 }
 
-// generateGroceryList collects ingredients from the specified recipe notes,
-// multiplies amounts by num_people/num_days (approximately), deduplicates by
-// name+unit, stores the result, and records which recipes were used.
+// generateGroceryList collects ingredients from the selected recipes, scales
+// each recipe's ingredient amounts by (num_people / recipe_servings), and
+// deduplicates by name+unit across all recipes.  Days is ignored — every
+// recipe is used exactly once.
 func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
 	var p generateGroceryListParams
 	if len(params) > 0 {
@@ -47,14 +48,42 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	if p.NumDays <= 0 {
-		p.NumDays = 8
-	}
 	if p.NumPeople <= 0 {
 		p.NumPeople = 1
 	}
 	if len(p.RecipeIDs) == 0 {
 		return nil, fmt.Errorf("at least one recipe must be selected")
+	}
+
+	// Fetch title and servings for every selected recipe.
+	type recipeInfo struct {
+		Title    string
+		Servings float64
+	}
+	recipes := map[int64]recipeInfo{}
+	recipeNames := make([]string, 0, len(p.RecipeIDs))
+
+	for _, rid := range p.RecipeIDs {
+		var title string
+		var servingsStr sql.NullString
+		err := db.QueryRow(`
+			SELECT n.title, rm.servings
+			FROM notes n
+			LEFT JOIN ct_recipe_meta rm ON rm.note_id = n.id
+			WHERE n.id = ?`, rid,
+		).Scan(&title, &servingsStr)
+		if err != nil {
+			return nil, fmt.Errorf("recipe %d: %w", rid, err)
+		}
+		recipeNames = append(recipeNames, title)
+
+		servings := 1.0 // default: 1 serving → no scaling
+		if servingsStr.Valid && servingsStr.String != "" {
+			if s, err := strconv.ParseFloat(strings.ReplaceAll(servingsStr.String, ",", "."), 64); err == nil && s > 0 {
+				servings = s
+			}
+		}
+		recipes[rid] = recipeInfo{Title: title, Servings: servings}
 	}
 
 	// Build IN clause with positional parameters.
@@ -66,7 +95,7 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT ri.name, ri.amount, ri.unit
+		SELECT ri.note_id, ri.name, ri.amount, ri.unit
 		FROM ct_recipe_ingredients ri
 		JOIN notes n ON n.id = ri.note_id
 		WHERE n.type = 'recipe' AND n.id IN (%s)
@@ -79,7 +108,8 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	}
 	defer rows.Close()
 
-	// Aggregate: group by name+unit.
+	// Aggregate: group by name+unit, scaling each ingredient by
+	// (num_people / recipe_servings) before merging.
 	type item struct {
 		Name   string `json:"name"`
 		Amount string `json:"amount"`
@@ -87,10 +117,17 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	}
 	aggregated := map[string]item{}
 	for rows.Next() {
+		var rid int64
 		var name, amount, unit string
-		if err := rows.Scan(&name, &amount, &unit); err != nil {
+		if err := rows.Scan(&rid, &name, &amount, &unit); err != nil {
 			return nil, fmt.Errorf("scan ingredient: %w", err)
 		}
+
+		// Scale by people / recipe_servings.
+		info := recipes[rid]
+		factor := float64(p.NumPeople) / info.Servings
+		amount = scaleAmountFloat(amount, factor)
+
 		key := name + "|" + unit
 		if existing, ok := aggregated[key]; ok {
 			existing.Amount = mergeAmounts(existing.Amount, amount)
@@ -103,12 +140,8 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 		return nil, err
 	}
 
-	// Apply days/people scaling factor (crude: multiply numeric amounts).
-	// This is a simple heuristic — amounts like "2" become "2*3*8=48".
-	totalServings := p.NumDays * p.NumPeople
 	scaled := make([]item, 0, len(aggregated))
 	for _, it := range aggregated {
-		it.Amount = scaleAmount(it.Amount, totalServings)
 		scaled = append(scaled, it)
 	}
 	sort.Slice(scaled, func(i, j int) bool {
@@ -162,11 +195,12 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	// Return the full grocery list object so the frontend can display it.
 	return map[string]any{
 		"grocery_list": GroceryList{
-			ID:        listID,
-			NumDays:   p.NumDays,
-			NumPeople: p.NumPeople,
-			RecipeIDs: p.RecipeIDs,
-			Items:     groceryItems,
+			ID:          listID,
+			NumDays:     p.NumDays,
+			NumPeople:   p.NumPeople,
+			RecipeIDs:   p.RecipeIDs,
+			RecipeNames: recipeNames,
+			Items:       groceryItems,
 		},
 	}, nil
 }
@@ -301,11 +335,12 @@ func formatAmount(num float64, unit string) string {
 	return s
 }
 
-// scaleAmount multiplies a numeric amount by a factor.
-func scaleAmount(amount string, factor int) string {
+// scaleAmountFloat multiplies a numeric amount by a float64 factor
+// (e.g. 0.5 when people=1 and recipe serves 2).
+func scaleAmountFloat(amount string, factor float64) string {
 	num, unit := splitAmount(amount)
 	if num < 0 {
 		return amount // non-numeric, leave as-is
 	}
-	return formatAmount(num*float64(factor), unit)
+	return formatAmount(num*factor, unit)
 }

@@ -95,6 +95,7 @@ type GroceryList struct {
 	NumDays     int           `json:"num_days"`
 	NumPeople   int           `json:"num_people"`
 	RecipeIDs   []int64       `json:"recipe_ids"`
+	RecipeNames []string      `json:"recipe_names"`
 	Items       []GroceryItem `json:"items"`
 }
 
@@ -162,23 +163,28 @@ func (p *RecipeOverviewPlugin) ProcessLoad(ctx context.Context, db *sql.DB, user
 			}
 		}
 
-		// Load associated recipe IDs for this grocery list.
+		// Load associated recipe IDs and titles for this grocery list.
 		recipeRows, err := db.Query(`
-			SELECT recipe_note_id FROM ct_recipe_overview_grocery_list_recipes
-			WHERE grocery_list_id = ?
-			ORDER BY recipe_note_id
+			SELECT glr.recipe_note_id, n.title
+			FROM ct_recipe_overview_grocery_list_recipes glr
+			JOIN notes n ON n.id = glr.recipe_note_id
+			WHERE glr.grocery_list_id = ?
+			ORDER BY glr.recipe_note_id
 		`, gl.ID)
 		if err != nil {
 			return nil, fmt.Errorf("recipe_overview: load list recipes: %w", err)
 		}
 		gl.RecipeIDs = []int64{}
+		gl.RecipeNames = []string{}
 		for recipeRows.Next() {
 			var rid int64
-			if err := recipeRows.Scan(&rid); err != nil {
+			var title string
+			if err := recipeRows.Scan(&rid, &title); err != nil {
 				recipeRows.Close()
 				return nil, fmt.Errorf("recipe_overview: scan list recipe: %w", err)
 			}
 			gl.RecipeIDs = append(gl.RecipeIDs, rid)
+			gl.RecipeNames = append(gl.RecipeNames, title)
 		}
 		recipeRows.Close()
 
