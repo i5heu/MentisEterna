@@ -76,14 +76,36 @@ const resolvedUiSchema = computed(() => {
 });
 
 /**
- * Resolve the effective customData, falling back to plugin.config from the
- * new PluginDetail shape when not provided explicitly as a prop.
+ * Resolve the effective customData for rendering.
+ *
+ * The new API splits plugin data into two fields:
+ *   - plugin.config — persisted user-editable config
+ *   - plugin.view   — computed/derived view data (recipes list, index entries, etc.)
+ *
+ * Components need both to render, but should only emit config changes.
+ * We always merge view on top of config so that view data is always
+ * available, even after the parent stores config-only data in the
+ * customData ref (after an update:customData emit).
  */
 const resolvedCustomData = computed(() => {
-    if (props.customData != null) return props.customData;
     const plugin = props.note?.plugin;
-    if (!plugin || typeof plugin !== "object") return null;
-    return plugin.config || null;
+    const config =
+        props.customData != null
+            ? props.customData
+            : plugin && typeof plugin === "object"
+              ? plugin.config
+              : null;
+    const view = plugin && typeof plugin === "object" ? plugin.view : null;
+
+    // If no view data, return config as-is
+    if (!view || typeof view !== "object") {
+        return config || null;
+    }
+    // Merge view on top of config for full rendering
+    if (!config || typeof config !== "object") {
+        return view;
+    }
+    return { ...config, ...view };
 });
 </script>
 
