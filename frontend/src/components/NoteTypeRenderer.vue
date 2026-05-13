@@ -179,19 +179,9 @@
                 </div>
             </div>
 
-            <!-- Configuration: days and people -->
+            <!-- Configuration: people only (days is ignored — each recipe is used once) -->
             <div class="config-section">
                 <div class="config-row-inline">
-                    <label class="config-label-inline">
-                        <span>Days:</span>
-                        <input
-                            type="number"
-                            v-model.number="configDays"
-                            min="1"
-                            max="90"
-                            class="config-input-num"
-                        />
-                    </label>
                     <label class="config-label-inline">
                         <span>People:</span>
                         <input
@@ -202,6 +192,9 @@
                             class="config-input-num"
                         />
                     </label>
+                    <span class="config-hint"
+                        >Each recipe's serving size is scaled to fit</span
+                    >
                 </div>
             </div>
 
@@ -215,7 +208,7 @@
                     {{
                         generatingList
                             ? "Generating..."
-                            : `Generate Grocery List (${selectedRecipeIds.length} recipes → ${configDays} days × ${configPeople} people)`
+                            : `Generate Grocery List (${selectedRecipeIds.length} recipes for ${configPeople} ${configPeople === 1 ? "person" : "people"})`
                     }}
                 </button>
                 <p v-if="selectedRecipeIds.length === 0" class="config-hint">
@@ -231,10 +224,18 @@
                 <h4>
                     Latest Grocery List
                     <span class="list-meta"
-                        >({{ latestList.num_days }}d ×
-                        {{ latestList.num_people }}p)</span
+                        >({{ latestList.num_people }}p)</span
                     >
                 </h4>
+                <div
+                    v-if="
+                        latestList.recipe_names &&
+                        latestList.recipe_names.length
+                    "
+                    class="list-recipes"
+                >
+                    Recipes: {{ latestList.recipe_names.join(", ") }}
+                </div>
                 <table class="ingredient-table">
                     <thead>
                         <tr>
@@ -266,15 +267,16 @@
                             formatDate(gl.generated_at)
                         }}</span>
                         <span class="past-list-config"
-                            >{{ gl.num_days }}d × {{ gl.num_people }}p —
+                            >{{ gl.num_people }}p —
                             {{ gl.items ? gl.items.length : 0 }} items</span
                         >
-                        <span class="past-list-recipes"
-                            >{{
-                                gl.recipe_ids ? gl.recipe_ids.length : 0
-                            }}
-                            recipes</span
-                        >
+                        <span class="past-list-recipes">{{
+                            gl.recipe_names
+                                ? gl.recipe_names.join(", ")
+                                : gl.recipe_ids
+                                  ? gl.recipe_ids.length + " recipes"
+                                  : "0 recipes"
+                        }}</span>
                         <button
                             class="btn-ghost btn-sm btn-toggle"
                             @click="togglePastList(gl.id)"
