@@ -72,11 +72,13 @@ import { ref, onMounted, onUnmounted, watch } from "vue";
 import { fetchJobs, retryJob } from "../api.js";
 
 const props = defineProps({ token: String });
+const emit = defineEmits(["job-done"]);
 
 const expanded = ref(false);
 const loading = ref(false);
 const runs = ref([]);
 const pendingCount = ref(0);
+const seenDone = ref(new Set());
 
 let pollTimer = null;
 
@@ -113,6 +115,12 @@ async function load() {
         const data = await fetchJobs(props.token);
         runs.value = data.runs || [];
         pendingCount.value = data.pending_count || 0;
+        for (const r of runs.value) {
+            if (r.job_name === 'generate_title' && r.status === 'done' && !seenDone.value.has(r.id)) {
+                seenDone.value.add(r.id);
+                emit('job-done', { name: 'generate_title', runId: r.id });
+            }
+        }
     } catch {
         // Silently ignore errors when polling.
     } finally {
