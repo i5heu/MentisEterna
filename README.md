@@ -84,6 +84,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 ## TODO Future
 - [x] OCR for images and pdfs
 - [x] speech to text notes
+- [ ] Options Page for job list and other settings
+- [ ] Index, OCR and STT failed once, button in UI with counter.
 - [ ] better search (by title, path and tags)
 - [ ] mobile-app - sync?
 - [ ] UX Improvements
@@ -100,21 +102,22 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 ## TODO Note Types
 - [x] Recipe (with ingredient table)
   - [x] Recipe Overview (dashboard listing all recipe notes, grocery list generation via RPC action)
+  - [ ] Recipe Note Type must include following fields: Servings, Attention Time, Total Time, grams per serving, kcal per serving, Freezable (boolean)
 - [ ] Task Sytem
-  - [ ] Task note type - title, status, dificulty, priority, description, due date, time estimation, time used, recurring options
+  - [ ] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
   - [ ] Task overview dashboard - list all tasks, filter by status, due date, etc. 
-  - [ ] Daily task list - 3 tasks per day
-- [ ] Home Note Type
-  - [ ] Shows latest notes, current tasks, weather
-- [ ] Gridfinity note type
-- [ ] Car refuling log note type
-  - [ ] Car refuleling log overview dashboard
-- [ ] Wants and wishes note type
-  - [ ] wants and wishes overview dashboard
-- [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note
+  - [ ] Daily task list - give 3 random tasks per day
+- [ ] Home Note Type - Shows latest notes, stats, has "Mind Dump" section for quick note creation.
 - [ ] Jornal Note Type - daily journal with mood tracking, gratitude log, etc.
 - [ ] Skill Note Type - for tracking skills, subskills, resources, progress, etc.
   - [ ] Skill Overview Dashboard Note Type - shows all skills, progress, etc.
+- [ ] Car refuling log note type
+  - [ ] Car refuleling log overview dashboard
+- [ ] Gridfinity note type
+  - [ ] Gridfinity overview dashboard with search and filter options
+- [ ] Wants and wishes note type
+  - [ ] wants and wishes overview dashboard
+- [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note
 
 ## Prerequisites
 
