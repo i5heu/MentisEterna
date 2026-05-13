@@ -145,7 +145,7 @@
                             <select
                                 v-model="noteType"
                                 class="type-select"
-                                @change="dirty = true"
+                                @change="onTypeChange()"
                             >
                                 <option
                                     v-for="opt in typeOptions"
@@ -446,6 +446,8 @@
                             :note="selected"
                             :token="token"
                             :editing="isEditing"
+                            :customData="customData"
+                            :uiSchema="selected.ui_schema"
                             @selectNote="(id) => selectNoteById(id)"
                             @update:custom-data="
                                 (d) => {
@@ -710,6 +712,8 @@
                         :note="threadNote"
                         :token="token"
                         :editing="false"
+                        :customData="threadNote.custom_data"
+                        :uiSchema="threadNote.ui_schema"
                         @selectNote="(id) => selectNoteById(id)"
                     />
                     <NoteAttachments
@@ -943,6 +947,10 @@ import {
     uploadInlineFile,
     deleteAttachment,
 } from "../api.js";
+import {
+    getTypeOptions,
+    getNoteTypeOrDefault,
+} from "../note-types/registry.js";
 
 const props = defineProps({ token: String });
 const emit = defineEmits(["logout"]);
@@ -980,14 +988,8 @@ function insertAtCursor(text) {
     dirty.value = true;
 }
 
-// Available note types (discovered from registry via server response or hardcoded list)
-const typeOptions = [
-    { value: "standard", label: "Standard Note" },
-    { value: "recipe", label: "Recipe" },
-    { value: "recipe_overview", label: "Recipe Overview" },
-    { value: "example", label: "Example (Checklist)" },
-    { value: "index", label: "Tag Index" },
-];
+// Note-type options from the registry (single source of truth)
+const typeOptions = getTypeOptions();
 const saveError = ref("");
 const showDeleteModal = ref(false);
 const deleting = ref(false);
@@ -1157,6 +1159,12 @@ function toggleEdit() {
     isEditing.value = !isEditing.value;
 }
 
+function onTypeChange() {
+    const def = getNoteTypeOrDefault(noteType.value);
+    customData.value = def.emptyCustomData();
+    dirty.value = true;
+}
+
 async function ensureSelectedNoteSaved() {
     if (!selected.value?.id) await save();
     if (!selected.value?.id)
@@ -1224,21 +1232,32 @@ async function selectNote(note) {
 
 async function selectSearchResult(sr) {
     threadNote.value = null;
-    selected.value = {
-        id: sr.id,
-        title: sr.title,
-        parent_id: sr.parent_id,
-        type: sr.type || "standard",
-        pinned: sr.pinned || false,
-        body: sr.body,
-        created_at: sr.created_at,
-        updated_at: sr.updated_at,
-    };
-    editTitle.value = sr.title;
-    editBody.value = sr.body;
-    noteType.value = sr.type || "standard";
-    customData.value = null;
-    editTags.value = sr.tags || [];
+    // Re-fetch full note for proper hydration.
+    try {
+        const full = await fetchNote(props.token, sr.id);
+        selected.value = full;
+        editTitle.value = full.title;
+        editBody.value = full.body;
+        noteType.value = full.type || "standard";
+        customData.value = full.custom_data || null;
+        editTags.value = full.tags || [];
+    } catch {
+        selected.value = {
+            id: sr.id,
+            title: sr.title,
+            parent_id: sr.parent_id,
+            type: sr.type || "standard",
+            pinned: sr.pinned || false,
+            body: sr.body,
+            created_at: sr.created_at,
+            updated_at: sr.updated_at,
+        };
+        editTitle.value = sr.title;
+        editBody.value = sr.body;
+        noteType.value = sr.type || "standard";
+        customData.value = null;
+        editTags.value = sr.tags || [];
+    }
     dirty.value = false;
     saveError.value = "";
     showHistory.value = false;
@@ -1273,7 +1292,8 @@ function newNote(parentNote = null) {
     editTitle.value = "";
     editBody.value = "";
     noteType.value = "standard";
-    customData.value = null;
+    const typeDef = getNoteTypeOrDefault("standard");
+    customData.value = typeDef.emptyCustomData();
     editTags.value = [];
     dirty.value = true;
     saveError.value = "";
