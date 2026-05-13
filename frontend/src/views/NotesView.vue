@@ -98,7 +98,7 @@
                 </div>
             </div>
             <div class="sidebar-footer">
-                <JobQueue :token="token" />
+                <JobQueue :token="token" @job-done="onJobDone" />
                 <button
                     class="btn-ghost backup-btn"
                     :disabled="backingUp"
@@ -135,11 +135,15 @@
                 <div class="editor-header">
                     <div class="editor-header-left">
                         <input
+                            v-if="isEditing"
                             v-model="editTitle"
                             class="title-input"
                             placeholder="Note title (leave blank to auto-generate)"
                             @input="dirty = true"
                         />
+                        <h2 v-else class="title-display">
+                            {{ selected.title || "Untitled" }}
+                        </h2>
                         <div v-if="isEditing" class="type-row">
                             <span class="parent-label">Type:</span>
                             <select
@@ -1606,6 +1610,8 @@ async function save() {
         // Reload the full note list so sort order is correct.
         await loadNotes();
         selected.value = updated;
+        editTitle.value = updated.title;
+        customData.value = updated.custom_data || null;
         dirty.value = false;
         isEditing.value = false;
         populateParentSearch(updated);
@@ -1712,6 +1718,27 @@ async function sendReply() {
 function restoreBody(body) {
     editBody.value = body;
     dirty.value = true;
+}
+
+function onJobDone(job) {
+    if (job.name === "generate_title") {
+        loadNotes();
+        if (selected.value?.id) {
+            loadChildren(selected.value.id);
+            // Re-fetch the main note so title, breadcrumb, and URL update.
+            fetchNote(props.token, selected.value.id)
+                .then((updated) => {
+                    if (selected.value?.id === updated.id) {
+                        selected.value = updated;
+                        editTitle.value = updated.title;
+                        loadAncestors(updated.id);
+                        populateParentSearch(updated);
+                        pushURL();
+                    }
+                })
+                .catch(() => {});
+        }
+    }
 }
 
 function fmtDate(iso) {
@@ -2509,6 +2536,14 @@ function onPopstate() {
 
 .title-input:focus {
     border-bottom-color: var(--accent-teal);
+}
+
+.title-display {
+    flex: 1;
+    font-size: 1.05rem;
+    font-weight: 600;
+    padding: 0.2rem 0;
+    color: var(--font-color);
 }
 
 .editor-actions {
