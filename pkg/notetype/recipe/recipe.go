@@ -24,7 +24,13 @@ type IngredientRow struct {
 
 // Payload is the JSON structure the frontend sends for a recipe note.
 type Payload struct {
-	Ingredients []IngredientRow `json:"ingredients"`
+	Ingredients     []IngredientRow `json:"ingredients"`
+	Servings        string          `json:"servings"`
+	AttentionTime   string          `json:"attention_time"`
+	TotalTime       string          `json:"total_time"`
+	GramsPerServing string          `json:"grams_per_serving"`
+	KcalPerServing  string          `json:"kcal_per_serving"`
+	Freezable       bool            `json:"freezable"`
 }
 
 type RecipePlugin struct{}
@@ -36,7 +42,7 @@ func init() {
 func (p *RecipePlugin) ID() string { return pluginID }
 
 func (p *RecipePlugin) InitSchema(db *sql.DB) error {
-	_, err := db.Exec(`
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_recipe_ingredients (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			note_id    INTEGER NOT NULL,
@@ -48,6 +54,23 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_ct_recipe_ingredients_note
 			ON ct_recipe_ingredients(note_id);
+	`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS ct_recipe_meta (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			note_id           INTEGER NOT NULL UNIQUE,
+			servings          TEXT    NOT NULL DEFAULT '',
+			attention_time    TEXT    NOT NULL DEFAULT '',
+			total_time        TEXT    NOT NULL DEFAULT '',
+			grams_per_serving TEXT    NOT NULL DEFAULT '',
+			kcal_per_serving  TEXT    NOT NULL DEFAULT '',
+			freezable         INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_ct_recipe_meta_note
+			ON ct_recipe_meta(note_id);
 	`)
 	return err
 }
@@ -90,10 +113,38 @@ func (p *RecipePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, 
 			return fmt.Errorf("recipe: insert ingredient %d: %w", i, err)
 		}
 	}
+
+	// Upsert recipe metadata.
+	freezableInt := 0
+	if payload.Freezable {
+		freezableInt = 1
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO ct_recipe_meta (note_id, servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(note_id) DO UPDATE SET
+			servings          = excluded.servings,
+			attention_time    = excluded.attention_time,
+			total_time        = excluded.total_time,
+			grams_per_serving = excluded.grams_per_serving,
+			kcal_per_serving  = excluded.kcal_per_serving,
+			freezable         = excluded.freezable`,
+		noteID,
+		strings.TrimSpace(payload.Servings),
+		strings.TrimSpace(payload.AttentionTime),
+		strings.TrimSpace(payload.TotalTime),
+		strings.TrimSpace(payload.GramsPerServing),
+		strings.TrimSpace(payload.KcalPerServing),
+		freezableInt,
+	); err != nil {
+		return fmt.Errorf("recipe: upsert meta: %w", err)
+	}
+
 	return nil
 }
 
 func (p *RecipePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
+	// Load ingredients.
 	rows, err := db.Query(
 		`SELECT id, name, amount, unit FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
 		noteID,
@@ -114,8 +165,28 @@ func (p *RecipePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Return the same Payload shape that Validate/ProcessSave expect.
-	return Payload{Ingredients: ingredients}, nil
+
+	// Load metadata.
+	payload := Payload{Ingredients: ingredients}
+	var freezableInt int
+	err = db.QueryRow(
+		`SELECT servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable
+		 FROM ct_recipe_meta WHERE note_id = ?`,
+		noteID,
+	).Scan(
+		&payload.Servings,
+		&payload.AttentionTime,
+		&payload.TotalTime,
+		&payload.GramsPerServing,
+		&payload.KcalPerServing,
+		&freezableInt,
+	)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("recipe: load meta: %w", err)
+	}
+	payload.Freezable = freezableInt != 0
+
+	return payload, nil
 }
 
 func (p *RecipePlugin) UISchema() json.RawMessage {
@@ -145,6 +216,40 @@ func (p *RecipePlugin) UISchema() json.RawMessage {
 				"label": "Unit"
 			}
 		]
+	},
+	{
+		"$el": "h3",
+		"children": "Details"
+	},
+	{
+		"$formkit": "text",
+		"name": "servings",
+		"label": "Servings"
+	},
+	{
+		"$formkit": "text",
+		"name": "attention_time",
+		"label": "Attention Time"
+	},
+	{
+		"$formkit": "text",
+		"name": "total_time",
+		"label": "Total Time"
+	},
+	{
+		"$formkit": "text",
+		"name": "grams_per_serving",
+		"label": "Grams per Serving"
+	},
+	{
+		"$formkit": "text",
+		"name": "kcal_per_serving",
+		"label": "Kcal per Serving"
+	},
+	{
+		"$formkit": "checkbox",
+		"name": "freezable",
+		"label": "Freezable"
 	}
 ]`)
 	return schema
