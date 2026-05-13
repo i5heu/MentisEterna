@@ -58,6 +58,71 @@
             <p v-if="!editing && ingredients.length === 0" class="empty-hint">
                 No ingredients yet. Switch to edit mode to add some.
             </p>
+
+            <!-- Recipe details (meta fields) -->
+            <h3 class="recipe-section-title">Details</h3>
+            <div class="recipe-details">
+                <div class="detail-row">
+                    <span class="detail-label">Servings</span>
+                    <input
+                        v-if="editing"
+                        v-model="servings"
+                        placeholder="e.g. 4"
+                        class="detail-input"
+                    />
+                    <span v-else>{{ servings || "-" }}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Attention Time</span>
+                    <input
+                        v-if="editing"
+                        v-model="attentionTime"
+                        placeholder="e.g. 30m"
+                        class="detail-input"
+                    />
+                    <span v-else>{{ attentionTime || "-" }}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Total Time</span>
+                    <input
+                        v-if="editing"
+                        v-model="totalTime"
+                        placeholder="e.g. 1h"
+                        class="detail-input"
+                    />
+                    <span v-else>{{ totalTime || "-" }}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Grams per Serving</span>
+                    <input
+                        v-if="editing"
+                        v-model="gramsPerServing"
+                        placeholder="e.g. 250"
+                        class="detail-input"
+                    />
+                    <span v-else>{{ gramsPerServing || "-" }}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Kcal per Serving</span>
+                    <input
+                        v-if="editing"
+                        v-model="kcalPerServing"
+                        placeholder="e.g. 420"
+                        class="detail-input"
+                    />
+                    <span v-else>{{ kcalPerServing || "-" }}</span>
+                </div>
+                <div class="detail-row detail-row-checkbox">
+                    <span class="detail-label">Freezable</span>
+                    <input
+                        v-if="editing"
+                        v-model="freezable"
+                        type="checkbox"
+                        class="detail-checkbox"
+                    />
+                    <span v-else>{{ freezable ? "Yes" : "No" }}</span>
+                </div>
+            </div>
         </div>
 
         <!-- Recipe Overview type: dashboard with grocery list -->
@@ -410,6 +475,14 @@ const checklistItems = ref([]);
 const indexData = ref(null);
 const indexMode = ref("global");
 
+// Recipe meta fields
+const servings = ref("");
+const attentionTime = ref("");
+const totalTime = ref("");
+const gramsPerServing = ref("");
+const kcalPerServing = ref("");
+const freezable = ref(false);
+
 // Recipe overview state
 const selectedRecipeIds = ref([]);
 const configDays = ref(8);
@@ -434,11 +507,18 @@ watch(
     (n) => {
         if (!n) return;
         if (n.type === "recipe") {
-            // custom_data is { ingredients: [...] } from the backend.
-            const ings = n.custom_data?.ingredients || n.custom_data;
+            // custom_data is { ingredients: [...], servings, attention_time, ... } from the backend.
+            const cd = n.custom_data || {};
+            const ings = cd.ingredients || cd;
             ingredients.value = Array.isArray(ings)
                 ? ings.map((ing) => ({ ...ing }))
                 : [];
+            servings.value = cd.servings || "";
+            attentionTime.value = cd.attention_time || "";
+            totalTime.value = cd.total_time || "";
+            gramsPerServing.value = cd.grams_per_serving || "";
+            kcalPerServing.value = cd.kcal_per_serving || "";
+            freezable.value = !!cd.freezable;
         }
         if (n.type === "recipe_overview") {
             overviewData.value = n.custom_data || {
@@ -485,6 +565,40 @@ watch(
                 amount,
                 unit,
             })),
+            servings: servings.value,
+            attention_time: attentionTime.value,
+            total_time: totalTime.value,
+            grams_per_serving: gramsPerServing.value,
+            kcal_per_serving: kcalPerServing.value,
+            freezable: freezable.value,
+        });
+    },
+    { deep: true },
+);
+
+// Also emit when any of the recipe meta fields change.
+watch(
+    [
+        servings,
+        attentionTime,
+        totalTime,
+        gramsPerServing,
+        kcalPerServing,
+        freezable,
+    ],
+    () => {
+        emit("update:customData", {
+            ingredients: ingredients.value.map(({ name, amount, unit }) => ({
+                name,
+                amount,
+                unit,
+            })),
+            servings: servings.value,
+            attention_time: attentionTime.value,
+            total_time: totalTime.value,
+            grams_per_serving: gramsPerServing.value,
+            kcal_per_serving: kcalPerServing.value,
+            freezable: freezable.value,
         });
     },
     { deep: true },
@@ -655,6 +769,62 @@ watch(indexMode, () => {
 .btn-sm {
     padding: 0.25rem 0.5rem;
     font-size: 0.8rem;
+}
+
+/* --- Recipe detail fields --- */
+
+.recipe-section-title {
+    margin-top: 1.25rem !important;
+}
+
+.recipe-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.detail-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.detail-row-checkbox {
+    border-bottom: none;
+}
+
+.detail-label {
+    font-size: 0.85rem;
+    color: var(--font-color-secondary);
+    min-width: 145px;
+    flex-shrink: 0;
+}
+
+.detail-input {
+    flex: 1;
+    max-width: 200px;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.85rem;
+    background: var(--input-bg, var(--html-bg));
+    color: var(--font-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-family: inherit;
+}
+
+.detail-input:focus {
+    border-color: var(--accent-teal);
+    outline: none;
+}
+
+.detail-checkbox {
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--accent-teal);
+    cursor: pointer;
 }
 
 .recipe-selection-section {
