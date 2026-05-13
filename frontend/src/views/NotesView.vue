@@ -451,7 +451,9 @@
                             :token="token"
                             :editing="isEditing"
                             :customData="customData"
-                            :uiSchema="selected.ui_schema"
+                            :uiSchema="
+                                selected.ui_schema || selected.plugin?.view
+                            "
                             @selectNote="(id) => selectNoteById(id)"
                             @update:custom-data="
                                 (d) => {
@@ -716,8 +718,12 @@
                         :note="threadNote"
                         :token="token"
                         :editing="false"
-                        :customData="threadNote.custom_data"
-                        :uiSchema="threadNote.ui_schema"
+                        :customData="
+                            threadNote.plugin?.config || threadNote.custom_data
+                        "
+                        :uiSchema="
+                            threadNote.ui_schema || threadNote.plugin?.view
+                        "
                         @selectNote="(id) => selectNoteById(id)"
                     />
                     <NoteAttachments
@@ -954,6 +960,7 @@ import {
 import {
     getTypeOptions,
     getNoteTypeOrDefault,
+    fetchAndMergeManifests,
 } from "../note-types/registry.js";
 
 const props = defineProps({ token: String });
@@ -1192,6 +1199,7 @@ async function togglePin(note) {
 }
 
 onMounted(loadNotes);
+onMounted(() => fetchAndMergeManifests(props.token));
 
 async function loadNotes() {
     loading.value = true;
@@ -1204,14 +1212,14 @@ async function loadNotes() {
 
 async function selectNote(note) {
     threadNote.value = null;
-    // Re-fetch from server to get full enriched data (custom_data, ui_schema, etc.)
+    // Re-fetch from server to get full enriched data (plugin.config, plugin.view, etc.)
     try {
         const full = await fetchNote(props.token, note.id);
         selected.value = full;
         editTitle.value = full.title;
         editBody.value = full.body;
         noteType.value = full.type || "standard";
-        customData.value = full.custom_data || null;
+        customData.value = full.plugin?.config || full.custom_data || null;
         editTags.value = full.tags || [];
     } catch {
         // Fallback to the sidebar data if fetch fails.
@@ -1219,7 +1227,7 @@ async function selectNote(note) {
         editTitle.value = note.title;
         editBody.value = note.body;
         noteType.value = note.type || "standard";
-        customData.value = note.custom_data || null;
+        customData.value = note.plugin?.config || note.custom_data || null;
         editTags.value = note.tags || [];
     }
     dirty.value = false;
@@ -1243,7 +1251,7 @@ async function selectSearchResult(sr) {
         editTitle.value = full.title;
         editBody.value = full.body;
         noteType.value = full.type || "standard";
-        customData.value = full.custom_data || null;
+        customData.value = full.plugin?.config || full.custom_data || null;
         editTags.value = full.tags || [];
     } catch {
         selected.value = {
@@ -1469,7 +1477,7 @@ async function selectNoteById(id) {
 }
 
 async function openThreadSidebar(note) {
-    // Fetch the full enriched note so custom_data is available for rendering.
+    // Fetch the full enriched note so plugin data is available for rendering.
     try {
         threadNote.value = await fetchNote(props.token, note.id);
     } catch {
@@ -1611,7 +1619,8 @@ async function save() {
         await loadNotes();
         selected.value = updated;
         editTitle.value = updated.title;
-        customData.value = updated.custom_data || null;
+        customData.value =
+            updated.plugin?.config || updated.custom_data || null;
         dirty.value = false;
         isEditing.value = false;
         populateParentSearch(updated);

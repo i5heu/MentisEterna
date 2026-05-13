@@ -128,6 +128,18 @@ export async function pluginAction(token, noteId, action, params) {
     });
 }
 
+export async function pluginActionV2(token, noteId, actionID, params) {
+    return request(`/notes/${noteId}/actions/${actionID}`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ params: params || null }),
+    });
+}
+
+export async function fetchNoteTypes(token) {
+    return request("/note-types", { headers: authHeaders(token) });
+}
+
 // --- File Attachments API ---
 
 export async function uploadAttachment(token, noteId, file) {

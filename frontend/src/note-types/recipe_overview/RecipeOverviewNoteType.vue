@@ -204,7 +204,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { pluginAction } from "../../api.js";
+import { pluginAction, pluginActionV2 } from "../../api.js";
 
 const props = defineProps({
     note: { type: Object, default: null },
@@ -278,7 +278,7 @@ watch(
 async function generateGroceryList() {
     generatingList.value = true;
     try {
-        const result = await pluginAction(
+        const result = await pluginActionV2(
             props.token,
             props.note.id,
             "generate_grocery_list",
@@ -307,9 +307,14 @@ async function deleteGroceryList(listId) {
     if (!confirm("Delete this grocery list?")) return;
     deletingListId.value = listId;
     try {
-        await pluginAction(props.token, props.note.id, "delete_grocery_list", {
-            list_id: listId,
-        });
+        await pluginActionV2(
+            props.token,
+            props.note.id,
+            "delete_grocery_list",
+            {
+                list_id: listId,
+            },
+        );
         overviewData.value = {
             ...overviewData.value,
             grocery_lists:
