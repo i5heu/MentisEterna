@@ -87,6 +87,8 @@ type RecipeSummary struct {
 	Title           string `json:"title"`
 	IngredientCount int    `json:"ingredient_count"`
 	InRecentList    bool   `json:"in_recent_list"` // true if this recipe appeared in any grocery list in the last 3 weeks
+	Freezable       bool   `json:"freezable"`
+	PreCookServings string `json:"pre_cook_servings"`
 }
 
 type GroceryList struct {
@@ -114,9 +116,12 @@ func (p *RecipeOverviewPlugin) ProcessLoad(ctx context.Context, db *sql.DB, user
 				JOIN ct_recipe_overview_grocery_lists gl ON gl.id = glr.grocery_list_id
 				WHERE glr.recipe_note_id = n.id
 				AND gl.generated_at >= datetime('now', '-21 days')
-			) AS in_recent_list
+			) AS in_recent_list,
+			COALESCE(rm.freezable, 0) AS freezable,
+			COALESCE(rm.pre_cook_servings, '') AS pre_cook_servings
 		FROM notes n
 		LEFT JOIN ct_recipe_ingredients ri ON ri.note_id = n.id
+		LEFT JOIN ct_recipe_meta rm ON rm.note_id = n.id
 		WHERE n.type = 'recipe'
 		GROUP BY n.id
 		ORDER BY n.title
@@ -129,9 +134,11 @@ func (p *RecipeOverviewPlugin) ProcessLoad(ctx context.Context, db *sql.DB, user
 	recipes := []RecipeSummary{}
 	for rows.Next() {
 		var r RecipeSummary
-		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList); err != nil {
+		var freezableInt int
+		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList, &freezableInt, &r.PreCookServings); err != nil {
 			return nil, fmt.Errorf("recipe_overview: scan recipe: %w", err)
 		}
+		r.Freezable = freezableInt != 0
 		recipes = append(recipes, r)
 	}
 	if err := rows.Err(); err != nil {

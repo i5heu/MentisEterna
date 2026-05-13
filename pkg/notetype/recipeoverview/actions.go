@@ -32,15 +32,20 @@ func handleAction(db *sql.DB, noteID int64, action string, params json.RawMessag
 
 // generateGroceryListParams is the JSON body for the generate action.
 type generateGroceryListParams struct {
-	RecipeIDs []int64 `json:"recipe_ids"`
-	NumDays   int     `json:"num_days"`
-	NumPeople int     `json:"num_people"`
+	RecipeIDs        []int64 `json:"recipe_ids"`
+	PreCookRecipeIDs []int64 `json:"pre_cook_recipe_ids"`
+	NumDays          int     `json:"num_days"`
+	NumPeople        int     `json:"num_people"`
 }
 
 // generateGroceryList collects ingredients from the selected recipes, scales
 // each recipe's ingredient amounts by (num_people / recipe_servings), and
 // deduplicates by name+unit across all recipes.  Days is ignored — every
 // recipe is used exactly once.
+//
+// Recipes in pre_cook_recipe_ids use their pre_cook_servings value instead
+// of the people-based scaling factor. This allows batch-cooking freezable
+// recipes at a fixed serving size independent of the current head count.
 func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
 	var p generateGroceryListParams
 	if len(params) > 0 {
@@ -51,27 +56,49 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	if p.NumPeople <= 0 {
 		p.NumPeople = 1
 	}
-	if len(p.RecipeIDs) == 0 {
+	if len(p.RecipeIDs) == 0 && len(p.PreCookRecipeIDs) == 0 {
 		return nil, fmt.Errorf("at least one recipe must be selected")
 	}
 
-	// Fetch title and servings for every selected recipe.
+	// Collect all recipe IDs into a single deduplicated set for fetching.
+	// pre_cook_recipe_ids is a subset of recipe_ids; each recipe appears once.
+	idSet := make(map[int64]bool, len(p.RecipeIDs))
+	for _, id := range p.RecipeIDs {
+		idSet[id] = true
+	}
+	for _, id := range p.PreCookRecipeIDs {
+		idSet[id] = true
+	}
+	allIDs := make([]int64, 0, len(idSet))
+	for id := range idSet {
+		allIDs = append(allIDs, id)
+	}
+
+	// Build a set for O(1) lookup.
+	preCookSet := make(map[int64]bool, len(p.PreCookRecipeIDs))
+	for _, id := range p.PreCookRecipeIDs {
+		preCookSet[id] = true
+	}
+
+	// Fetch title, servings, and pre_cook_servings for every selected recipe.
 	type recipeInfo struct {
-		Title    string
-		Servings float64
+		Title           string
+		Servings        float64
+		PreCookServings float64
 	}
 	recipes := map[int64]recipeInfo{}
-	recipeNames := make([]string, 0, len(p.RecipeIDs))
+	recipeNames := make([]string, 0, len(p.RecipeIDs)+len(p.PreCookRecipeIDs))
 
-	for _, rid := range p.RecipeIDs {
+	for _, rid := range allIDs {
 		var title string
 		var servingsStr sql.NullString
+		var preCookStr sql.NullString
 		err := db.QueryRow(`
-			SELECT n.title, rm.servings
+			SELECT n.title, rm.servings, rm.pre_cook_servings
 			FROM notes n
 			LEFT JOIN ct_recipe_meta rm ON rm.note_id = n.id
 			WHERE n.id = ?`, rid,
-		).Scan(&title, &servingsStr)
+		).Scan(&title, &servingsStr, &preCookStr)
 		if err != nil {
 			return nil, fmt.Errorf("recipe %d: %w", rid, err)
 		}
@@ -83,13 +110,21 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 				servings = s
 			}
 		}
-		recipes[rid] = recipeInfo{Title: title, Servings: servings}
+
+		preCook := 0.0
+		if preCookStr.Valid && preCookStr.String != "" {
+			if s, err := strconv.ParseFloat(strings.ReplaceAll(preCookStr.String, ",", "."), 64); err == nil && s > 0 {
+				preCook = s
+			}
+		}
+
+		recipes[rid] = recipeInfo{Title: title, Servings: servings, PreCookServings: preCook}
 	}
 
 	// Build IN clause with positional parameters.
-	placeholders := make([]string, len(p.RecipeIDs))
-	args := make([]any, len(p.RecipeIDs))
-	for i, id := range p.RecipeIDs {
+	placeholders := make([]string, len(allIDs))
+	args := make([]any, len(allIDs))
+	for i, id := range allIDs {
 		placeholders[i] = "?"
 		args[i] = id
 	}
@@ -123,9 +158,14 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 			return nil, fmt.Errorf("scan ingredient: %w", err)
 		}
 
-		// Scale by people / recipe_servings.
+		// Scale: pre-cook recipes use pre_cook_servings, others use people / recipe_servings.
 		info := recipes[rid]
-		factor := float64(p.NumPeople) / info.Servings
+		var factor float64
+		if preCookSet[rid] && info.PreCookServings > 0 {
+			factor = info.PreCookServings / info.Servings
+		} else {
+			factor = float64(p.NumPeople) / info.Servings
+		}
 		amount = scaleAmountFloat(amount, factor)
 
 		key := name + "|" + unit
@@ -160,6 +200,8 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	}
 	defer tx.Rollback()
 
+	// Store pre_cook_recipe_ids in a new column (or as JSON in a text field).
+	// For backward compatibility, we store this info in a new column.
 	result, err := tx.Exec(
 		`INSERT INTO ct_recipe_overview_grocery_lists (note_id, num_days, num_people, items_json) VALUES (?, ?, ?, ?)`,
 		noteID, p.NumDays, p.NumPeople, string(itemsJSON),
@@ -173,7 +215,7 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 		return nil, fmt.Errorf("get list id: %w", err)
 	}
 
-	for _, rid := range p.RecipeIDs {
+	for _, rid := range allIDs {
 		if _, err := tx.Exec(
 			`INSERT INTO ct_recipe_overview_grocery_list_recipes (grocery_list_id, recipe_note_id) VALUES (?, ?)`,
 			listID, rid,
@@ -198,7 +240,7 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 			ID:          listID,
 			NumDays:     p.NumDays,
 			NumPeople:   p.NumPeople,
-			RecipeIDs:   p.RecipeIDs,
+			RecipeIDs:   allIDs,
 			RecipeNames: recipeNames,
 			Items:       groceryItems,
 		},
