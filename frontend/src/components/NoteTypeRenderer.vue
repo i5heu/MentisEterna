@@ -62,79 +62,189 @@
 
         <!-- Recipe Overview type: dashboard with grocery list -->
         <div v-if="note.type === 'recipe_overview'" class="overview-dashboard">
-            <h3>All Recipes</h3>
-            <div
-                v-if="
-                    overviewData &&
-                    overviewData.recipes &&
-                    overviewData.recipes.length
-                "
-                class="recipe-list"
-            >
-                <div
-                    v-for="r in overviewData.recipes"
-                    :key="r.note_id"
-                    class="recipe-card"
+            <h3>Recipe Overview</h3>
+
+            <!-- Recipe selection list -->
+            <div class="recipe-selection-section">
+                <h4>Select Recipes</h4>
+                <p
+                    v-if="
+                        !overviewData ||
+                        !overviewData.recipes ||
+                        !overviewData.recipes.length
+                    "
+                    class="empty-hint"
                 >
-                    <span class="recipe-title">{{ r.title }}</span>
-                    <span class="recipe-count"
-                        >{{ r.ingredient_count }} ingredients</span
+                    No recipe notes found. Create notes with type "recipe"
+                    first.
+                </p>
+                <div v-else class="recipe-select-list">
+                    <div
+                        v-for="r in overviewData.recipes"
+                        :key="r.note_id"
+                        class="recipe-select-row"
                     >
-                    <button
-                        class="btn-ghost btn-sm"
-                        @click="$emit('selectNote', r.note_id)"
-                    >
-                        View
-                    </button>
+                        <label class="recipe-checkbox-label">
+                            <input
+                                type="checkbox"
+                                :value="r.note_id"
+                                v-model="selectedRecipeIds"
+                                class="recipe-checkbox"
+                            />
+                            <span class="recipe-select-title">{{
+                                r.title
+                            }}</span>
+                            <span class="recipe-select-count"
+                                >{{ r.ingredient_count }} ingredients</span
+                            >
+                        </label>
+                        <span
+                            v-if="r.in_recent_list"
+                            class="recent-badge"
+                            title="Used in a grocery list within the last 3 weeks"
+                            >🕒 Recent</span
+                        >
+                        <button
+                            class="btn-ghost btn-sm"
+                            @click="$emit('selectNote', r.note_id)"
+                        >
+                            View
+                        </button>
+                    </div>
                 </div>
             </div>
-            <p v-else class="empty-hint">
-                No recipe notes found. Create notes with type "recipe" first.
-            </p>
 
-            <div class="grocery-section">
+            <!-- Configuration: days and people -->
+            <div class="config-section">
+                <div class="config-row-inline">
+                    <label class="config-label-inline">
+                        <span>Days:</span>
+                        <input
+                            type="number"
+                            v-model.number="configDays"
+                            min="1"
+                            max="90"
+                            class="config-input-num"
+                        />
+                    </label>
+                    <label class="config-label-inline">
+                        <span>People:</span>
+                        <input
+                            type="number"
+                            v-model.number="configPeople"
+                            min="1"
+                            max="100"
+                            class="config-input-num"
+                        />
+                    </label>
+                </div>
+            </div>
+
+            <!-- Generate button -->
+            <div class="generate-section">
                 <button
                     class="btn-amber"
-                    :disabled="generatingList"
+                    :disabled="generatingList || selectedRecipeIds.length === 0"
                     @click="generateGroceryList"
                 >
                     {{
                         generatingList
                             ? "Generating..."
-                            : "Generate Grocery List (8 days)"
+                            : `Generate Grocery List (${selectedRecipeIds.length} recipes → ${configDays} days × ${configPeople} people)`
                     }}
                 </button>
+                <p v-if="selectedRecipeIds.length === 0" class="config-hint">
+                    Select at least one recipe above to generate a grocery list.
+                </p>
+            </div>
 
+            <!-- Latest grocery list result -->
+            <div
+                v-if="latestList && latestList.items && latestList.items.length"
+                class="grocery-list-current"
+            >
+                <h4>
+                    Latest Grocery List
+                    <span class="list-meta"
+                        >({{ latestList.num_days }}d ×
+                        {{ latestList.num_people }}p)</span
+                    >
+                </h4>
+                <table class="ingredient-table">
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th>Amount</th>
+                            <th>Unit</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="(item, idx) in latestList.items" :key="idx">
+                            <td>{{ item.name }}</td>
+                            <td>{{ item.amount }}</td>
+                            <td>{{ item.unit }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Past grocery lists -->
+            <div v-if="pastLists.length > 0" class="past-lists-section">
+                <h4>Past Grocery Lists</h4>
                 <div
-                    v-if="
-                        overviewData &&
-                        overviewData.grocery_items &&
-                        overviewData.grocery_items.length
-                    "
-                    class="grocery-list"
+                    v-for="gl in pastLists"
+                    :key="gl.id"
+                    class="past-list-card"
                 >
-                    <h4>Grocery List</h4>
-                    <table class="ingredient-table">
-                        <thead>
-                            <tr>
-                                <th>Item</th>
-                                <th>Amount</th>
-                                <th>Unit</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr
-                                v-for="(
-                                    item, idx
-                                ) in overviewData.grocery_items"
-                                :key="idx"
-                            >
-                                <td>{{ item.name }}</td>
-                                <td>{{ item.amount }}</td>
-                                <td>{{ item.unit }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div class="past-list-header">
+                        <span class="past-list-date">{{
+                            formatDate(gl.generated_at)
+                        }}</span>
+                        <span class="past-list-config"
+                            >{{ gl.num_days }}d × {{ gl.num_people }}p —
+                            {{ gl.items ? gl.items.length : 0 }} items</span
+                        >
+                        <span class="past-list-recipes"
+                            >{{
+                                gl.recipe_ids ? gl.recipe_ids.length : 0
+                            }}
+                            recipes</span
+                        >
+                        <button
+                            class="btn-ghost btn-sm btn-toggle"
+                            @click="togglePastList(gl.id)"
+                        >
+                            {{ expandedLists.has(gl.id) ? "▾" : "▸" }}
+                        </button>
+                        <button
+                            class="btn-ghost btn-sm btn-delete"
+                            :disabled="deletingListId === gl.id"
+                            @click="deleteGroceryList(gl.id)"
+                        >
+                            {{ deletingListId === gl.id ? "..." : "✕" }}
+                        </button>
+                    </div>
+                    <div
+                        v-if="expandedLists.has(gl.id)"
+                        class="past-list-items"
+                    >
+                        <table class="ingredient-table">
+                            <thead>
+                                <tr>
+                                    <th>Item</th>
+                                    <th>Amount</th>
+                                    <th>Unit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(item, idx) in gl.items" :key="idx">
+                                    <td>{{ item.name }}</td>
+                                    <td>{{ item.amount }}</td>
+                                    <td>{{ item.unit }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -282,7 +392,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { pluginAction } from "../api.js";
 
 const props = defineProps({
@@ -300,6 +410,24 @@ const checklistItems = ref([]);
 const indexData = ref(null);
 const indexMode = ref("global");
 
+// Recipe overview state
+const selectedRecipeIds = ref([]);
+const configDays = ref(8);
+const configPeople = ref(1);
+const expandedLists = ref(new Set());
+const deletingListId = ref(null);
+
+// Computed: latest list and past lists (exclude the first element).
+const latestList = computed(() => {
+    const lists = overviewData.value?.grocery_lists;
+    return lists && lists.length > 0 ? lists[0] : null;
+});
+
+const pastLists = computed(() => {
+    const lists = overviewData.value?.grocery_lists;
+    return lists && lists.length > 1 ? lists.slice(1) : [];
+});
+
 // Watch for note changes and initialize local state.
 watch(
     () => props.note,
@@ -315,8 +443,18 @@ watch(
         if (n.type === "recipe_overview") {
             overviewData.value = n.custom_data || {
                 recipes: [],
-                grocery_items: [],
+                grocery_lists: [],
             };
+            // Pre-select recipes that were in the most recent list (if any).
+            const lists = overviewData.value.grocery_lists || [];
+            if (lists.length > 0 && selectedRecipeIds.value.length === 0) {
+                const latest = lists[0];
+                if (latest.recipe_ids && latest.recipe_ids.length > 0) {
+                    selectedRecipeIds.value = [...latest.recipe_ids];
+                    configDays.value = latest.num_days || 8;
+                    configPeople.value = latest.num_people || 1;
+                }
+            }
         }
         if (n.type === "example") {
             // custom_data is { items: [...] } from the backend.
@@ -389,16 +527,64 @@ async function generateGroceryList() {
             props.token,
             props.note.id,
             "generate_grocery_list",
-            null,
+            {
+                recipe_ids: selectedRecipeIds.value,
+                num_days: configDays.value,
+                num_people: configPeople.value,
+            },
         );
+        const gl = result.grocery_list;
+        // Prepend the new list to overviewData.
         overviewData.value = {
             ...overviewData.value,
-            grocery_items: result.items || [],
+            grocery_lists: [gl, ...(overviewData.value.grocery_lists || [])],
         };
     } catch (e) {
         console.error("generate grocery list:", e);
     } finally {
         generatingList.value = false;
+    }
+}
+
+async function deleteGroceryList(listId) {
+    if (!confirm("Delete this grocery list?")) return;
+    deletingListId.value = listId;
+    try {
+        await pluginAction(props.token, props.note.id, "delete_grocery_list", {
+            list_id: listId,
+        });
+        // Remove from local state.
+        overviewData.value = {
+            ...overviewData.value,
+            grocery_lists:
+                overviewData.value.grocery_lists?.filter(
+                    (gl) => gl.id !== listId,
+                ) || [],
+        };
+        expandedLists.value.delete(listId);
+    } catch (e) {
+        console.error("delete grocery list:", e);
+    } finally {
+        deletingListId.value = null;
+    }
+}
+
+function togglePastList(listId) {
+    const next = new Set(expandedLists.value);
+    if (next.has(listId)) {
+        next.delete(listId);
+    } else {
+        next.add(listId);
+    }
+    expandedLists.value = next;
+}
+
+function formatDate(iso) {
+    if (!iso) return "";
+    try {
+        return new Date(iso).toLocaleString();
+    } catch {
+        return iso;
     }
 }
 
@@ -471,45 +657,183 @@ watch(indexMode, () => {
     font-size: 0.8rem;
 }
 
-.recipe-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin-bottom: 1.5rem;
+.recipe-selection-section {
+    margin-bottom: 1.25rem;
 }
 
-.recipe-card {
+.recipe-selection-section h4 {
+    font-size: 0.9rem;
+    color: var(--accent-teal);
+    margin-bottom: 0.5rem;
+}
+
+.recipe-select-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.recipe-select-row {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.6rem 0.75rem;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
     background: var(--raised-bg);
     border-radius: 6px;
     border: 1px solid var(--border-color);
 }
 
-.recipe-title {
+.recipe-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    cursor: pointer;
+}
+
+.recipe-checkbox {
+    flex-shrink: 0;
+    accent-color: var(--accent-teal);
+}
+
+.recipe-select-title {
     flex: 1;
     font-weight: 600;
+    font-size: 0.9rem;
 }
 
-.recipe-count {
+.recipe-select-count {
     color: var(--font-color-secondary);
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.recent-badge {
+    font-size: 0.7rem;
+    background: var(--accent-amber-bg, #fff3cd);
+    color: var(--accent-amber-text, #856404);
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+/* --- Recipe Overview new styles --- */
+
+.config-section {
+    margin-bottom: 1rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--raised-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.config-row-inline {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.config-label-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
     font-size: 0.85rem;
+    color: var(--font-color);
 }
 
-.grocery-section {
-    margin-top: 1.5rem;
+.config-input-num {
+    width: 55px;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.85rem;
+    text-align: center;
+    background: var(--input-bg, var(--html-bg));
+    color: var(--font-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-family: inherit;
 }
 
-.grocery-list {
-    margin-top: 1rem;
+.config-input-num:focus {
+    border-color: var(--accent-teal);
+    outline: none;
 }
 
-.grocery-list h4 {
+.generate-section {
+    margin-bottom: 1.25rem;
+}
+
+.grocery-list-current {
+    margin-bottom: 1.5rem;
+}
+
+.grocery-list-current h4 {
     font-size: 0.9rem;
     color: var(--accent-teal);
     margin-bottom: 0.5rem;
+}
+
+.list-meta {
+    color: var(--font-color-secondary);
+    font-weight: 400;
+    font-size: 0.8rem;
+}
+
+.past-lists-section {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 2px solid var(--border-color);
+}
+
+.past-lists-section h4 {
+    font-size: 0.9rem;
+    color: var(--header-title-color);
+    margin-bottom: 0.75rem;
+}
+
+.past-list-card {
+    background: var(--raised-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+
+.past-list-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+}
+
+.past-list-date {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--font-color);
+}
+
+.past-list-config {
+    flex: 1;
+    color: var(--font-color-secondary);
+    font-size: 0.8rem;
+}
+
+.past-list-recipes {
+    color: var(--font-color-secondary);
+    font-size: 0.8rem;
+}
+
+.btn-toggle {
+    color: var(--accent-teal);
+    font-size: 1rem;
+    padding: 0 0.4rem;
+}
+
+.btn-delete {
+    color: var(--danger-color, #e74c3c);
+}
+
+.past-list-items {
+    padding: 0 0.75rem 0.5rem 0.75rem;
 }
 
 .checklist-editor {
