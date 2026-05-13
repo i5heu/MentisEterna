@@ -85,7 +85,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] OCR for images and pdfs
 - [x] speech to text notes
 - [ ] Refactor code
-  - [ ] Split NoteTypeRenderer.vue into multiple components for better maintainability.
+  - [x] Split NoteTypeRenderer.vue into multiple components for better maintainability.
   - [ ] especially note types to see if we can abstract some common logic. 
 - [ ] Options Page for job list, create backup, logout, register passkey and other settings
   - [ ] Re Index, OCR and STT failed once, button in UI with counter.

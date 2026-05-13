@@ -221,3 +221,58 @@ func (p *RecipeOverviewPlugin) UISchema() json.RawMessage {
 func (p *RecipeOverviewPlugin) CronJobs() []notetype.CronJob {
 	return nil
 }
+
+// --- New interfaces ---
+
+func (p *RecipeOverviewPlugin) Manifest() notetype.Manifest {
+	return notetype.Manifest{
+		ID:            "recipe_overview",
+		Label:         "Recipe Overview",
+		Description:   "Dashboard to view recipes and generate grocery lists",
+		Category:      "Cooking",
+		SortOrder:     250,
+		DefaultConfig: json.RawMessage(`{}`),
+		Editor:        notetype.EditorMeta{Mode: "custom"},
+		Viewer:        notetype.ViewerMeta{Mode: "custom"},
+		Actions: []notetype.ActionMeta{
+			{
+				ID:              "generate_grocery_list",
+				Label:           "Generate Grocery List",
+				Description:     "Generate a grocery list from selected recipes",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"recipe_ids":{"type":"array","items":{"type":"integer"}},"num_days":{"type":"integer"},"num_people":{"type":"integer"}}}`),
+				Dangerous:       false,
+				RefreshStrategy: "reload_view",
+				SuccessMessage:  "Grocery list generated",
+			},
+			{
+				ID:              "delete_grocery_list",
+				Label:           "Delete Grocery List",
+				Description:     "Delete a grocery list",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"list_id":{"type":"integer"}},"required":["list_id"]}`),
+				Dangerous:       true,
+				RefreshStrategy: "reload_view",
+				SuccessMessage:  "Grocery list deleted",
+			},
+		},
+		HasConfig:  false,
+		HasView:    true,
+		HasActions: true,
+	}
+}
+
+func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
+	return p.ProcessLoad(ctx, db, userID, noteID)
+}
+
+func (p *RecipeOverviewPlugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteID int64, actionID string, params json.RawMessage) (any, error) {
+	switch actionID {
+	case "generate_grocery_list":
+		return generateGroceryList(db, noteID, params)
+	case "delete_grocery_list":
+		return deleteGroceryList(db, params)
+	case "list_grocery_lists":
+		return listGroceryLists(db, noteID)
+	default:
+		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
+	}
+}

@@ -25,7 +25,7 @@ func newServerRapid(t *testing.T) *Server {
 	return New(d, ":0", nil, nil, nil, nil)
 }
 
-func rapidCreateNote(rt *rapid.T, s *Server, title, body string, parentID *int64) Note {
+func rapidCreateNote(rt *rapid.T, s *Server, title, body string, parentID *int64) NoteDetail {
 	type req struct {
 		Title    string `json:"title"`
 		Body     string `json:"body"`
@@ -41,14 +41,14 @@ func rapidCreateNote(rt *rapid.T, s *Server, title, body string, parentID *int64
 	if w.Code != http.StatusCreated {
 		rt.Fatalf("createNote: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
-	var n Note
+	var n NoteDetail
 	if err := json.NewDecoder(w.Body).Decode(&n); err != nil {
 		rt.Fatalf("createNote decode: %v", err)
 	}
 	return n
 }
 
-func rapidUpdateNote(rt *rapid.T, s *Server, id int64, title, body string) Note {
+func rapidUpdateNote(rt *rapid.T, s *Server, id int64, title, body string) NoteDetail {
 	type req struct {
 		Title string `json:"title"`
 		Body  string `json:"body"`
@@ -63,7 +63,7 @@ func rapidUpdateNote(rt *rapid.T, s *Server, id int64, title, body string) Note 
 	if w.Code != http.StatusOK {
 		rt.Fatalf("updateNote: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var n Note
+	var n NoteDetail
 	if err := json.NewDecoder(w.Body).Decode(&n); err != nil {
 		rt.Fatalf("updateNote decode: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestPropCreateAndGetNote(t *testing.T) {
 		if w.Code != http.StatusOK {
 			rt.Fatalf("getNote: expected 200, got %d", w.Code)
 		}
-		var got Note
+		var got NoteDetail
 		if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 			rt.Fatalf("decode: %v", err)
 		}
@@ -181,7 +181,7 @@ func TestPropNoteListCountMatchesCreated(t *testing.T) {
 		if w.Code != http.StatusOK {
 			rt.Fatalf("listNotes: expected 200, got %d", w.Code)
 		}
-		var notes []Note
+		var notes []NoteSummary
 		if err := json.NewDecoder(w.Body).Decode(&notes); err != nil {
 			rt.Fatalf("decode: %v", err)
 		}
@@ -213,7 +213,7 @@ func TestPropLatestBodyIsReturned(t *testing.T) {
 		if w.Code != http.StatusOK {
 			rt.Fatalf("getNote: expected 200, got %d", w.Code)
 		}
-		var got Note
+		var got NoteDetail
 		if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 			rt.Fatalf("decode: %v", err)
 		}

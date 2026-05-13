@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 )
 
 // CronJob describes a background task registered by a plugin.
@@ -68,3 +69,78 @@ var Registry = make(map[string]NoteType)
 func Register(nt NoteType) {
 	Registry[nt.ID()] = nt
 }
+
+// --- New explicit config/view/action interfaces ---
+
+// EditorMeta describes the editing experience for a note type.
+type EditorMeta struct {
+	Mode   string          `json:"mode"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+}
+
+// ViewerMeta describes the read-only display for a note type.
+type ViewerMeta struct {
+	Mode string `json:"mode"`
+}
+
+// ActionMeta describes a single plugin action (RPC endpoint).
+type ActionMeta struct {
+	ID              string          `json:"id"`
+	Label           string          `json:"label"`
+	Description     string          `json:"description,omitempty"`
+	ParamsSchema    json.RawMessage `json:"params_schema,omitempty"`
+	Dangerous       bool            `json:"dangerous"`
+	RefreshStrategy string          `json:"refresh_strategy"`
+	SuccessMessage  string          `json:"success_message,omitempty"`
+}
+
+// Manifest holds static metadata about a note type.
+type Manifest struct {
+	ID            string          `json:"id"`
+	Label         string          `json:"label"`
+	Description   string          `json:"description,omitempty"`
+	Icon          string          `json:"icon,omitempty"`
+	Category      string          `json:"category,omitempty"`
+	SortOrder     int             `json:"sort_order"`
+	DefaultConfig json.RawMessage `json:"default_config,omitempty"`
+	Editor        EditorMeta      `json:"editor"`
+	Viewer        ViewerMeta      `json:"viewer"`
+	Actions       []ActionMeta    `json:"actions,omitempty"`
+	HasConfig     bool            `json:"has_config"`
+	HasView       bool            `json:"has_view"`
+	HasActions    bool            `json:"has_actions"`
+}
+
+// ManifestProvider returns the static Manifest for this note type.
+type ManifestProvider interface {
+	Manifest() Manifest
+}
+
+// ConfigValidator validates configuration payload before saving.
+type ConfigValidator interface {
+	ValidateConfig(payload json.RawMessage) error
+}
+
+// ConfigSaver persists plugin configuration within a transaction.
+type ConfigSaver interface {
+	SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error
+}
+
+// ConfigLoader retrieves plugin configuration as raw JSON.
+type ConfigLoader interface {
+	LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error)
+}
+
+// ViewBuilder builds a dynamic, computed view of a note's data.
+type ViewBuilder interface {
+	BuildView(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error)
+}
+
+// ActionHandler dispatches a named plugin action and returns the result.
+type ActionHandler interface {
+	HandleAction(ctx context.Context, db *sql.DB, userID int, noteID int64, actionID string, params json.RawMessage) (any, error)
+}
+
+// ErrUnknownAction is returned by ActionHandler when the requested action is not recognised.
+// The server translates this to HTTP 404.
+var ErrUnknownAction = errors.New("unknown action")

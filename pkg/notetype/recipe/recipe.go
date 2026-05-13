@@ -278,3 +278,40 @@ func (p *RecipePlugin) UISchema() json.RawMessage {
 func (p *RecipePlugin) CronJobs() []notetype.CronJob {
 	return nil // no background jobs for individual recipes
 }
+
+// --- New interfaces ---
+
+func (p *RecipePlugin) Manifest() notetype.Manifest {
+	return notetype.Manifest{
+		ID:            "recipe",
+		Label:         "Recipe",
+		Description:   "A recipe with ingredients, servings, and timing info",
+		Category:      "Cooking",
+		SortOrder:     200,
+		DefaultConfig: json.RawMessage(`{"ingredients":[],"servings":"","attention_time":"","total_time":"","grams_per_serving":"","kcal_per_serving":"","freezable":false,"pre_cook_servings":""}`),
+		Editor:        notetype.EditorMeta{Mode: "custom", Schema: p.UISchema()},
+		Viewer:        notetype.ViewerMeta{Mode: "custom"},
+		HasConfig:     true,
+		HasView:       false,
+		HasActions:    false,
+	}
+}
+
+func (p *RecipePlugin) ValidateConfig(payload json.RawMessage) error {
+	return p.Validate(payload)
+}
+
+func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error {
+	return p.ProcessSave(ctx, tx, userID, noteID, config)
+}
+
+func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
+	result, err := p.ProcessLoad(ctx, db, userID, noteID)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return json.RawMessage("null"), nil
+	}
+	return json.Marshal(result)
+}

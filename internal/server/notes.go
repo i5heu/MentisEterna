@@ -16,20 +16,38 @@ import (
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
-type Note struct {
-	ID         int64    `json:"id"`
-	Title      string   `json:"title"`
-	ParentID   *int64   `json:"parent_id"`
-	Type       string   `json:"type"`
-	Pinned     bool     `json:"pinned"`
-	Body       string   `json:"body"`
-	CreatedAt  string   `json:"created_at"`
-	UpdatedAt  string   `json:"updated_at"`
-	CustomData any      `json:"custom_data,omitempty"`
-	UISchema   any      `json:"ui_schema,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	// Attachments are files attached to this note.
-	Attachments []NoteFile `json:"attachments,omitempty"`
+// NoteSummary is the lightweight response shape for list endpoints.
+type NoteSummary struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	ParentID  *int64 `json:"parent_id"`
+	Type      string `json:"type"`
+	Pinned    bool   `json:"pinned"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// PluginDetail holds plugin-specific data on detailed note responses.
+type PluginDetail struct {
+	Type   string `json:"type"`
+	Config any    `json:"config,omitempty"`
+	View   any    `json:"view,omitempty"`
+}
+
+// NoteDetail is the full response shape for single-note endpoints.
+type NoteDetail struct {
+	ID          int64         `json:"id"`
+	Title       string        `json:"title"`
+	ParentID    *int64        `json:"parent_id"`
+	Type        string        `json:"type"`
+	Pinned      bool          `json:"pinned"`
+	Body        string        `json:"body"`
+	CreatedAt   string        `json:"created_at"`
+	UpdatedAt   string        `json:"updated_at"`
+	Plugin      *PluginDetail `json:"plugin,omitempty"`
+	Tags        []string      `json:"tags"`
+	Attachments []NoteFile    `json:"attachments,omitempty"`
 }
 
 // NoteFile is a lightweight view of a file for note JSON responses.
@@ -60,35 +78,59 @@ const noteSelectSQL = `
 	)
 `
 
-func scanNote(row interface{ Scan(...any) error }) (Note, error) {
-	var n Note
+func scanSummary(row interface{ Scan(...any) error }) (NoteSummary, error) {
+	var n NoteSummary
 	err := row.Scan(&n.ID, &n.Title, &n.ParentID, &n.Type, &n.Pinned, &n.CreatedAt, &n.Body, &n.UpdatedAt)
 	return n, err
 }
 
-// enrichNote attaches plugin-specific custom data, UI schema, and tags to a note.
-func (s *Server) enrichNote(n *Note) {
+// enrichDetail attaches plugin config/view, tags, and attachments to a note detail.
+func (s *Server) enrichDetail(n *NoteDetail) {
 	if n == nil {
 		return
 	}
+
+	// Load tags for all note types (including standard).
+	tags, err := loadTags(s.db.DB, n.ID)
+	if err != nil {
+		log.Printf("tags: load for note %d: %v", n.ID, err)
+		tags = []string{}
+	} else if tags == nil {
+		tags = []string{}
+	}
+	n.Tags = tags
+
 	plugin, exists := notetype.Registry[n.Type]
 	if !exists {
 		return
 	}
-	customData, err := plugin.ProcessLoad(context.Background(), s.db.DB, 0, n.ID)
-	if err != nil {
-		log.Printf("notetype: load custom data for note %d (type=%s): %v", n.ID, n.Type, err)
-		return
+
+	pd := &PluginDetail{Type: n.Type}
+
+	// Config
+	if cl, ok := plugin.(notetype.ConfigLoader); ok {
+		config, err := cl.LoadConfig(context.Background(), s.db.DB, 0, n.ID)
+		if err != nil {
+			log.Printf("notetype: load config for note %d (type=%s): %v", n.ID, n.Type, err)
+		} else if len(config) > 0 {
+			var cfg any
+			if err := json.Unmarshal(config, &cfg); err == nil {
+				pd.Config = cfg
+			}
+		}
 	}
-	n.CustomData = customData
-	n.UISchema = plugin.UISchema()
-	// Load tags.
-	tags, err := loadTags(s.db.DB, n.ID)
-	if err != nil {
-		log.Printf("tags: load for note %d: %v", n.ID, err)
-	} else {
-		n.Tags = tags
+
+	// View
+	if vb, ok := plugin.(notetype.ViewBuilder); ok {
+		view, err := vb.BuildView(context.Background(), s.db.DB, 0, n.ID)
+		if err != nil {
+			log.Printf("notetype: build view for note %d (type=%s): %v", n.ID, n.Type, err)
+		} else {
+			pd.View = view
+		}
 	}
+
+	n.Plugin = pd
 }
 
 // loadTags returns the tag names for a note.
@@ -196,9 +238,9 @@ func (s *Server) listNotes(w http.ResponseWriter, _ *http.Request) {
 	}
 	defer rows.Close()
 
-	notes := []Note{}
+	notes := []NoteSummary{}
 	for rows.Next() {
-		n, err := scanNote(rows)
+		n, err := scanSummary(rows)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -231,9 +273,16 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 
 	// Validate custom data against the plugin, if any.
 	if plugin, exists := notetype.Registry[in.Type]; exists && len(in.CustomData) > 0 {
-		if err := plugin.Validate(in.CustomData); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		if cv, ok := plugin.(notetype.ConfigValidator); ok {
+			if err := cv.ValidateConfig(in.CustomData); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			if err := plugin.Validate(in.CustomData); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 	}
 
@@ -256,11 +305,18 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Let the plugin persist its custom data.
+	// Let the plugin persist its config.
 	if plugin, exists := notetype.Registry[in.Type]; exists && len(in.CustomData) > 0 {
-		if err := plugin.ProcessSave(context.Background(), tx, 0, id, in.CustomData); err != nil {
-			writeErr(w, err)
-			return
+		if cs, ok := plugin.(notetype.ConfigSaver); ok {
+			if err := cs.SaveConfig(context.Background(), tx, 0, id, in.CustomData); err != nil {
+				writeErr(w, err)
+				return
+			}
+		} else {
+			if err := plugin.ProcessSave(context.Background(), tx, 0, id, in.CustomData); err != nil {
+				writeErr(w, err)
+				return
+			}
 		}
 	}
 
@@ -285,13 +341,18 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	var n NoteDetail
+	sum, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	// Enrich with custom data and UI schema.
-	s.enrichNote(&n)
+	n = NoteDetail{
+		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
+		Type: sum.Type, Pinned: sum.Pinned,
+		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
+	}
+	s.enrichDetail(&n)
 	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	// Async VSS embedding sync via job queue
 	s.enqueueVSSIndex(id, in.Title, in.Body)
@@ -307,7 +368,7 @@ func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	sum, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -316,7 +377,12 @@ func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.enrichNote(&n)
+	n := NoteDetail{
+		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
+		Type: sum.Type, Pinned: sum.Pinned,
+		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
+	}
+	s.enrichDetail(&n)
 	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	writeJSON(w, http.StatusOK, n)
 }
@@ -348,9 +414,16 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 
 	// Validate custom data against the plugin.
 	if plugin, exists := notetype.Registry[in.Type]; exists && len(in.CustomData) > 0 {
-		if err := plugin.Validate(in.CustomData); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		if cv, ok := plugin.(notetype.ConfigValidator); ok {
+			if err := cv.ValidateConfig(in.CustomData); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			if err := plugin.Validate(in.CustomData); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 	}
 
@@ -376,11 +449,18 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Let the plugin persist its custom data.
+	// Let the plugin persist its config.
 	if plugin, exists := notetype.Registry[in.Type]; exists {
-		if err := plugin.ProcessSave(context.Background(), tx, 0, id, in.CustomData); err != nil {
-			writeErr(w, err)
-			return
+		if cs, ok := plugin.(notetype.ConfigSaver); ok {
+			if err := cs.SaveConfig(context.Background(), tx, 0, id, in.CustomData); err != nil {
+				writeErr(w, err)
+				return
+			}
+		} else {
+			if err := plugin.ProcessSave(context.Background(), tx, 0, id, in.CustomData); err != nil {
+				writeErr(w, err)
+				return
+			}
 		}
 	}
 
@@ -405,12 +485,18 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	var n NoteDetail
+	sum, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	s.enrichNote(&n)
+	n = NoteDetail{
+		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
+		Type: sum.Type, Pinned: sum.Pinned,
+		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
+	}
+	s.enrichDetail(&n)
 	n.Attachments, _ = s.loadNoteAttachments(n.ID)
 	// Async VSS embedding sync via job queue
 	s.enqueueVSSIndex(id, in.Title, in.Body)
@@ -491,12 +577,18 @@ func (s *Server) setNotePin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	var n NoteDetail
+	sum, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	s.enrichNote(&n)
+	n = NoteDetail{
+		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
+		Type: sum.Type, Pinned: sum.Pinned,
+		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
+	}
+	s.enrichDetail(&n)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -509,10 +601,10 @@ func (s *Server) getNoteAncestors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var chain []Note
+	var chain []NoteSummary
 	cur := id
 	for {
-		n, err := scanNote(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, cur))
+		n, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, cur))
 		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
@@ -546,10 +638,11 @@ func noteIDRaw(path string) (int64, bool) {
 	return id, true
 }
 
-// ChildNote extends Note with a child_count for thread indicators.
+// ChildNote extends NoteSummary with a child_count for thread indicators.
 type ChildNote struct {
-	Note
-	ChildCount int64 `json:"child_count"`
+	NoteSummary
+	ChildCount  int64      `json:"child_count"`
+	Attachments []NoteFile `json:"attachments,omitempty"`
 }
 
 // getNoteChildren returns all notes whose parent_id matches the given note ID.
@@ -580,12 +673,12 @@ func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
 
 	children := []ChildNote{}
 	for rows.Next() {
-		n, err := scanNote(rows)
+		n, err := scanSummary(rows)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		cn := ChildNote{Note: n}
+		cn := ChildNote{NoteSummary: n}
 		// get child count (number of notes whose parent_id is this child's id)
 		_ = s.db.QueryRow(`SELECT COUNT(*) FROM notes WHERE parent_id = ?`, n.ID).Scan(&cn.ChildCount)
 		// load attachments (skip on error)
@@ -638,7 +731,7 @@ func (s *Server) getNoteHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePluginAction handles RPC-style actions for plugins.
-// POST /notes/:id/action
+// POST /notes/:id/action  (legacy; delegates to the unified dispatcher)
 func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -647,18 +740,6 @@ func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 
 	id, ok := noteID(w, r)
 	if !ok {
-		return
-	}
-
-	// Load the note to find its type.
-	var noteType string
-	err := s.db.QueryRow(`SELECT type FROM notes WHERE id = ?`, id).Scan(&noteType)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		writeErr(w, err)
 		return
 	}
 
@@ -671,29 +752,70 @@ func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	handler, exists := pluginActionHandlers[noteType]
+	s.dispatchAction(w, r, id, in.Action, in.Params)
+}
+
+// handlePluginActionV2 handles the new action route.
+// POST /notes/:id/actions/:actionID
+func (s *Server) handlePluginActionV2(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id, actionID, ok := noteIDAndAction(w, r)
+	if !ok {
+		return
+	}
+
+	var params json.RawMessage
+	if r.Body != nil {
+		var in struct {
+			Params json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		params = in.Params
+	}
+
+	s.dispatchAction(w, r, id, actionID, params)
+}
+
+// dispatchAction resolves the note type, finds the action handler, and executes.
+func (s *Server) dispatchAction(w http.ResponseWriter, r *http.Request, noteID int64, actionID string, params json.RawMessage) {
+	// Load the note to find its type.
+	var noteType string
+	err := s.db.QueryRow(`SELECT type FROM notes WHERE id = ?`, noteID).Scan(&noteType)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	plugin, exists := notetype.Registry[noteType]
 	if !exists {
 		http.Error(w, "no actions for this note type", http.StatusNotFound)
 		return
 	}
 
-	result, err := handler(s.db.DB, id, in.Action, in.Params)
+	ah, ok := plugin.(notetype.ActionHandler)
+	if !ok {
+		http.Error(w, "no actions for this note type", http.StatusNotFound)
+		return
+	}
+
+	result, err := ah.HandleAction(context.Background(), s.db.DB, 0, noteID, actionID, params)
 	if err != nil {
+		if errors.Is(err, notetype.ErrUnknownAction) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
-}
-
-// PluginActionHandler is a function that handles a plugin-specific action.
-type PluginActionHandler func(db *sql.DB, noteID int64, action string, params json.RawMessage) (any, error)
-
-// pluginActionHandlers maps note types to their action handlers.
-var pluginActionHandlers = map[string]PluginActionHandler{}
-
-// RegisterPluginActionHandler allows plugins to expose custom RPC actions.
-func RegisterPluginActionHandler(noteType string, handler PluginActionHandler) {
-	pluginActionHandlers[noteType] = handler
 }
 
 func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -702,12 +824,32 @@ func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	seg = strings.TrimSuffix(seg, "/children")
 	seg = strings.TrimSuffix(seg, "/action")
 	seg = strings.TrimSuffix(seg, "/pin")
+	// Strip /actions/:actionID suffix if present.
+	if idx := strings.LastIndex(seg, "/actions/"); idx >= 0 {
+		seg = seg[:idx]
+	}
 	id, err := strconv.ParseInt(seg, 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return 0, false
 	}
 	return id, true
+}
+
+// noteIDAndAction extracts a note ID and action ID from a path like "/notes/123/actions/generate".
+func noteIDAndAction(w http.ResponseWriter, r *http.Request) (int64, string, bool) {
+	seg := strings.TrimPrefix(r.URL.Path, "/notes/")
+	parts := strings.SplitN(seg, "/actions/", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		http.Error(w, "invalid action path", http.StatusBadRequest)
+		return 0, "", false
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return 0, "", false
+	}
+	return id, parts[1], true
 }
 
 // syncEmbeddingTask is the job task handler for VSS embedding generation.
@@ -1010,9 +1152,34 @@ func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
 	}
 }
 
-// SearchResult extends Note with a distance field for ranked search results.
+// handleNoteTypes returns the catalog of all available note types.
+// GET /note-types
+func (s *Server) handleNoteTypes(w http.ResponseWriter, r *http.Request) {
+	// Start with the synthetic "standard" type.
+	catalog := []notetype.Manifest{
+		{
+			ID:          "standard",
+			Label:       "Standard Note",
+			Description: "A plain markdown note with no special structure.",
+			Category:    "General",
+			SortOrder:   0,
+			Editor:      notetype.EditorMeta{Mode: "none"},
+			Viewer:      notetype.ViewerMeta{Mode: "none"},
+			HasConfig:   false,
+			HasView:     false,
+			HasActions:  false,
+		},
+	}
+
+	// Append all registered plugin manifests.
+	catalog = append(catalog, notetype.ListManifests()...)
+
+	writeJSON(w, http.StatusOK, catalog)
+}
+
+// SearchResult extends NoteSummary with a distance field for ranked search results.
 type SearchResult struct {
-	Note
+	NoteSummary
 	Distance float64 `json:"distance"`
 }
 
@@ -1265,14 +1432,15 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 
 	results := []SearchResult{}
 	for noteRows.Next() {
-		var sr SearchResult
-		err := noteRows.Scan(&sr.ID, &sr.Title, &sr.ParentID, &sr.Type, &sr.Pinned, &sr.CreatedAt,
-			&sr.Body, &sr.UpdatedAt)
+		sum, err := scanSummary(noteRows)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
-		sr.Distance = distByID[sr.ID]
+		sr := SearchResult{
+			NoteSummary: sum,
+			Distance:    distByID[sum.ID],
+		}
 		results = append(results, sr)
 	}
 	if err := noteRows.Err(); err != nil {

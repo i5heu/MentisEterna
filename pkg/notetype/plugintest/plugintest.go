@@ -410,6 +410,205 @@ func Run(t *testing.T, plugin notetype.NoteType, td TestData) {
 		// by calling ProcessLoad which every plugin must support.
 		// Plugin-specific action tests belong in the plugin's own test file.
 	})
+
+	// Manifest tests
+	t.Run("Manifest_Provider", func(t *testing.T) {
+		mp, ok := plugin.(notetype.ManifestProvider)
+		if !ok {
+			t.Skip("plugin does not implement ManifestProvider (not yet migrated)")
+		}
+		m := mp.Manifest()
+		if m.ID != plugin.ID() {
+			t.Errorf("Manifest ID %q != plugin ID %q", m.ID, plugin.ID())
+		}
+		if m.Label == "" {
+			t.Error("Manifest Label is empty")
+		}
+		if len(m.DefaultConfig) > 0 {
+			var v any
+			if err := json.Unmarshal(m.DefaultConfig, &v); err != nil {
+				t.Errorf("Manifest DefaultConfig is not valid JSON: %v", err)
+			}
+		}
+		if m.Editor.Mode != "none" && m.Editor.Mode != "schema" && m.Editor.Mode != "custom" {
+			t.Errorf("Manifest Editor.Mode is invalid: %q", m.Editor.Mode)
+		}
+		if m.Viewer.Mode != "none" && m.Viewer.Mode != "custom" {
+			t.Errorf("Manifest Viewer.Mode is invalid: %q", m.Viewer.Mode)
+		}
+		if m.Editor.Mode == "schema" && len(m.Editor.Schema) == 0 {
+			t.Error("Manifest Editor.Mode is 'schema' but Editor.Schema is empty")
+		}
+		if m.HasActions && len(m.Actions) == 0 {
+			t.Error("Manifest HasActions is true but Actions list is empty")
+		}
+		if len(m.Actions) > 0 && !m.HasActions {
+			t.Error("Manifest HasActions is false but Actions list is non-empty")
+		}
+		for i, a := range m.Actions {
+			if a.ID == "" {
+				t.Errorf("Action[%d] has empty ID", i)
+			}
+			if a.Label == "" {
+				t.Errorf("Action[%d] has empty Label", i)
+			}
+			if a.RefreshStrategy != "none" && a.RefreshStrategy != "reload" && a.RefreshStrategy != "reload_view" {
+				t.Errorf("Action[%d] has invalid RefreshStrategy: %q", i, a.RefreshStrategy)
+			}
+			if len(a.ParamsSchema) > 0 {
+				var v any
+				if err := json.Unmarshal(a.ParamsSchema, &v); err != nil {
+					t.Errorf("Action[%d] ParamsSchema is not valid JSON: %v", i, err)
+				}
+			}
+		}
+	})
+
+	// Config round-trip (for migrated plugins)
+	if td.ValidPayload != "" {
+		t.Run("Config_RoundTrip", func(t *testing.T) {
+			cv, okv := plugin.(notetype.ConfigValidator)
+			cs, oks := plugin.(notetype.ConfigSaver)
+			cl, okl := plugin.(notetype.ConfigLoader)
+			if !okv || !oks || !okl {
+				t.Skip("plugin does not implement full config interface")
+			}
+
+			d, err := db.OpenInMemory()
+			if err != nil {
+				t.Fatalf("open in-memory db: %v", err)
+			}
+			defer d.Close()
+
+			if _, err := d.Exec(`CREATE TABLE IF NOT EXISTS notes (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				title TEXT NOT NULL,
+				type TEXT NOT NULL DEFAULT 'standard',
+				pinned INTEGER NOT NULL DEFAULT 0,
+				parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
+			)`); err != nil {
+				t.Fatalf("create notes table: %v", err)
+			}
+
+			if err := plugin.InitSchema(d.DB); err != nil {
+				t.Fatalf("InitSchema: %v", err)
+			}
+
+			res, err := d.Exec(`INSERT INTO notes (title, type) VALUES ('config-test', ?)`, plugin.ID())
+			if err != nil {
+				t.Fatalf("insert note: %v", err)
+			}
+			noteID, _ := res.LastInsertId()
+
+			config := json.RawMessage(td.ValidPayload)
+
+			// Validate
+			if err := cv.ValidateConfig(config); err != nil {
+				t.Fatalf("ValidateConfig: %v", err)
+			}
+
+			// Save
+			tx, err := d.Begin()
+			if err != nil {
+				t.Fatalf("begin tx: %v", err)
+			}
+			if err := cs.SaveConfig(context.Background(), tx, 0, noteID, config); err != nil {
+				tx.Rollback()
+				t.Fatalf("SaveConfig: %v", err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatalf("commit: %v", err)
+			}
+
+			// Load
+			loaded, err := cl.LoadConfig(context.Background(), d.DB, 0, noteID)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+
+			// Validate loaded config
+			if err := cv.ValidateConfig(loaded); err != nil {
+				t.Errorf("loaded config fails ValidateConfig: %v\nLoaded: %s", err, string(loaded))
+			}
+		})
+	}
+
+	// View builder (for migrated plugins)
+	t.Run("View_Builder", func(t *testing.T) {
+		vb, ok := plugin.(notetype.ViewBuilder)
+		if !ok {
+			t.Skip("plugin does not implement ViewBuilder")
+		}
+
+		d, err := db.OpenInMemory()
+		if err != nil {
+			t.Fatalf("open in-memory db: %v", err)
+		}
+		defer d.Close()
+
+		if _, err := d.Exec(`CREATE TABLE IF NOT EXISTS notes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'standard',
+			pinned INTEGER NOT NULL DEFAULT 0,
+			parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
+		)`); err != nil {
+			t.Fatalf("create notes table: %v", err)
+		}
+
+		// Initialize ALL registered plugin schemas, not just the plugin under test.
+		// Some plugins (e.g. recipe_overview) query tables owned by other plugins (e.g. recipe).
+		for _, p := range notetype.Registry {
+			if err := p.InitSchema(d.DB); err != nil {
+				t.Fatalf("InitSchema for %s: %v", p.ID(), err)
+			}
+		}
+
+		res, err := d.Exec(`INSERT INTO notes (title, type) VALUES ('view-test', ?)`, plugin.ID())
+		if err != nil {
+			t.Fatalf("insert note: %v", err)
+		}
+		noteID, _ := res.LastInsertId()
+
+		// Save config first if we have a valid payload, so view has data to work with.
+		if td.ValidPayload != "" {
+			if cs, ok := plugin.(notetype.ConfigSaver); ok {
+				tx, _ := d.Begin()
+				_ = cs.SaveConfig(context.Background(), tx, 0, noteID, json.RawMessage(td.ValidPayload))
+				tx.Commit()
+			}
+		}
+
+		view, err := vb.BuildView(context.Background(), d.DB, 0, noteID)
+		if err != nil {
+			t.Errorf("BuildView: %v", err)
+		}
+		if view != nil {
+			// View should be JSON-serializable.
+			if _, err := json.Marshal(view); err != nil {
+				t.Errorf("BuildView returned non-JSON-serializable data: %v", err)
+			}
+		}
+	})
+
+	// Action handler (for migrated plugins)
+	t.Run("Action_Handler", func(t *testing.T) {
+		ah, ok := plugin.(notetype.ActionHandler)
+		if !ok {
+			t.Skip("plugin does not implement ActionHandler")
+		}
+		m := notetype.HasManifest(plugin)
+		if m == nil || len(m.Actions) == 0 {
+			t.Skip("plugin has action handler but no action metadata")
+		}
+
+		// Verify each action in the manifest is dispatchable (dry-run: unknown params should not panic).
+		for _, a := range m.Actions {
+			_, err := ah.HandleAction(context.Background(), nil, 0, 0, a.ID, nil)
+			// We don't care about the error — just that it doesn't panic.
+			_ = err
+		}
+	})
 }
 
 // Quick runs a minimal, fast validation-only test. Useful for rapid iteration.

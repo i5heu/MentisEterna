@@ -87,7 +87,7 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 
 // helperCreateNoteSync creates a note and ensures the embedding is
 // stored before returning. It calls syncEmbeddingTask synchronously.
-func helperCreateNoteSync(t *testing.T, s *Server, title, body string, parentID *int64) Note {
+func helperCreateNoteSync(t *testing.T, s *Server, title, body string, parentID *int64) NoteDetail {
 	t.Helper()
 	n := helperCreateNote(t, s, title, body, parentID)
 	// Call the embedding task synchronously to be certain the embedding is stored.
@@ -152,7 +152,7 @@ func TestNoteID(t *testing.T) {
 	}
 }
 
-func helperCreateNote(t *testing.T, s *Server, title, body string, parentID *int64) Note {
+func helperCreateNote(t *testing.T, s *Server, title, body string, parentID *int64) NoteDetail {
 	t.Helper()
 	var payload string
 	if parentID != nil {
@@ -166,7 +166,7 @@ func helperCreateNote(t *testing.T, s *Server, title, body string, parentID *int
 	if w.Code != http.StatusCreated {
 		t.Fatalf("createNote: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
-	var n Note
+	var n NoteDetail
 	if err := json.NewDecoder(w.Body).Decode(&n); err != nil {
 		t.Fatalf("createNote decode: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestListNotesEmpty(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var notes []Note
+	var notes []NoteSummary
 	if err := json.NewDecoder(w.Body).Decode(&notes); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestListNotesWithData(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var notes []Note
+	var notes []NoteSummary
 	if err := json.NewDecoder(w.Body).Decode(&notes); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestCreateNoteEmptyTitle(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Errorf("expected 201 for blank title (falls back to Untitled), got %d: %s", w.Code, w.Body.String())
 	}
-	var n Note
+	var n NoteDetail
 	if err := json.NewDecoder(w.Body).Decode(&n); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestGetNoteFound(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var n Note
+	var n NoteDetail
 	if err := json.NewDecoder(w.Body).Decode(&n); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestUpdateNoteValid(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var updated Note
+	var updated NoteDetail
 	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -352,12 +352,12 @@ func TestUpdateNoteEmptyTitle(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 for blank title (falls back to Untitled), got %d: %s", w.Code, w.Body.String())
 	}
-	var updated Note
-	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+	var updated2 NoteDetail
+	if err := json.NewDecoder(w.Body).Decode(&updated2); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if updated.Title != "Untitled" {
-		t.Errorf("expected title 'Untitled', got %q", updated.Title)
+	if updated2.Title != "Untitled" {
+		t.Errorf("expected title 'Untitled', got %q", updated2.Title)
 	}
 }
 
