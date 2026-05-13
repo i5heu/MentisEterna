@@ -262,6 +262,10 @@ func (s *Server) handleFileSTT(w http.ResponseWriter, r *http.Request) {
 // serveFile handles GET /file/:noteID/:fileID
 // noteID is cosmetic; auth + fileID control access.
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.mediaService == nil {
 		http.Error(w, "media not configured", http.StatusServiceUnavailable)
 		return
