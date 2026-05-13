@@ -122,6 +122,16 @@
                     />
                     <span v-else>{{ freezable ? "Yes" : "No" }}</span>
                 </div>
+                <div v-if="freezable" class="detail-row">
+                    <span class="detail-label">Pre-Cook Servings</span>
+                    <input
+                        v-if="editing"
+                        v-model="preCookServings"
+                        placeholder="e.g. 8"
+                        class="detail-input"
+                    />
+                    <span v-else>{{ preCookServings || "-" }}</span>
+                </div>
             </div>
         </div>
 
@@ -484,6 +494,7 @@ const totalTime = ref("");
 const gramsPerServing = ref("");
 const kcalPerServing = ref("");
 const freezable = ref(false);
+const preCookServings = ref("");
 
 // Recipe overview state
 const selectedRecipeIds = ref([]);
@@ -521,6 +532,7 @@ watch(
             gramsPerServing.value = cd.grams_per_serving || "";
             kcalPerServing.value = cd.kcal_per_serving || "";
             freezable.value = !!cd.freezable;
+            preCookServings.value = cd.pre_cook_servings || "";
         }
         if (n.type === "recipe_overview") {
             overviewData.value = n.custom_data || {
@@ -573,6 +585,7 @@ watch(
             grams_per_serving: gramsPerServing.value,
             kcal_per_serving: kcalPerServing.value,
             freezable: freezable.value,
+            pre_cook_servings: preCookServings.value,
         });
     },
     { deep: true },
@@ -587,6 +600,7 @@ watch(
         gramsPerServing,
         kcalPerServing,
         freezable,
+        preCookServings,
     ],
     () => {
         emit("update:customData", {
@@ -601,6 +615,7 @@ watch(
             grams_per_serving: gramsPerServing.value,
             kcal_per_serving: kcalPerServing.value,
             freezable: freezable.value,
+            pre_cook_servings: preCookServings.value,
         });
     },
     { deep: true },

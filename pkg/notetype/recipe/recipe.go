@@ -31,6 +31,7 @@ type Payload struct {
 	GramsPerServing string          `json:"grams_per_serving"`
 	KcalPerServing  string          `json:"kcal_per_serving"`
 	Freezable       bool            `json:"freezable"`
+	PreCookServings string          `json:"pre_cook_servings"`
 }
 
 type RecipePlugin struct{}
@@ -42,6 +43,7 @@ func init() {
 func (p *RecipePlugin) ID() string { return pluginID }
 
 func (p *RecipePlugin) InitSchema(db *sql.DB) error {
+	var err error
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_recipe_ingredients (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +59,7 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	`); err != nil {
 		return err
 	}
-	_, err := db.Exec(`
+	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_recipe_meta (
 			id                INTEGER PRIMARY KEY AUTOINCREMENT,
 			note_id           INTEGER NOT NULL UNIQUE,
@@ -67,12 +69,18 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 			grams_per_serving TEXT    NOT NULL DEFAULT '',
 			kcal_per_serving  TEXT    NOT NULL DEFAULT '',
 			freezable         INTEGER NOT NULL DEFAULT 0,
+			pre_cook_servings TEXT    NOT NULL DEFAULT '',
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
 		CREATE INDEX IF NOT EXISTS idx_ct_recipe_meta_note
 			ON ct_recipe_meta(note_id);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migration: add pre_cook_servings column to databases created before it existed.
+	db.Exec(`ALTER TABLE ct_recipe_meta ADD COLUMN pre_cook_servings TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 func (p *RecipePlugin) Validate(raw json.RawMessage) error {
@@ -120,15 +128,16 @@ func (p *RecipePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, 
 		freezableInt = 1
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO ct_recipe_meta (note_id, servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO ct_recipe_meta (note_id, servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(note_id) DO UPDATE SET
 			servings          = excluded.servings,
 			attention_time    = excluded.attention_time,
 			total_time        = excluded.total_time,
 			grams_per_serving = excluded.grams_per_serving,
 			kcal_per_serving  = excluded.kcal_per_serving,
-			freezable         = excluded.freezable`,
+			freezable         = excluded.freezable,
+			pre_cook_servings = excluded.pre_cook_servings`,
 		noteID,
 		strings.TrimSpace(payload.Servings),
 		strings.TrimSpace(payload.AttentionTime),
@@ -136,6 +145,7 @@ func (p *RecipePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, 
 		strings.TrimSpace(payload.GramsPerServing),
 		strings.TrimSpace(payload.KcalPerServing),
 		freezableInt,
+		strings.TrimSpace(payload.PreCookServings),
 	); err != nil {
 		return fmt.Errorf("recipe: upsert meta: %w", err)
 	}
@@ -170,7 +180,7 @@ func (p *RecipePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, 
 	payload := Payload{Ingredients: ingredients}
 	var freezableInt int
 	err = db.QueryRow(
-		`SELECT servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable
+		`SELECT servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings
 		 FROM ct_recipe_meta WHERE note_id = ?`,
 		noteID,
 	).Scan(
@@ -180,6 +190,7 @@ func (p *RecipePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, 
 		&payload.GramsPerServing,
 		&payload.KcalPerServing,
 		&freezableInt,
+		&payload.PreCookServings,
 	)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("recipe: load meta: %w", err)
@@ -250,6 +261,15 @@ func (p *RecipePlugin) UISchema() json.RawMessage {
 		"$formkit": "checkbox",
 		"name": "freezable",
 		"label": "Freezable"
+	},
+	{
+		"$el": "h3",
+		"children": "Meal Prep (freezable only)"
+	},
+	{
+		"$formkit": "text",
+		"name": "pre_cook_servings",
+		"label": "Pre-Cook Servings"
 	}
 ]`)
 	return schema
