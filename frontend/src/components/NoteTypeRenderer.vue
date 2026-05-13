@@ -173,6 +173,26 @@
                                 >{{ r.ingredient_count }} ingredients</span
                             >
                         </label>
+                        <label
+                            v-if="r.freezable && r.pre_cook_servings"
+                            class="precook-checkbox-label"
+                            :title="`Pre-cook ${r.pre_cook_servings} servings instead of scaling by people`"
+                        >
+                            <input
+                                type="checkbox"
+                                :checked="preCookRecipeIds.has(r.note_id)"
+                                :disabled="
+                                    !selectedRecipeIds.includes(r.note_id)
+                                "
+                                @change="
+                                    preCookRecipeIds.has(r.note_id)
+                                        ? preCookRecipeIds.delete(r.note_id)
+                                        : preCookRecipeIds.add(r.note_id)
+                                "
+                                class="recipe-checkbox"
+                            />
+                            <span class="precook-label">Pre-cook</span>
+                        </label>
                         <span
                             v-if="r.in_recent_list"
                             class="recent-badge"
@@ -203,7 +223,8 @@
                         />
                     </label>
                     <span class="config-hint"
-                        >Each recipe's serving size is scaled to fit</span
+                        >Each recipe's serving size is scaled to fit (pre-cook
+                        recipes use their own serving size)</span
                     >
                 </div>
             </div>
@@ -218,7 +239,7 @@
                     {{
                         generatingList
                             ? "Generating..."
-                            : `Generate Grocery List (${selectedRecipeIds.length} recipes for ${configPeople} ${configPeople === 1 ? "person" : "people"})`
+                            : `Generate Grocery List (${selectedRecipeIds.length} recipes${preCookRecipeIds.size > 0 ? `, ${preCookRecipeIds.size} pre-cook` : ""} for ${configPeople} ${configPeople === 1 ? "person" : "people"})`
                     }}
                 </button>
                 <p v-if="selectedRecipeIds.length === 0" class="config-hint">
@@ -498,6 +519,7 @@ const preCookServings = ref("");
 
 // Recipe overview state
 const selectedRecipeIds = ref([]);
+const preCookRecipeIds = ref(new Set());
 const configDays = ref(8);
 const configPeople = ref(1);
 const expandedLists = ref(new Set());
@@ -660,6 +682,7 @@ async function generateGroceryList() {
             "generate_grocery_list",
             {
                 recipe_ids: selectedRecipeIds.value,
+                pre_cook_recipe_ids: [...preCookRecipeIds.value],
                 num_days: configDays.value,
                 num_people: configPeople.value,
             },
@@ -670,6 +693,8 @@ async function generateGroceryList() {
             ...overviewData.value,
             grocery_lists: [gl, ...(overviewData.value.grocery_lists || [])],
         };
+        // Clear pre-cook selections after generating.
+        preCookRecipeIds.value = new Set();
     } catch (e) {
         console.error("generate grocery list:", e);
     } finally {
@@ -892,6 +917,24 @@ watch(indexMode, () => {
 .recipe-select-count {
     color: var(--font-color-secondary);
     font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.precook-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    background: var(--accent-teal-10, rgba(74, 154, 151, 0.1));
+    flex-shrink: 0;
+}
+
+.precook-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent-teal);
     white-space: nowrap;
 }
 
