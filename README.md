@@ -84,7 +84,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
 ## TODO Future
 - [x] OCR for images and pdfs
-- [ ] speech to text notes
+- [x] speech to text notes
 - [ ] better search (by title, path and tags)
 - [ ] mobile-app - sync?
 - [ ] UX Improvements
