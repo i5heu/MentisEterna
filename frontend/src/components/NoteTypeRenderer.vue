@@ -27,7 +27,7 @@
 
         <!-- Last-resort fallback for unsupported types -->
         <UnsupportedNoteType
-            v-else-if="activeNote.type"
+            v-else-if="activeNote.type && !typeDef"
             :note="activeNote"
             :token="token"
             :editing="editing"
