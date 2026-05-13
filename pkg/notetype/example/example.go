@@ -67,14 +67,14 @@ func (p *ExamplePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int,
 	if _, err := tx.Exec(`DELETE FROM ct_example_items WHERE note_id = ?`, noteID); err != nil {
 		return err
 	}
-	for i, item := range payload.Items {
+	for _, item := range payload.Items {
 		checked := 0
 		if item.Checked {
 			checked = 1
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO ct_example_items (note_id, label, checked, id) VALUES (?, ?, ?, ?)`,
-			noteID, item.Label, checked, i,
+			`INSERT INTO ct_example_items (note_id, label, checked) VALUES (?, ?, ?)`,
+			noteID, item.Label, checked,
 		); err != nil {
 			return err
 		}
