@@ -14,6 +14,7 @@ internal/llm/    — LocalAI embedding client (interface: Embedder)
 internal/server/ — HTTP handlers, WebAuthn, SPA static serving
 pkg/notetype/    — Note type plugin interface, registry, test harness, and built-in plugins
 frontend/        — Vue 3 + Vite app (dev proxy → :8080)
+frontend/src/note-types/ — Vue components per note type + shared registry
 FrontEndDist/    — Vite build output (served by Go server at runtime)
 lib/             — Pre-built SQLite extensions: vector0.so, vss0.so (do NOT regenerate)
 ```
@@ -44,12 +45,20 @@ Note types are plugin-based. Each type is a Go package in `pkg/notetype/<name>/`
    _ "github.com/i5heu/MentisEterna/pkg/notetype/yourtype"
    ```
 
-4. **Add frontend rendering** — edit `frontend/src/components/NoteTypeRenderer.vue` and add a `v-if="note.type === 'yourtype'"` block. Use the `editing` prop to toggle between editable inputs and read-only display.
+4. **Add frontend rendering** — create a Vue component at `frontend/src/note-types/yourtype/YourTypeNoteType.vue` that accepts the standard props contract (`note`, `token`, `editing`, `customData`, `uiSchema`) and emits `update:customData` when the user edits data. Add a barrel file `index.js` that re-exports the component.
 
-5. **Register in the type selector** — add to `typeOptions` in `frontend/src/views/NotesView.vue`:
+5. **Register in the note-type registry** — add an entry to `frontend/src/note-types/registry.js`:
    ```js
-   { value: "yourtype", label: "Your Type" },
+   {
+       id: "yourtype",
+       label: "Your Type",
+       component: defineAsyncComponent(() => import("./yourtype/YourTypeNoteType.vue")),
+       emptyCustomData: () => ({ /* your default shape */ }),
+       normalizeCustomData(raw, _note) { /* normalize server payload */ },
+       supportsSchemaFallback: false,
+   },
    ```
+   No changes to `NoteTypeRenderer.vue` or `NotesView.vue` are needed — the registry powers both the renderer lookup and the type picker automatically.
 
 ### Critical conventions
 
@@ -67,6 +76,84 @@ Note types are plugin-based. Each type is a Go package in `pkg/notetype/<name>/`
 | `pkg/notetype/example/` | `example` | Minimal checklist with items (label, checked) — best starting point for new plugins |
 | `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) with add/remove rows |
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action |
+| `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) |
+
+## Frontend Note-Type Architecture
+
+Note-type rendering is powered by a **registry** in `frontend/src/note-types/registry.js`. This is the single source of truth — it drives both the type picker in `NotesView.vue` and the renderer lookup in `NoteTypeRenderer.vue`.
+
+### File structure
+
+```
+frontend/src/note-types/
+├── registry.js                          # Single source of truth
+├── shared/
+│   ├── SchemaNoteType.vue               # Schema-driven rendering fallback
+│   ├── UnsupportedNoteType.vue          # Unknown-type fallback
+│   ├── useNoteTypeDraft.js              # Shared composable for draft sync
+│   └── usePluginAction.js               # Shared composable for RPC calls
+├── recipe/
+│   ├── RecipeNoteType.vue               # Ingredient table + detail fields
+│   └── index.js
+├── recipe_overview/
+│   ├── RecipeOverviewNoteType.vue       # Grocery list dashboard
+│   └── index.js
+├── example/
+│   ├── ChecklistNoteType.vue            # Checklist editor
+│   └── index.js
+└── index/
+    ├── IndexNoteType.vue                # Tag index viewer
+    └── index.js
+```
+
+### Component contract
+
+Every note-type component receives the same props:
+
+| Prop | Type | Purpose |
+|---|---|---|
+| `note` | Object | The full note object (for id, title, metadata) |
+| `token` | String | Auth token for API calls |
+| `editing` | Boolean | Whether the user is in edit mode |
+| `customData` | Object | The note-type-specific payload (source of truth for rendering) |
+| `uiSchema` | Object | Optional UI schema for schema-driven fallback |
+
+Emits:
+
+| Event | Payload | Purpose |
+|---|---|---|
+| `update:customData` | Object | Emitted when the user edits data — parent saves it |
+| `selectNote` | noteId | Navigate to a linked note |
+
+### Registry entry shape
+
+```js
+{
+    id: "yourtype",                          // matches backend plugin ID
+    label: "Your Type",                       // picker label
+    component: defineAsyncComponent(...),      // lazy-loaded Vue component (or null)
+    emptyCustomData: () => ({ ... }),          // default payload for new notes
+    normalizeCustomData(raw, note) { ... },    // normalize server payload
+    supportsSchemaFallback: false,             // use SchemaNoteType if no component
+}
+```
+
+### How `NoteTypeRenderer.vue` resolves rendering
+
+1. If the type has a `component` in the registry → render it with the standard props.
+2. Else if the type has `supportsSchemaFallback` and a `uiSchema` → render `SchemaNoteType.vue`.
+3. Else if the type is unknown (not in the registry) → render `UnsupportedNoteType.vue`.
+4. Else (known type with no custom component, e.g. `standard`) → render nothing (the body textarea handles everything).
+
+### Guard pattern for echo-back loops
+
+Components that hydrate local state from the `customData` prop AND emit `update:customData` on local edits must use a `hydrating` guard flag to break the feedback loop:
+
+```
+local edit → emit → parent sets customData → prop change → hydrate → deep watcher → emit → ...
+```
+
+The fix: hydrate on `props.note.id` change (note identity), not on every `customData` prop update. See `RecipeNoteType.vue` for the reference implementation.
 
 ## Testing Plugins
 

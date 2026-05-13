@@ -333,22 +333,22 @@ import (
 )
 ```
 
-4. **Add frontend rendering** — edit `frontend/src/components/NoteTypeRenderer.vue` and add a block for your type:
+4. **Add frontend rendering** — create a Vue component at `frontend/src/note-types/yourtype/YourTypeNoteType.vue` that accepts the standard props contract (`note`, `token`, `editing`, `customData`, `uiSchema`) and emits `update:customData` when the user edits data. Add a barrel file `frontend/src/note-types/yourtype/index.js` that re-exports the component. See existing components in `frontend/src/note-types/recipe/` and `frontend/src/note-types/example/` for reference implementations.
 
-```vue
-<div v-if="note.type === 'yourtype'" class="yourtype-editor">
-    <!-- Your custom Vue template here -->
-</div>
-```
-
-5. **Register in the UI** — add your type to `typeOptions` in `frontend/src/views/NotesView.vue`:
+5. **Register in the note-type registry** — add an entry to `frontend/src/note-types/registry.js`:
 
 ```js
-const typeOptions = [
-    { value: "standard", label: "Standard Note" },
-    { value: "yourtype",  label: "Your Type" },
-];
+{
+    id: "yourtype",
+    label: "Your Type",
+    component: defineAsyncComponent(() => import("./yourtype/YourTypeNoteType.vue")),
+    emptyCustomData: () => ({ /* your default shape */ }),
+    normalizeCustomData(raw, _note) { /* normalize server payload */ },
+    supportsSchemaFallback: false,
+},
 ```
+
+No changes to `NoteTypeRenderer.vue` or `NotesView.vue` are needed — the registry powers both the renderer lookup and the type picker automatically.
 
 ### Testing Your Plugin
 
@@ -543,6 +543,7 @@ All job runs appear in the **frontend sidebar panel** (`JobQueue.vue`):
 | Recipe | `recipe` | `pkg/notetype/recipe/` | Ingredient table with name/amount/unit, inline editing |
 | Recipe Overview | `recipe_overview` | `pkg/notetype/recipeoverview/` | Dashboard listing all recipe notes, grocery list generation via RPC action |
 | Example | `example` | `pkg/notetype/example/` | Minimal checklist — use as a starting point |
+| Index | `index` | `pkg/notetype/index/` | Tag-based note index (global or local scope) |
 
 ## Design
 
