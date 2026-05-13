@@ -7,20 +7,22 @@
             :note="activeNote"
             :token="token"
             :editing="editing"
-            :customData="customData"
-            :uiSchema="uiSchema"
+            :customData="resolvedCustomData"
+            :uiSchema="resolvedUiSchema"
             @selectNote="(id) => $emit('selectNote', id)"
             @update:customData="(d) => $emit('update:customData', d)"
         />
 
         <!-- Schema fallback for types without a custom component -->
         <SchemaNoteType
-            v-else-if="typeDef && typeDef.supportsSchemaFallback && uiSchema"
+            v-else-if="
+                typeDef && typeDef.supportsSchemaFallback && resolvedUiSchema
+            "
             :note="activeNote"
             :token="token"
             :editing="editing"
-            :customData="customData"
-            :uiSchema="uiSchema"
+            :customData="resolvedCustomData"
+            :uiSchema="resolvedUiSchema"
             @selectNote="(id) => $emit('selectNote', id)"
             @update:customData="(d) => $emit('update:customData', d)"
         />
@@ -31,8 +33,8 @@
             :note="activeNote"
             :token="token"
             :editing="editing"
-            :customData="customData"
-            :uiSchema="uiSchema"
+            :customData="resolvedCustomData"
+            :uiSchema="resolvedUiSchema"
         />
     </div>
 </template>
@@ -61,6 +63,28 @@ const typeDef = computed(() => {
 // Use either the note prop directly or a merged view-model.
 // Prefer explicit props when available for draft-driven rendering.
 const activeNote = computed(() => props.note);
+
+/**
+ * Resolve the effective uiSchema, falling back to plugin.view from the
+ * new PluginDetail shape when not provided explicitly as a prop.
+ */
+const resolvedUiSchema = computed(() => {
+    if (props.uiSchema) return props.uiSchema;
+    const plugin = props.note?.plugin;
+    if (!plugin || typeof plugin !== "object") return null;
+    return plugin.view || null;
+});
+
+/**
+ * Resolve the effective customData, falling back to plugin.config from the
+ * new PluginDetail shape when not provided explicitly as a prop.
+ */
+const resolvedCustomData = computed(() => {
+    if (props.customData != null) return props.customData;
+    const plugin = props.note?.plugin;
+    if (!plugin || typeof plugin !== "object") return null;
+    return plugin.config || null;
+});
 </script>
 
 <style scoped>

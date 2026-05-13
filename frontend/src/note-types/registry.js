@@ -4,9 +4,15 @@
  * Powers both the type picker in NotesView.vue and the renderer lookup in
  * NoteTypeRenderer.vue.  Each entry describes one note type and how the
  * frontend should handle it.
+ *
+ * The backend /note-types endpoint returns Manifest[] objects that are
+ * merged into the local registry entries to provide editor mode, viewer
+ * mode, actions metadata, and default_config.  Call fetchAndMergeManifests()
+ * after login to synchronize with the server.
  */
 
 import { defineAsyncComponent } from "vue";
+import { fetchNoteTypes } from "../api.js";
 
 // ---------------------------------------------------------------------------
 // Standard helpers used by several types
@@ -159,6 +165,58 @@ const registry = [
         supportsSchemaFallback: false,
     },
 ];
+
+// ---------------------------------------------------------------------------
+// Manifest cache (populated from GET /note-types)
+// ---------------------------------------------------------------------------
+
+/** Map from note type id → server Manifest */
+const manifestCache = new Map();
+
+/**
+ * Fetch manifests from the server and merge into the local registry.
+ * Must be called after login (requires a valid token).
+ */
+export async function fetchAndMergeManifests(token) {
+    try {
+        const manifests = await fetchNoteTypes(token);
+        if (!Array.isArray(manifests)) return;
+        for (const m of manifests) {
+            manifestCache.set(m.id, m);
+            // Merge manifest data into the registry entry if it exists
+            const entry = registry.find((t) => t.id === m.id);
+            if (entry) {
+                // Update label from server if available
+                if (m.label) entry.label = m.label;
+                // Store manifest metadata
+                entry.manifest = m;
+                entry.editorMode = m.editor?.mode || "none";
+                entry.editorSchema = m.editor?.schema || null;
+                entry.viewerMode = m.viewer?.mode || "none";
+                entry.actions = m.actions || [];
+                entry.hasConfig = m.has_config || false;
+                entry.hasView = m.has_view || false;
+                entry.hasActions = m.has_actions || false;
+                // Use server-provided default_config if available
+                if (m.default_config != null) {
+                    entry.emptyCustomData = () =>
+                        JSON.parse(JSON.stringify(m.default_config));
+                }
+                // Set schema fallback support based on editor mode
+                entry.supportsSchemaFallback = m.editor?.mode === "schema";
+            }
+        }
+    } catch {
+        // Silently ignore — registry falls back to hardcoded defaults.
+    }
+}
+
+/**
+ * Get the manifest for a given note type id (or null if not available).
+ */
+export function getManifest(id) {
+    return manifestCache.get(id) || null;
+}
 
 // ---------------------------------------------------------------------------
 // Public API

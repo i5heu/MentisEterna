@@ -5,22 +5,22 @@
  */
 
 import { ref } from "vue";
-import { pluginAction } from "../../api.js";
+import { pluginActionV2 } from "../../api.js";
 
 export function usePluginAction(tokenRef) {
     const loading = ref(false);
     const error = ref(null);
     const result = ref(null);
 
-    async function execute(noteId, action, params) {
+    async function execute(noteId, actionID, params) {
         loading.value = true;
         error.value = null;
         result.value = null;
         try {
-            result.value = await pluginAction(
+            result.value = await pluginActionV2(
                 tokenRef.value || tokenRef,
                 noteId,
-                action,
+                actionID,
                 params,
             );
             return result.value;

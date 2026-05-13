@@ -32,18 +32,25 @@
                     }}</span>
                     <div class="job-info">
                         <span class="job-name"
-                            >{{ run.plugin_id }}/{{ run.job_name }}</span
+                            >{{ run.plugin_id ? run.plugin_id + "/" : ""
+                            }}{{ run.job_name }}</span
                         >
                         <span class="job-time">{{
                             fmtTime(run.created_at)
                         }}</span>
                         <span
-                            v-if="run.status === 'errored'"
+                            v-if="
+                                run.status === 'failed' ||
+                                run.status === 'errored'
+                            "
                             class="job-error"
                             >{{ run.error }}</span
                         >
                         <span
-                            v-if="run.status === 'done' && run.result"
+                            v-if="
+                                run.status === 'completed' ||
+                                run.status === 'done'
+                            "
                             class="job-result"
                             >{{ run.result }}</span
                         >
@@ -51,6 +58,7 @@
                     <div class="job-actions">
                         <button
                             v-if="
+                                run.status === 'failed' ||
                                 run.status === 'errored' ||
                                 run.status === 'cancelled'
                             "
@@ -84,13 +92,13 @@ let pollTimer = null;
 
 function statusIcon(status) {
     switch (status) {
-        case "planned":
+        case "pending":
             return "⏳";
         case "running":
             return "⟳";
-        case "done":
+        case "completed":
             return "✓";
-        case "errored":
+        case "failed":
             return "✗";
         case "cancelled":
             return "⊘";
@@ -114,11 +122,15 @@ async function load() {
     try {
         const data = await fetchJobs(props.token);
         runs.value = data.runs || [];
-        pendingCount.value = data.pending_count || 0;
+        pendingCount.value = data.pending_count ?? data.total ?? 0;
         for (const r of runs.value) {
-            if (r.job_name === 'generate_title' && r.status === 'done' && !seenDone.value.has(r.id)) {
+            if (
+                r.job_name === "generate_title" &&
+                (r.status === "completed" || r.status === "done") &&
+                !seenDone.value.has(r.id)
+            ) {
                 seenDone.value.add(r.id);
-                emit('job-done', { name: 'generate_title', runId: r.id });
+                emit("job-done", { name: "generate_title", runId: r.id });
             }
         }
     } catch {
