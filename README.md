@@ -98,11 +98,13 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [ ] Fast Handnote import
 - [ ] support AsciiDoc and Markdown (with live preview)
 - [ ] SQLite AES-256 in OFB mode
+- [ ] Search for Note Types and Path should be shown instead of just title when selecting a note type.
 
 ## TODO Note Types
 - [x] Recipe (with ingredient table)
   - [x] Recipe Overview (dashboard listing all recipe notes, grocery list generation via RPC action)
   - [x] Recipe Note Type must include following fields: Servings, Attention Time, Total Time, grams per serving, kcal per serving, Freezable (boolean)
+  - [ ] If a recipe has can be pre-cocked, there should be a checkbox in the Recipe Overview to pre-cook the recipe. If true the people ammount is ignored and the pre-cook serving size is used for this recipe when generating the grocery list. 
 - [ ] Task Sytem
   - [ ] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
   - [ ] Task overview dashboard - list all tasks, filter by status, due date, etc. 
@@ -115,8 +117,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [ ] Car refuleling log overview dashboard
 - [ ] Gridfinity note type
   - [ ] Gridfinity overview dashboard with search and filter options
-- [ ] Wants and wishes note type
-  - [ ] wants and wishes overview dashboard
+- [ ] Wants and wishes note type - has button to add "Today i wanted this", has fields: Acquisition Cost, Operating Expenses per month, Disposal Costs, potential profit per month, Durability in years, Space Requirements in m³
+  - [ ] wants and wishes overview dashboard, with Total Cost of Ownership, Total Potential Profit and space requirements.
 - [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note
 
 ## Prerequisites
