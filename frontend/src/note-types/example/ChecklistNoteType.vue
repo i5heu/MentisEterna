@@ -142,8 +142,4 @@ function removeItem(idx) {
     font-style: italic;
 }
 
-.btn-sm {
-    padding: 0.2rem 0.5rem;
-    font-size: 0.85rem;
-}
 </style>

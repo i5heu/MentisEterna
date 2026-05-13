@@ -277,10 +277,6 @@ function removeIngredient(idx) {
     width: 6rem !important;
 }
 
-.btn-sm {
-    padding: 0.2rem 0.5rem;
-    font-size: 0.85rem;
-}
 
 .recipe-details {
     display: flex;
