@@ -14,6 +14,14 @@ import (
 
 const pluginID = "recipe"
 
+var validUnits = map[string]bool{
+	"g":   true,
+	"kg":  true,
+	"ml":  true,
+	"l":   true,
+	"pcs": true,
+}
+
 // IngredientRow represents a single ingredient in a recipe.
 type IngredientRow struct {
 	ID     int64  `json:"id"`
@@ -184,6 +192,13 @@ func (p *RecipePlugin) ValidateConfig(payload json.RawMessage) error {
 	for i, ing := range pld.Ingredients {
 		if strings.TrimSpace(ing.Name) == "" {
 			return fmt.Errorf("recipe: ingredient %d: name is required", i+1)
+		}
+		unit := strings.TrimSpace(ing.Unit)
+		if !validUnits[unit] {
+			return fmt.Errorf("recipe: ingredient %d: unit %q is not a valid metric unit (use g, kg, ml, l, pcs)", i+1, unit)
+		}
+		if strings.Contains(ing.Amount, ",") {
+			return fmt.Errorf("recipe: ingredient %d: amount must use dot as decimal separator, not comma", i+1)
 		}
 	}
 	return nil

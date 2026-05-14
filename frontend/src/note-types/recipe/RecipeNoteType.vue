@@ -28,11 +28,13 @@
                     </td>
                     <td v-else>{{ ing.amount || "-" }}</td>
                     <td v-if="editing">
-                        <input
-                            v-model="ing.unit"
-                            placeholder="e.g. cups"
-                            class="unit-input"
-                        />
+                        <select v-model="ing.unit" class="unit-select">
+                            <option value="g">g</option>
+                            <option value="kg">kg</option>
+                            <option value="ml">ml</option>
+                            <option value="l">l</option>
+                            <option value="pcs">pcs</option>
+                        </select>
                     </td>
                     <td v-else>{{ ing.unit || "-" }}</td>
                     <td v-if="editing">
@@ -273,10 +275,11 @@ function removeIngredient(idx) {
     width: 5rem !important;
 }
 
-.unit-input {
-    width: 6rem !important;
+.unit-select {
+    width: 5.5rem;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.9rem;
 }
-
 
 .recipe-details {
     display: flex;

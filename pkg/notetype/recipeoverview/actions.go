@@ -167,6 +167,7 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 
 	scaled := make([]item, 0, len(aggregated))
 	for _, it := range aggregated {
+		it.Amount, it.Unit = normalizeMetricAmount(it.Amount, it.Unit)
 		scaled = append(scaled, it)
 	}
 	sort.Slice(scaled, func(i, j int) bool {
@@ -360,6 +361,39 @@ func formatAmount(num float64, unit string) string {
 		s += " " + unit
 	}
 	return s
+}
+
+// normalizeMetricAmount normalizes amounts to the best metric unit.
+// - g >= 1000 → convert to kg
+// - kg > 0 and < 1 → convert to g
+// - ml >= 1000 → convert to l
+// - l > 0 and < 1 → convert to ml
+// Otherwise returns the amount and unit as-is.
+func normalizeMetricAmount(amount string, unit string) (string, string) {
+	num, u := splitAmount(amount)
+	if num < 0 || u != "" {
+		return amount, unit // non-numeric or already has embedded unit
+	}
+
+	switch unit {
+	case "g":
+		if num >= 1000 {
+			return formatAmount(num/1000, ""), "kg"
+		}
+	case "kg":
+		if num > 0 && num < 1 {
+			return formatAmount(num*1000, ""), "g"
+		}
+	case "ml":
+		if num >= 1000 {
+			return formatAmount(num/1000, ""), "l"
+		}
+	case "l":
+		if num > 0 && num < 1 {
+			return formatAmount(num*1000, ""), "ml"
+		}
+	}
+	return amount, unit
 }
 
 // scaleAmountFloat multiplies a numeric amount by a float64 factor
