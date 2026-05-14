@@ -84,9 +84,9 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 ## TODO Future
 - [x] OCR for images and pdfs
 - [x] speech to text notes
-- [ ] Refactor code
+- [x] Refactor code
   - [x] Split NoteTypeRenderer.vue into multiple components for better maintainability.
-  - [ ] especially note types to see if we can abstract some common logic. 
+  - [x] especially note types to see if we can abstract some common logic. 
 - [ ] Options Page for job list, create backup, logout, register passkey and other settings
   - [ ] Re Index, OCR and STT failed once, button in UI with counter.
 - [ ] better search (by title, path and tags)
@@ -107,8 +107,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Recipe (with ingredient table)
   - [x] Recipe Overview (dashboard listing all recipe notes, grocery list generation via RPC action)
   - [x] Recipe Note Type must include following fields: Servings, Attention Time, Total Time, grams per serving, kcal per serving, Freezable (boolean)
-  - [ ] If a recipe has can be pre-cocked, there should be a checkbox in the Recipe Overview to pre-cook the recipe. If true the people ammount is ignored and the pre-cook serving size is used for this recipe when generating the grocery list. 
-  - [ ] Recipe ingredients must use metric units or pieces. Decimal punctuation must be a dot. 
+  - [x] If a recipe has can be pre-cocked, there should be a checkbox in the Recipe Overview to pre-cook the recipe. If true the people ammount is ignored and the pre-cook serving size is used for this recipe when generating the grocery list. 
+  - [ ] Recipe ingredients must use metric units or pieces with dropdown. Decimal punctuation must be a dot. 
   - [ ] Grocery List must recalculate the amounts to best metric unit (e.g. 1500g -> 1.5kg, 0.5l -> 500ml, etc.)
   - [ ] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
 - [ ] Task Sytem
