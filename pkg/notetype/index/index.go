@@ -42,7 +42,7 @@ func (p *IndexPlugin) InitSchema(db *sql.DB) error {
 
 // --- Payload types ---
 
-// Payload is what the frontend sends / ProcessLoad returns for the config.
+// Payload is what the frontend sends / LoadConfig returns for the config.
 type Payload struct {
 	Mode         string   `json:"mode"`          // "global" or "local"
 	SelectedTags []string `json:"selected_tags"` // empty = show all
@@ -63,33 +63,56 @@ type IndexNote struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// Response is what ProcessLoad returns to the frontend.
+// Response is what BuildView returns to the frontend.
 type Response struct {
 	Mode         string       `json:"mode"`
 	SelectedTags []string     `json:"selected_tags"`
 	Entries      []IndexEntry `json:"entries"`
 }
 
-// --- NoteType interface ---
+func (p *IndexPlugin) CronJobs() []notetype.CronJob {
+	return nil
+}
 
-func (p *IndexPlugin) Validate(raw json.RawMessage) error {
-	if len(raw) == 0 {
+func (p *IndexPlugin) Manifest() notetype.Manifest {
+	return notetype.Manifest{
+		ID:            "index",
+		Label:         "Tag Index",
+		Description:   "Shows notes grouped by tags",
+		Category:      "Navigation",
+		SortOrder:     300,
+		DefaultConfig: json.RawMessage(`{"mode":"global","selected_tags":[]}`),
+		Editor: notetype.EditorMeta{Mode: "custom", Schema: json.RawMessage(`[
+	{
+		"$el": "p",
+		"children": "Shows notes grouped by tags. Configure mode to see tags globally or within the current branch."
+	}
+]`)},
+		Viewer:     notetype.ViewerMeta{Mode: "custom"},
+		HasConfig:  true,
+		HasView:    true,
+		HasActions: false,
+	}
+}
+
+func (p *IndexPlugin) ValidateConfig(payload json.RawMessage) error {
+	if len(payload) == 0 {
 		return nil
 	}
-	var payload Payload
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	var pl Payload
+	if err := json.Unmarshal(payload, &pl); err != nil {
 		return fmt.Errorf("index: invalid payload: %w", err)
 	}
-	if payload.Mode != "" && payload.Mode != "global" && payload.Mode != "local" {
-		return fmt.Errorf("index: mode must be 'global' or 'local', got %q", payload.Mode)
+	if pl.Mode != "" && pl.Mode != "global" && pl.Mode != "local" {
+		return fmt.Errorf("index: mode must be 'global' or 'local', got %q", pl.Mode)
 	}
 	return nil
 }
 
-func (p *IndexPlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, noteID int64, raw json.RawMessage) error {
+func (p *IndexPlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error {
 	var payload Payload
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &payload); err != nil {
+	if len(config) > 0 {
+		if err := json.Unmarshal(config, &payload); err != nil {
 			return fmt.Errorf("index: unmarshal payload: %w", err)
 		}
 	}
@@ -114,80 +137,6 @@ func (p *IndexPlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, n
 	}
 
 	return nil
-}
-
-func (p *IndexPlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
-	var mode string
-	var tagsJSON string
-	err := db.QueryRow(
-		`SELECT mode, selected_tags_json FROM ct_index_config WHERE note_id = ?`,
-		noteID,
-	).Scan(&mode, &tagsJSON)
-	if err == sql.ErrNoRows {
-		mode = "global"
-		tagsJSON = "[]"
-	} else if err != nil {
-		return nil, fmt.Errorf("index: load config: %w", err)
-	}
-
-	var selectedTags []string
-	if tagsJSON != "" {
-		if err := json.Unmarshal([]byte(tagsJSON), &selectedTags); err != nil {
-			selectedTags = nil
-		}
-	}
-
-	cfg := Payload{Mode: mode, SelectedTags: selectedTags}
-
-	entries, err := buildIndex(db, noteID, cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Response{
-		Mode:         cfg.Mode,
-		SelectedTags: cfg.SelectedTags,
-		Entries:      entries,
-	}, nil
-}
-
-func (p *IndexPlugin) UISchema() json.RawMessage {
-	return json.RawMessage(`[
-	{
-		"$el": "p",
-		"children": "Shows notes grouped by tags. Configure mode to see tags globally or within the current branch."
-	}
-]`)
-}
-
-func (p *IndexPlugin) CronJobs() []notetype.CronJob {
-	return nil
-}
-
-// --- New interfaces ---
-
-func (p *IndexPlugin) Manifest() notetype.Manifest {
-	return notetype.Manifest{
-		ID:            "index",
-		Label:         "Tag Index",
-		Description:   "Shows notes grouped by tags",
-		Category:      "Navigation",
-		SortOrder:     300,
-		DefaultConfig: json.RawMessage(`{"mode":"global","selected_tags":[]}`),
-		Editor:        notetype.EditorMeta{Mode: "custom", Schema: p.UISchema()},
-		Viewer:        notetype.ViewerMeta{Mode: "custom"},
-		HasConfig:     true,
-		HasView:       true,
-		HasActions:    false,
-	}
-}
-
-func (p *IndexPlugin) ValidateConfig(payload json.RawMessage) error {
-	return p.Validate(payload)
-}
-
-func (p *IndexPlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error {
-	return p.ProcessSave(ctx, tx, userID, noteID, config)
 }
 
 func (p *IndexPlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
@@ -215,8 +164,27 @@ func (p *IndexPlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, no
 }
 
 func (p *IndexPlugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
-	// Reuse ProcessLoad to get the full Response (config + computed entries).
-	return p.ProcessLoad(ctx, db, userID, noteID)
+	// Load config.
+	cfg, err := p.LoadConfig(ctx, db, userID, noteID)
+	if err != nil {
+		return nil, err
+	}
+	var payload Payload
+	if err := json.Unmarshal(cfg, &payload); err != nil {
+		return nil, fmt.Errorf("index: unmarshal own config: %w", err)
+	}
+
+	// Build the tag index.
+	entries, err := buildIndex(db, noteID, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Response{
+		Mode:         payload.Mode,
+		SelectedTags: payload.SelectedTags,
+		Entries:      entries,
+	}, nil
 }
 
 // --- Index building ---

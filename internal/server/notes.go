@@ -282,11 +282,6 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-		} else {
-			if err := plugin.Validate(in.CustomData); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
 		}
 	}
 
@@ -313,11 +308,6 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	if plugin, exists := notetype.Registry[in.Type]; exists && len(in.CustomData) > 0 {
 		if cs, ok := plugin.(notetype.ConfigSaver); ok {
 			if err := cs.SaveConfig(context.Background(), tx, 0, id, in.CustomData); err != nil {
-				writeErr(w, err)
-				return
-			}
-		} else {
-			if err := plugin.ProcessSave(context.Background(), tx, 0, id, in.CustomData); err != nil {
 				writeErr(w, err)
 				return
 			}
@@ -423,11 +413,6 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-		} else {
-			if err := plugin.Validate(in.CustomData); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
 		}
 	}
 
@@ -457,11 +442,6 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	if plugin, exists := notetype.Registry[in.Type]; exists {
 		if cs, ok := plugin.(notetype.ConfigSaver); ok {
 			if err := cs.SaveConfig(context.Background(), tx, 0, id, in.CustomData); err != nil {
-				writeErr(w, err)
-				return
-			}
-		} else {
-			if err := plugin.ProcessSave(context.Background(), tx, 0, id, in.CustomData); err != nil {
 				writeErr(w, err)
 				return
 			}

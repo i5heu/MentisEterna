@@ -1,5 +1,5 @@
 // Package notetype defines the plugin interface for custom note types.
-// Each note type (recipe, task list, collection, etc.) implements NoteType
+// Each note type (recipe, checklist, index, etc.) implements Plugin
 // and registers itself via Register() so the server can route requests to it.
 package notetype
 
@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 // CronJob describes a background task registered by a plugin.
@@ -20,16 +21,16 @@ type CronJob struct {
 	Task     func(db *sql.DB, payload []byte) (result string, err error)
 }
 
-// NoteType is the interface all custom note plugins must implement.
+// Plugin is the required base interface that every note type must implement.
 //
 // Lifecycle:
 //  1. InitSchema is called once at server startup to create plugin tables.
-//  2. Validate is called before save to check the incoming payload.
-//  3. ProcessSave is called within an active SQL transaction to persist plugin data.
-//  4. ProcessLoad is called when loading a note to retrieve plugin-specific data.
-//  5. UISchema provides a FormKit-compatible JSON schema for the frontend.
+//  2. Manifest provides static metadata (label, icon, editor/viewer modes, capabilities, actions).
+//  3. Config is persisted/loaded/validated via the optional ConfigValidator, ConfigSaver, ConfigLoader interfaces.
+//  4. View data is computed via the optional ViewBuilder interface.
+//  5. Actions are dispatched via the optional ActionHandler interface.
 //  6. CronJobs returns optional background tasks (e.g., generating grocery lists).
-type NoteType interface {
+type Plugin interface {
 	// ID returns a short, unique identifier for this plugin (e.g. "recipe").
 	ID() string
 
@@ -38,23 +39,8 @@ type NoteType interface {
 	// This is called once at server startup for every registered plugin.
 	InitSchema(db *sql.DB) error
 
-	// Validate checks the custom payload before saving.
-	// Returns nil if the payload is valid, or an error describing the problem.
-	Validate(payload json.RawMessage) error
-
-	// ProcessSave persists the plugin-specific data for a note.
-	// It runs inside an active SQL transaction (tx) along with the core note insert/update.
-	// The noteID is guaranteed to exist in the notes table at this point.
-	ProcessSave(ctx context.Context, tx *sql.Tx, userID int, noteID int64, payload json.RawMessage) error
-
-	// ProcessLoad retrieves the plugin-specific data for a note.
-	// Returns nil, nil if no custom data exists for this note.
-	ProcessLoad(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error)
-
-	// UISchema returns a JSON schema that the frontend uses to render
-	// a form for this note type. The schema should be FormKit-compatible:
-	// https://formkit.com/essentials/schema
-	UISchema() json.RawMessage
+	// Manifest returns static metadata about this note type.
+	Manifest() Manifest
 
 	// CronJobs returns any background cron jobs this plugin needs.
 	// Jobs are registered by the server and run on a shared scheduler.
@@ -62,15 +48,15 @@ type NoteType interface {
 }
 
 // Registry holds all active plugins, keyed by their ID().
-var Registry = make(map[string]NoteType)
+var Registry = make(map[string]Plugin)
 
 // Register adds a plugin to the global registry.
 // Plugins typically call this from their init() function.
-func Register(nt NoteType) {
-	Registry[nt.ID()] = nt
+func Register(p Plugin) {
+	Registry[p.ID()] = p
 }
 
-// --- New explicit config/view/action interfaces ---
+// --- Config/view/action interfaces ---
 
 // EditorMeta describes the editing experience for a note type.
 type EditorMeta struct {
@@ -111,14 +97,9 @@ type Manifest struct {
 	HasActions    bool            `json:"has_actions"`
 }
 
-// ManifestProvider returns the static Manifest for this note type.
-type ManifestProvider interface {
-	Manifest() Manifest
-}
-
 // ConfigValidator validates configuration payload before saving.
 type ConfigValidator interface {
-	ValidateConfig(payload json.RawMessage) error
+	ValidateConfig(config json.RawMessage) error
 }
 
 // ConfigSaver persists plugin configuration within a transaction.
@@ -144,3 +125,46 @@ type ActionHandler interface {
 // ErrUnknownAction is returned by ActionHandler when the requested action is not recognised.
 // The server translates this to HTTP 404.
 var ErrUnknownAction = errors.New("unknown action")
+
+// ValidatePlugin checks that a plugin's implementation matches its declared capabilities.
+// Returns nil if the plugin is valid, or an error describing the inconsistency.
+func ValidatePlugin(p Plugin) error {
+	m := p.Manifest()
+
+	if m.HasConfig {
+		if _, ok := p.(ConfigValidator); !ok {
+			return fmt.Errorf("plugin %q: HasConfig=true but does not implement ConfigValidator", p.ID())
+		}
+		if _, ok := p.(ConfigSaver); !ok {
+			return fmt.Errorf("plugin %q: HasConfig=true but does not implement ConfigSaver", p.ID())
+		}
+		if _, ok := p.(ConfigLoader); !ok {
+			return fmt.Errorf("plugin %q: HasConfig=true but does not implement ConfigLoader", p.ID())
+		}
+	}
+
+	if m.HasView {
+		if _, ok := p.(ViewBuilder); !ok {
+			return fmt.Errorf("plugin %q: HasView=true but does not implement ViewBuilder", p.ID())
+		}
+	}
+
+	if m.HasActions {
+		if _, ok := p.(ActionHandler); !ok {
+			return fmt.Errorf("plugin %q: HasActions=true but does not implement ActionHandler", p.ID())
+		}
+		if len(m.Actions) == 0 {
+			return fmt.Errorf("plugin %q: HasActions=true but Actions list is empty", p.ID())
+		}
+	}
+
+	if len(m.Actions) > 0 && !m.HasActions {
+		return fmt.Errorf("plugin %q: HasActions=false but Actions list is non-empty", p.ID())
+	}
+
+	if m.Editor.Mode == "schema" && len(m.Editor.Schema) == 0 {
+		return fmt.Errorf("plugin %q: Editor.Mode is 'schema' but Editor.Schema is empty", p.ID())
+	}
+
+	return nil
+}

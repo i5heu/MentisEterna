@@ -83,125 +83,19 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	return nil
 }
 
-func (p *RecipePlugin) Validate(raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return nil // optional
-	}
-	var payload Payload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return fmt.Errorf("recipe: invalid payload: %w", err)
-	}
-	for i, ing := range payload.Ingredients {
-		if strings.TrimSpace(ing.Name) == "" {
-			return fmt.Errorf("recipe: ingredient %d: name is required", i+1)
-		}
-	}
-	return nil
+func (p *RecipePlugin) CronJobs() []notetype.CronJob {
+	return nil // no background jobs for individual recipes
 }
 
-func (p *RecipePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, noteID int64, raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	var payload Payload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return fmt.Errorf("recipe: unmarshal payload: %w", err)
-	}
-
-	// Delete old ingredients and insert new ones (simpler than diffing).
-	if _, err := tx.Exec(`DELETE FROM ct_recipe_ingredients WHERE note_id = ?`, noteID); err != nil {
-		return fmt.Errorf("recipe: delete old ingredients: %w", err)
-	}
-
-	for i, ing := range payload.Ingredients {
-		if _, err := tx.Exec(
-			`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, ?, ?, ?, ?)`,
-			noteID, strings.TrimSpace(ing.Name), strings.TrimSpace(ing.Amount), strings.TrimSpace(ing.Unit), i,
-		); err != nil {
-			return fmt.Errorf("recipe: insert ingredient %d: %w", i, err)
-		}
-	}
-
-	// Upsert recipe metadata.
-	freezableInt := 0
-	if payload.Freezable {
-		freezableInt = 1
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO ct_recipe_meta (note_id, servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(note_id) DO UPDATE SET
-			servings          = excluded.servings,
-			attention_time    = excluded.attention_time,
-			total_time        = excluded.total_time,
-			grams_per_serving = excluded.grams_per_serving,
-			kcal_per_serving  = excluded.kcal_per_serving,
-			freezable         = excluded.freezable,
-			pre_cook_servings = excluded.pre_cook_servings`,
-		noteID,
-		strings.TrimSpace(payload.Servings),
-		strings.TrimSpace(payload.AttentionTime),
-		strings.TrimSpace(payload.TotalTime),
-		strings.TrimSpace(payload.GramsPerServing),
-		strings.TrimSpace(payload.KcalPerServing),
-		freezableInt,
-		strings.TrimSpace(payload.PreCookServings),
-	); err != nil {
-		return fmt.Errorf("recipe: upsert meta: %w", err)
-	}
-
-	return nil
-}
-
-func (p *RecipePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
-	// Load ingredients.
-	rows, err := db.Query(
-		`SELECT id, name, amount, unit FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
-		noteID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("recipe: load ingredients: %w", err)
-	}
-	defer rows.Close()
-
-	ingredients := []IngredientRow{}
-	for rows.Next() {
-		var ing IngredientRow
-		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Amount, &ing.Unit); err != nil {
-			return nil, fmt.Errorf("recipe: scan ingredient: %w", err)
-		}
-		ingredients = append(ingredients, ing)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Load metadata.
-	payload := Payload{Ingredients: ingredients}
-	var freezableInt int
-	err = db.QueryRow(
-		`SELECT servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings
-		 FROM ct_recipe_meta WHERE note_id = ?`,
-		noteID,
-	).Scan(
-		&payload.Servings,
-		&payload.AttentionTime,
-		&payload.TotalTime,
-		&payload.GramsPerServing,
-		&payload.KcalPerServing,
-		&freezableInt,
-		&payload.PreCookServings,
-	)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("recipe: load meta: %w", err)
-	}
-	payload.Freezable = freezableInt != 0
-
-	return payload, nil
-}
-
-func (p *RecipePlugin) UISchema() json.RawMessage {
-	schema := json.RawMessage(`[
+func (p *RecipePlugin) Manifest() notetype.Manifest {
+	return notetype.Manifest{
+		ID:            "recipe",
+		Label:         "Recipe",
+		Description:   "A recipe with ingredients, servings, and timing info",
+		Category:      "Cooking",
+		SortOrder:     200,
+		DefaultConfig: json.RawMessage(`{"ingredients":[],"servings":"","attention_time":"","total_time":"","grams_per_serving":"","kcal_per_serving":"","freezable":false,"pre_cook_servings":""}`),
+		Editor: notetype.EditorMeta{Mode: "custom", Schema: json.RawMessage(`[
 	{
 		"$el": "h3",
 		"children": "Ingredients"
@@ -271,47 +165,131 @@ func (p *RecipePlugin) UISchema() json.RawMessage {
 		"name": "pre_cook_servings",
 		"label": "Pre-Cook Servings"
 	}
-]`)
-	return schema
-}
-
-func (p *RecipePlugin) CronJobs() []notetype.CronJob {
-	return nil // no background jobs for individual recipes
-}
-
-// --- New interfaces ---
-
-func (p *RecipePlugin) Manifest() notetype.Manifest {
-	return notetype.Manifest{
-		ID:            "recipe",
-		Label:         "Recipe",
-		Description:   "A recipe with ingredients, servings, and timing info",
-		Category:      "Cooking",
-		SortOrder:     200,
-		DefaultConfig: json.RawMessage(`{"ingredients":[],"servings":"","attention_time":"","total_time":"","grams_per_serving":"","kcal_per_serving":"","freezable":false,"pre_cook_servings":""}`),
-		Editor:        notetype.EditorMeta{Mode: "custom", Schema: p.UISchema()},
-		Viewer:        notetype.ViewerMeta{Mode: "custom"},
-		HasConfig:     true,
-		HasView:       false,
-		HasActions:    false,
+]`)},
+		Viewer:     notetype.ViewerMeta{Mode: "custom"},
+		HasConfig:  true,
+		HasView:    false,
+		HasActions: false,
 	}
 }
 
 func (p *RecipePlugin) ValidateConfig(payload json.RawMessage) error {
-	return p.Validate(payload)
+	if len(payload) == 0 {
+		return nil // optional
+	}
+	var pld Payload
+	if err := json.Unmarshal(payload, &pld); err != nil {
+		return fmt.Errorf("recipe: invalid payload: %w", err)
+	}
+	for i, ing := range pld.Ingredients {
+		if strings.TrimSpace(ing.Name) == "" {
+			return fmt.Errorf("recipe: ingredient %d: name is required", i+1)
+		}
+	}
+	return nil
 }
 
 func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error {
-	return p.ProcessSave(ctx, tx, userID, noteID, config)
+	if len(config) == 0 {
+		return nil
+	}
+	var payload Payload
+	if err := json.Unmarshal(config, &payload); err != nil {
+		return fmt.Errorf("recipe: unmarshal payload: %w", err)
+	}
+
+	// Delete old ingredients and insert new ones (simpler than diffing).
+	if _, err := tx.Exec(`DELETE FROM ct_recipe_ingredients WHERE note_id = ?`, noteID); err != nil {
+		return fmt.Errorf("recipe: delete old ingredients: %w", err)
+	}
+
+	for i, ing := range payload.Ingredients {
+		if _, err := tx.Exec(
+			`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, ?, ?, ?, ?)`,
+			noteID, strings.TrimSpace(ing.Name), strings.TrimSpace(ing.Amount), strings.TrimSpace(ing.Unit), i,
+		); err != nil {
+			return fmt.Errorf("recipe: insert ingredient %d: %w", i, err)
+		}
+	}
+
+	// Upsert recipe metadata.
+	freezableInt := 0
+	if payload.Freezable {
+		freezableInt = 1
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO ct_recipe_meta (note_id, servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(note_id) DO UPDATE SET
+			servings          = excluded.servings,
+			attention_time    = excluded.attention_time,
+			total_time        = excluded.total_time,
+			grams_per_serving = excluded.grams_per_serving,
+			kcal_per_serving  = excluded.kcal_per_serving,
+			freezable         = excluded.freezable,
+			pre_cook_servings = excluded.pre_cook_servings`,
+		noteID,
+		strings.TrimSpace(payload.Servings),
+		strings.TrimSpace(payload.AttentionTime),
+		strings.TrimSpace(payload.TotalTime),
+		strings.TrimSpace(payload.GramsPerServing),
+		strings.TrimSpace(payload.KcalPerServing),
+		freezableInt,
+		strings.TrimSpace(payload.PreCookServings),
+	); err != nil {
+		return fmt.Errorf("recipe: upsert meta: %w", err)
+	}
+
+	return nil
 }
 
 func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
-	result, err := p.ProcessLoad(ctx, db, userID, noteID)
+	// Load ingredients.
+	rows, err := db.Query(
+		`SELECT id, name, amount, unit FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
+		noteID,
+	)
 	if err != nil {
+		return nil, fmt.Errorf("recipe: load ingredients: %w", err)
+	}
+	defer rows.Close()
+
+	ingredients := []IngredientRow{}
+	for rows.Next() {
+		var ing IngredientRow
+		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Amount, &ing.Unit); err != nil {
+			return nil, fmt.Errorf("recipe: scan ingredient: %w", err)
+		}
+		ingredients = append(ingredients, ing)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if result == nil {
-		return json.RawMessage("null"), nil
+
+	// Load metadata.
+	payload := Payload{Ingredients: ingredients}
+	var freezableInt int
+	err = db.QueryRow(
+		`SELECT servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings
+		 FROM ct_recipe_meta WHERE note_id = ?`,
+		noteID,
+	).Scan(
+		&payload.Servings,
+		&payload.AttentionTime,
+		&payload.TotalTime,
+		&payload.GramsPerServing,
+		&payload.KcalPerServing,
+		&freezableInt,
+		&payload.PreCookServings,
+	)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("recipe: load meta: %w", err)
 	}
-	return json.Marshal(result)
+	payload.Freezable = freezableInt != 0
+
+	result, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("recipe: marshal payload: %w", err)
+	}
+	return json.RawMessage(result), nil
 }

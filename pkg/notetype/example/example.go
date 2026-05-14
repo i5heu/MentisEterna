@@ -1,5 +1,5 @@
 // Package example implements a minimal "example" note type to demonstrate
-// the notetype.NoteType interface. Use this as a starting point for new plugins.
+// the notetype.Plugin interface. Use this as a starting point for new plugins.
 package example
 
 import (
@@ -43,15 +43,47 @@ type ExamplePayload struct {
 	Items []ExampleItem `json:"items"`
 }
 
-func (p *ExamplePlugin) Validate(raw json.RawMessage) error {
-	if len(raw) == 0 {
+func (p *ExamplePlugin) CronJobs() []notetype.CronJob {
+	return nil
+}
+
+func (p *ExamplePlugin) Manifest() notetype.Manifest {
+	return notetype.Manifest{
+		ID:            "example",
+		Label:         "Checklist",
+		Description:   "A simple checklist with items",
+		Category:      "General",
+		SortOrder:     100,
+		DefaultConfig: json.RawMessage(`{"items":[]}`),
+		Editor: notetype.EditorMeta{
+			Mode: "custom",
+			Schema: json.RawMessage(`[
+				{
+					"$formkit": "list",
+					"name": "items",
+					"children": [
+						{"$formkit": "text", "name": "label", "label": "Item"},
+						{"$formkit": "checkbox", "name": "checked", "label": "Done"}
+					]
+				}
+			]`),
+		},
+		Viewer:     notetype.ViewerMeta{Mode: "custom"},
+		HasConfig:  true,
+		HasView:    false,
+		HasActions: false,
+	}
+}
+
+func (p *ExamplePlugin) ValidateConfig(payload json.RawMessage) error {
+	if len(payload) == 0 {
 		return nil
 	}
-	var payload ExamplePayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	var payload2 ExamplePayload
+	if err := json.Unmarshal(payload, &payload2); err != nil {
 		return err
 	}
-	for i, item := range payload.Items {
+	for i, item := range payload2.Items {
 		if item.Label == "" {
 			return fmt.Errorf("example: item %d: label is required", i+1)
 		}
@@ -59,9 +91,9 @@ func (p *ExamplePlugin) Validate(raw json.RawMessage) error {
 	return nil
 }
 
-func (p *ExamplePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, noteID int64, raw json.RawMessage) error {
+func (p *ExamplePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error {
 	var payload ExamplePayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	if err := json.Unmarshal(config, &payload); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM ct_example_items WHERE note_id = ?`, noteID); err != nil {
@@ -82,7 +114,7 @@ func (p *ExamplePlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int,
 	return nil
 }
 
-func (p *ExamplePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
+func (p *ExamplePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
 	rows, err := db.Query(`SELECT id, label, checked FROM ct_example_items WHERE note_id = ? ORDER BY id`, noteID)
 	if err != nil {
 		return nil, err
@@ -101,60 +133,5 @@ func (p *ExamplePlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Return the same Payload shape that Validate/ProcessSave expect.
-	return ExamplePayload{Items: items}, nil
-}
-
-func (p *ExamplePlugin) UISchema() json.RawMessage {
-	return json.RawMessage(`[
-		{
-			"$formkit": "list",
-			"name": "items",
-			"children": [
-				{"$formkit": "text", "name": "label", "label": "Item"},
-				{"$formkit": "checkbox", "name": "checked", "label": "Done"}
-			]
-		}
-	]`)
-}
-
-func (p *ExamplePlugin) CronJobs() []notetype.CronJob {
-	return nil
-}
-
-// --- New interfaces ---
-
-func (p *ExamplePlugin) Manifest() notetype.Manifest {
-	return notetype.Manifest{
-		ID:            "example",
-		Label:         "Checklist",
-		Description:   "A simple checklist with items",
-		Category:      "General",
-		SortOrder:     100,
-		DefaultConfig: json.RawMessage(`{"items":[]}`),
-		Editor:        notetype.EditorMeta{Mode: "custom", Schema: p.UISchema()},
-		Viewer:        notetype.ViewerMeta{Mode: "custom"},
-		HasConfig:     true,
-		HasView:       false,
-		HasActions:    false,
-	}
-}
-
-func (p *ExamplePlugin) ValidateConfig(payload json.RawMessage) error {
-	return p.Validate(payload)
-}
-
-func (p *ExamplePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID int64, config json.RawMessage) error {
-	return p.ProcessSave(ctx, tx, userID, noteID, config)
-}
-
-func (p *ExamplePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
-	result, err := p.ProcessLoad(ctx, db, userID, noteID)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return json.RawMessage("null"), nil
-	}
-	return json.Marshal(result)
+	return json.Marshal(ExamplePayload{Items: items})
 }
