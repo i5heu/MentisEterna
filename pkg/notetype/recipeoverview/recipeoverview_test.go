@@ -12,7 +12,7 @@ func TestRecipeOverviewPlugin(t *testing.T) {
 	plugintest.Run(t, &RecipeOverviewPlugin{}, plugintest.TestData{})
 }
 
-func TestProcessLoad_WithRealRecipes(t *testing.T) {
+func TestBuildView_WithRealRecipes(t *testing.T) {
 	d := plugintest.DB(t, &RecipeOverviewPlugin{})
 	defer d.Close()
 
@@ -31,9 +31,9 @@ func TestProcessLoad_WithRealRecipes(t *testing.T) {
 	overviewNote := plugintest.CreateNote(t, d, "Weekly Overview", &RecipeOverviewPlugin{})
 
 	plugin := &RecipeOverviewPlugin{}
-	result, err := plugin.ProcessLoad(context.Background(), d.DB, 0, overviewNote)
+	result, err := plugin.BuildView(context.Background(), d.DB, 0, overviewNote)
 	if err != nil {
-		t.Fatalf("ProcessLoad: %v", err)
+		t.Fatalf("BuildView: %v", err)
 	}
 
 	data, ok := result.(*OverviewData)

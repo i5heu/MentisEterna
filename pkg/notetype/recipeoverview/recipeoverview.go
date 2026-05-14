@@ -68,14 +68,6 @@ func (p *RecipeOverviewPlugin) InitSchema(db *sql.DB) error {
 	return err
 }
 
-func (p *RecipeOverviewPlugin) Validate(raw json.RawMessage) error {
-	return nil // no custom payload needed
-}
-
-func (p *RecipeOverviewPlugin) ProcessSave(ctx context.Context, tx *sql.Tx, userID int, noteID int64, raw json.RawMessage) error {
-	return nil // nothing to persist beyond the note itself
-}
-
 // OverviewData is what the frontend receives when loading this note type.
 type OverviewData struct {
 	Recipes      []RecipeSummary `json:"recipes"`
@@ -107,7 +99,49 @@ type GroceryItem struct {
 	Unit   string `json:"unit"`
 }
 
-func (p *RecipeOverviewPlugin) ProcessLoad(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
+func (p *RecipeOverviewPlugin) CronJobs() []notetype.CronJob {
+	return nil
+}
+
+// --- New interfaces ---
+
+func (p *RecipeOverviewPlugin) Manifest() notetype.Manifest {
+	return notetype.Manifest{
+		ID:            "recipe_overview",
+		Label:         "Recipe Overview",
+		Description:   "Dashboard to view recipes and generate grocery lists",
+		Category:      "Cooking",
+		SortOrder:     250,
+		DefaultConfig: json.RawMessage(`{}`),
+		Editor:        notetype.EditorMeta{Mode: "custom"},
+		Viewer:        notetype.ViewerMeta{Mode: "custom"},
+		Actions: []notetype.ActionMeta{
+			{
+				ID:              "generate_grocery_list",
+				Label:           "Generate Grocery List",
+				Description:     "Generate a grocery list from selected recipes",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"recipe_ids":{"type":"array","items":{"type":"integer"}},"num_days":{"type":"integer"},"num_people":{"type":"integer"}}}`),
+				Dangerous:       false,
+				RefreshStrategy: "reload_view",
+				SuccessMessage:  "Grocery list generated",
+			},
+			{
+				ID:              "delete_grocery_list",
+				Label:           "Delete Grocery List",
+				Description:     "Delete a grocery list",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"list_id":{"type":"integer"}},"required":["list_id"]}`),
+				Dangerous:       true,
+				RefreshStrategy: "reload_view",
+				SuccessMessage:  "Grocery list deleted",
+			},
+		},
+		HasConfig:  false,
+		HasView:    true,
+		HasActions: true,
+	}
+}
+
+func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
 	// 1. Find all recipe notes and summarize them, flagging those in recent lists.
 	rows, err := db.Query(`
 		SELECT n.id, n.title, COUNT(ri.id) AS ingredient_count,
@@ -205,63 +239,6 @@ func (p *RecipeOverviewPlugin) ProcessLoad(ctx context.Context, db *sql.DB, user
 		Recipes:      recipes,
 		GroceryLists: lists,
 	}, nil
-}
-
-func (p *RecipeOverviewPlugin) UISchema() json.RawMessage {
-	// The frontend renders this as a custom dashboard.
-	schema := json.RawMessage(`[
-	{
-		"$el": "p",
-		"children": "Shows all your recipes and lets you generate a grocery list."
-	}
-]`)
-	return schema
-}
-
-func (p *RecipeOverviewPlugin) CronJobs() []notetype.CronJob {
-	return nil
-}
-
-// --- New interfaces ---
-
-func (p *RecipeOverviewPlugin) Manifest() notetype.Manifest {
-	return notetype.Manifest{
-		ID:            "recipe_overview",
-		Label:         "Recipe Overview",
-		Description:   "Dashboard to view recipes and generate grocery lists",
-		Category:      "Cooking",
-		SortOrder:     250,
-		DefaultConfig: json.RawMessage(`{}`),
-		Editor:        notetype.EditorMeta{Mode: "custom"},
-		Viewer:        notetype.ViewerMeta{Mode: "custom"},
-		Actions: []notetype.ActionMeta{
-			{
-				ID:              "generate_grocery_list",
-				Label:           "Generate Grocery List",
-				Description:     "Generate a grocery list from selected recipes",
-				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"recipe_ids":{"type":"array","items":{"type":"integer"}},"num_days":{"type":"integer"},"num_people":{"type":"integer"}}}`),
-				Dangerous:       false,
-				RefreshStrategy: "reload_view",
-				SuccessMessage:  "Grocery list generated",
-			},
-			{
-				ID:              "delete_grocery_list",
-				Label:           "Delete Grocery List",
-				Description:     "Delete a grocery list",
-				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"list_id":{"type":"integer"}},"required":["list_id"]}`),
-				Dangerous:       true,
-				RefreshStrategy: "reload_view",
-				SuccessMessage:  "Grocery list deleted",
-			},
-		},
-		HasConfig:  false,
-		HasView:    true,
-		HasActions: true,
-	}
-}
-
-func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
-	return p.ProcessLoad(ctx, db, userID, noteID)
 }
 
 func (p *RecipeOverviewPlugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteID int64, actionID string, params json.RawMessage) (any, error) {

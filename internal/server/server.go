@@ -115,6 +115,14 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 func (s *Server) Start(ctx context.Context) error {
 	initAdminPassword(s.db)
 
+	// Validate all registered plugins at startup — fail fast on capability mismatches.
+	for _, plugin := range notetype.Registry {
+		if err := notetype.ValidatePlugin(plugin); err != nil {
+			log.Fatalf("plugin validation failed: %v", err)
+		}
+		log.Printf("plugin %s: validated", plugin.ID())
+	}
+
 	// Initialize all registered plugin schemas.
 	for _, plugin := range notetype.Registry {
 		if err := plugin.InitSchema(s.db.DB); err != nil {

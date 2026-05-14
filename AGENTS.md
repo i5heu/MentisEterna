@@ -23,18 +23,28 @@ Notes store content history in `updates` table (body was migrated out of `notes`
 
 ## Creating Custom Note Types
 
-Note types are plugin-based. Each type is a Go package in `pkg/notetype/<name>/` that implements the `NoteType` interface (legacy) plus the new capability interfaces defined in `pkg/notetype/notetype.go`. Plugins self-register via `init()` and are auto-discovered by the server at startup.
+Note types are plugin-based. Each type is a Go package in `pkg/notetype/<name>/` that implements the `Plugin` interface defined in `pkg/notetype/notetype.go`. Plugins self-register via `init()` and are auto-discovered by the server at startup.
 
-### The new explicit model (preferred)
+### The Plugin interface (required)
 
-Plugins should implement these interfaces:
+Every note type must implement the `Plugin` base interface:
 
-- `ManifestProvider` — `Manifest() Manifest` — static type metadata (label, icon, category, editor/viewer modes, actions, capabilities)
+- `ID() string` — unique short name (e.g. `"yourtype"`)
+- `InitSchema(db *sql.DB) error` — create `ct_yourtype_*` tables with `FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE`
+- `Manifest() Manifest` — static type metadata (label, icon, category, editor/viewer modes, actions, capabilities)
+- `CronJobs() []CronJob` — background tasks (or return nil)
+
+### Optional capability interfaces
+
+Plugins may also implement these optional interfaces as needed:
+
 - `ConfigValidator` — `ValidateConfig(json.RawMessage) error` — validate the persisted config payload
 - `ConfigSaver` — `SaveConfig(ctx, tx, userID, noteID, config) error` — persist config in a transaction
 - `ConfigLoader` — `LoadConfig(ctx, db, userID, noteID) (json.RawMessage, error)` — load persisted config
 - `ViewBuilder` — `BuildView(ctx, db, userID, noteID) (any, error)` — build computed/derived view data
 - `ActionHandler` — `HandleAction(ctx, db, userID, noteID, actionID, params) (any, error)` — execute actions
+
+**Capability declaration is mandatory**: if a plugin's `Manifest` declares `HasConfig=true`, the plugin MUST implement `ConfigValidator`, `ConfigSaver`, and `ConfigLoader`. Similarly for `HasView` (→ `ViewBuilder`) and `HasActions` (→ `ActionHandler`). The server validates this at startup and will `log.Fatal` on mismatch.
 
 The server populates `plugin.config` and `plugin.view` on note detail responses from `ConfigLoader` and `ViewBuilder`. Actions are declared in the manifest and dispatched through `ActionHandler`.
 
@@ -42,31 +52,23 @@ The server populates `plugin.config` and `plugin.view` on note detail responses 
 
 - `GET /note-types` — catalog of all available note types (includes synthetic `standard` type)
 - `GET /notes/:id` — note detail with `plugin.config` and `plugin.view`
-- `POST /notes/:id/actions/:actionID` — execute a plugin action (new preferred route)
+- `POST /notes/:id/actions/:actionID` — execute a plugin action
 - `POST /notes/:id/action` — legacy action route (delegates to same dispatcher)
-
-### The legacy `NoteType` interface (still supported)
-
-For backward compatibility, the old `NoteType` interface methods (`Validate`, `ProcessSave`, `ProcessLoad`, `UISchema`) are still supported. The server falls back to them when a plugin doesn't implement the new capability interfaces. New plugins should prefer the new interfaces.
 
 ### Step-by-step (5 steps)
 
 1. **Create the package** — `pkg/notetype/yourtype/yourtype.go`
 
-2. **Implement the `notetype.NoteType` interface** (legacy base):
+2. **Implement the `notetype.Plugin` interface**:
    - `ID() string` — unique short name (e.g. `"yourtype"`)
    - `InitSchema(db *sql.DB) error` — create `ct_yourtype_*` tables with `FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE`
-   - `Validate(payload json.RawMessage) error` — return nil if payload is valid
-   - `ProcessSave(ctx, tx, userID, noteID, payload) error` — persist data within the SQL transaction (DELETE old rows then INSERT new ones)
-   - `ProcessLoad(ctx, db, userID, noteID) (any, error)` — return custom data for the frontend
-   - `UISchema() json.RawMessage` — FormKit-compatible JSON schema (or nil)
+   - `Manifest() notetype.Manifest` — static metadata (label, icon, category, sort_order, editor/viewer, actions, capability flags)
    - `CronJobs() []notetype.CronJob` — background tasks (or return nil)
 
-   **Also implement the new capability interfaces:**
-   - `ManifestProvider` — returns static `Manifest` with label, icon, category, sort_order, editor/viewer metadata, actions, and capability flags
-   - `ConfigValidator` / `ConfigSaver` / `ConfigLoader` — if the type has persistent config
-   - `ViewBuilder` — if the type generates computed view data (e.g. dashboard, aggregations)
-   - `ActionHandler` — if the type supports RPC actions (declare them in the manifest)
+   **Also implement capability interfaces as needed:**
+   - `ConfigValidator` / `ConfigSaver` / `ConfigLoader` — if the type has persistent config (set `HasConfig: true` in manifest)
+   - `ViewBuilder` — if the type generates computed view data (set `HasView: true` in manifest)
+   - `ActionHandler` — if the type supports RPC actions (declare them in manifest and set `HasActions: true`)
 
    Call `notetype.Register(&YourPlugin{})` in an `init()` function.
 
@@ -95,19 +97,19 @@ For backward compatibility, the old `NoteType` interface methods (`Validate`, `P
 
 - **Table names**: always prefix with `ct_<pluginID>_` (e.g. `ct_recipe_ingredients`).
 - **Foreign keys**: always `REFERENCES notes(id) ON DELETE CASCADE`.
-- **Payload shape**: `Validate`, `ProcessSave`, and `ProcessLoad` must all use the **same JSON structure**. Wrap arrays in an object: `{"items": [...]}` not `[...]`. The test harness catches shape mismatches automatically.
+- **Config shape consistency**: `ValidateConfig`, `SaveConfig`, and `LoadConfig` must all use the **same JSON structure**. Wrap arrays in an object: `{"items": [...]}` not `[...]`. The test harness catches shape mismatches automatically.
 - **Upserts in plugin tables**: DELETE old rows, then INSERT new ones. `INSERT OR REPLACE` with foreign keys can cause issues.
-- **Plugin actions (RPC)**: Declare actions in the `Manifest` (via `ManifestProvider`) and implement `ActionHandler` on your plugin struct. The server automatically exposes `POST /notes/:id/actions/:actionID` and the legacy `POST /notes/:id/action`. Do NOT call `server.RegisterPluginActionHandler` — that legacy registry has been removed in favor of the interface-based approach.
-- **❌ NEVER store plugin config or data in the note body (`updates` table)**. The note body is for user-written markdown content only. Plugin configuration and data MUST be stored in dedicated plugin tables (`ct_<pluginID>_*`). Always create proper tables via `InitSchema` and persist through `SaveConfig` or `ProcessSave`.
+- **Plugin actions (RPC)**: Declare actions in the `Manifest` (with `HasActions: true`) and implement `ActionHandler` on your plugin struct. The server automatically exposes `POST /notes/:id/actions/:actionID` and the legacy `POST /notes/:id/action`.
+- **❌ NEVER store plugin config or data in the note body (`updates` table)**. The note body is for user-written markdown content only. Plugin configuration and data MUST be stored in dedicated plugin tables (`ct_<pluginID>_*`). Always create proper tables via `InitSchema` and persist through `SaveConfig`.
 
 ### Reference implementations
 
-| Plugin | ID | What it does | New interfaces |
+| Plugin | ID | What it does | Capabilities |
 |---|---|---|---|
-| `pkg/notetype/example/` | `example` | Minimal checklist with items (label, checked) — best starting point for new plugins | ManifestProvider, ConfigValidator, ConfigSaver, ConfigLoader |
-| `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) with add/remove rows | ManifestProvider, ConfigValidator, ConfigSaver, ConfigLoader |
-| `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ManifestProvider, ViewBuilder, ActionHandler |
-| `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ManifestProvider, ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
+| `pkg/notetype/example/` | `example` | Minimal checklist with items (label, checked) — best starting point for new plugins | ConfigValidator, ConfigSaver, ConfigLoader |
+| `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) + metadata fields | ConfigValidator, ConfigSaver, ConfigLoader |
+| `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
+| `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
 
 ## Frontend Note-Type Architecture
 
@@ -202,9 +204,9 @@ func TestYourPlugin(t *testing.T) {
 }
 ```
 
-This runs 19 sub-tests: ID validity, registry presence, ID uniqueness, schema idempotency, schema-after-notes-table, UI schema JSON validity, empty payload acceptance, valid payload acceptance, invalid payload rejection, **save/load round-trip with shape consistency check**, orphan cleanup, empty save, cron job validity, legacy action handler check, **manifest provider validation**, **config round-trip** (for migrated plugins), **view builder** (for migrated plugins), and **action handler** (for migrated plugins).
+This runs multiple sub-tests: ID validity, registry presence, ID uniqueness, schema idempotency, schema-after-notes-table, cron job validity, **manifest validation**, **config round-trip** (for plugins with config), **view builder** (for plugins with view), and **action handler** (for plugins with actions).
 
-**The most important check**: `SaveLoad_RoundTrip` calls `ProcessSave` → `ProcessLoad` → `json.Marshal` → `Validate`. If `ProcessLoad` returns a different shape than `Validate` expects (e.g. raw array vs wrapped object), this test fails with an explicit hint.
+**The most important check**: `Config_RoundTrip` calls `SaveConfig` → `LoadConfig` → `ValidateConfig`. If the loaded config fails validation, the test fails.
 
 ### Helper functions
 
@@ -214,12 +216,6 @@ d := plugintest.DB(t, &YourPlugin{})
 
 // Insert a note and get its ID.
 noteID := plugintest.CreateNote(t, d, "My Note", &YourPlugin{})
-
-// Save a payload inside a transaction.
-plugintest.SavePayload(t, d, &YourPlugin{}, noteID, json.RawMessage(`...`))
-
-// Fast mode: only validation + UI schema (3 tests, ~1ms).
-plugintest.Quick(t, &YourPlugin{}, plugintest.TestData{...})
 ```
 
 ### Running plugin tests
