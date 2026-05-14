@@ -455,7 +455,7 @@
                                 selected.ui_schema || selected.plugin?.view
                             "
                             @selectNote="(id) => selectNoteById(id)"
-                            @update:custom-data="
+                            @update:customData="
                                 (d) => {
                                     customData = d;
                                     dirty = true;

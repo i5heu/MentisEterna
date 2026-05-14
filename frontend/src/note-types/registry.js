@@ -140,6 +140,112 @@ const registry = [
     },
 
     {
+        id: "home",
+        label: "Home",
+        component: defineAsyncComponent(
+            () => import("./home/HomeNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            recent_notes: [],
+            stats: {},
+            mind_dump: "",
+        }),
+        normalizeCustomData(raw, _note) {
+            if (!raw || typeof raw !== "object") {
+                return { recent_notes: [], stats: {}, mind_dump: "" };
+            }
+            return {
+                recent_notes: Array.isArray(raw.recent_notes)
+                    ? raw.recent_notes
+                    : [],
+                stats: raw.stats || {},
+                mind_dump: raw.mind_dump || "",
+            };
+        },
+        supportsSchemaFallback: false,
+        supportsActions: true,
+    },
+
+    {
+        id: "task",
+        label: "Task",
+        component: defineAsyncComponent(
+            () => import("./task/TaskNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            status: "todo",
+            difficulty: 0,
+            fun: 0,
+            priority: 0,
+            description: "",
+            due_date: "",
+            time_estimation: "",
+            time_used: "",
+            recurring: "none",
+            recurring_days: 0,
+            completed_at: "",
+        }),
+        normalizeCustomData(raw, _note) {
+            if (!raw || typeof raw !== "object") {
+                return {
+                    status: "todo",
+                    difficulty: 0,
+                    fun: 0,
+                    priority: 0,
+                    description: "",
+                    due_date: "",
+                    time_estimation: "",
+                    time_used: "",
+                    recurring: "none",
+                    recurring_days: 0,
+                    completed_at: "",
+                };
+            }
+            return {
+                status: raw.status || "todo",
+                difficulty: raw.difficulty ?? 0,
+                fun: raw.fun ?? 0,
+                priority: raw.priority ?? 0,
+                description: raw.description || "",
+                due_date: raw.due_date || "",
+                time_estimation: raw.time_estimation || "",
+                time_used: raw.time_used || "",
+                recurring: raw.recurring || "none",
+                recurring_days: raw.recurring_days ?? 0,
+                completed_at: raw.completed_at || "",
+            };
+        },
+        supportsSchemaFallback: false,
+    },
+
+    {
+        id: "task_overview",
+        label: "Task Overview",
+        component: defineAsyncComponent(
+            () => import("./taskoverview/TaskOverviewNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            tasks: [],
+            daily_tasks: [],
+            stats: {},
+        }),
+        normalizeCustomData(raw, _note) {
+            if (!raw || typeof raw !== "object") {
+                return { tasks: [], daily_tasks: [], stats: {} };
+            }
+            return {
+                tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
+                daily_tasks: Array.isArray(raw.daily_tasks)
+                    ? raw.daily_tasks
+                    : [],
+                stats: raw.stats || {},
+            };
+        },
+        supportsSchemaFallback: false,
+        supportsActions: true,
+    },
+
+    {
         id: "index",
         label: "Tag Index",
         component: defineAsyncComponent(

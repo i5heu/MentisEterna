@@ -17,8 +17,13 @@ export function usePluginAction(tokenRef) {
         error.value = null;
         result.value = null;
         try {
+            // Resolve token: if tokenRef is a function, call it; if it's a ref, unwrap .value; otherwise use as-is.
+            const token =
+                typeof tokenRef === "function"
+                    ? tokenRef()
+                    : (tokenRef?.value ?? tokenRef);
             result.value = await pluginActionV2(
-                tokenRef.value || tokenRef,
+                token,
                 noteId,
                 actionID,
                 params,
