@@ -44,7 +44,7 @@ function onLogout() {
     --date-color: #6d9484;
 
     /* UI Elements & Accents */
-    --border-color: #1a2c3d;
+    --border-color: #7e7567;
     --accent-teal: #6d9484;
     --category-bg-color: #162a22;
     --tag-bg-color: #ffbf59;
@@ -55,8 +55,8 @@ function onLogout() {
     --showBorder-color: #01101f;
 
     /* Surface Layers */
-    --panel-bg: #071828;
-    --raised-bg: #0d2438;
+    --panel-bg: #061320;
+    --raised-bg: #0a1d2d;
     --accent-teal-dim: #4e6e61;
 
     font-size: 15px;
