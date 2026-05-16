@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/i5heu/MentisEterna/pkg/printer"
 )
 
 // handleAction is now implemented directly on RecipeOverviewPlugin via the
@@ -404,4 +406,84 @@ func scaleAmountFloat(amount string, factor float64) string {
 		return amount // non-numeric, leave as-is
 	}
 	return formatAmount(num*factor, unit)
+}
+
+// --- Print action ---
+
+// printGroceryListParams is the JSON body for the print_grocery_list action.
+type printGroceryListParams struct {
+	ListID int64 `json:"list_id"`
+}
+
+// printGroceryListAction loads a grocery list from the DB, formats it for
+// the thermal printer, and sends it to the device.
+func printGroceryListAction(db *sql.DB, params json.RawMessage) (any, error) {
+	var p printGroceryListParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if p.ListID <= 0 {
+		return nil, fmt.Errorf("list_id is required")
+	}
+
+	// Load the grocery list.
+	var gl GroceryList
+	var itemsJSON string
+	err := db.QueryRow(`
+		SELECT id, generated_at, num_days, num_people, items_json
+		FROM ct_recipe_overview_grocery_lists WHERE id = ?`, p.ListID,
+	).Scan(&gl.ID, &gl.GeneratedAt, &gl.NumDays, &gl.NumPeople, &itemsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("grocery list %d: %w", p.ListID, err)
+	}
+
+	if itemsJSON != "" {
+		if err := json.Unmarshal([]byte(itemsJSON), &gl.Items); err != nil {
+			return nil, fmt.Errorf("unmarshal items: %w", err)
+		}
+	}
+
+	// Load recipe names.
+	recipeRows, err := db.Query(`
+		SELECT n.title
+		FROM ct_recipe_overview_grocery_list_recipes glr
+		JOIN notes n ON n.id = glr.recipe_note_id
+		WHERE glr.grocery_list_id = ?
+		ORDER BY glr.recipe_note_id`, p.ListID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load recipes: %w", err)
+	}
+	defer recipeRows.Close()
+	for recipeRows.Next() {
+		var title string
+		if err := recipeRows.Scan(&title); err != nil {
+			return nil, fmt.Errorf("scan recipe name: %w", err)
+		}
+		gl.RecipeNames = append(gl.RecipeNames, title)
+		gl.RecipeIDs = append(gl.RecipeIDs, 0) // placeholder
+	}
+	if err := recipeRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Format.
+	buf := FormatGroceryListReceipt(gl)
+
+	// Connect to printer.
+	prDev, err := printer.FindPrinter()
+	if err != nil {
+		preview := FormatGroceryListText(gl)
+		return map[string]any{
+			"printed": false,
+			"preview": preview,
+			"error":   err.Error(),
+		}, nil
+	}
+
+	if err := printer.SendAndCut(prDev, buf); err != nil {
+		return nil, fmt.Errorf("send to printer: %w", err)
+	}
+
+	return map[string]any{"printed": true}, nil
 }
