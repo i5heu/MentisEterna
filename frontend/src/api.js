@@ -298,6 +298,27 @@ export async function triggerBackup(token) {
     });
 }
 
+export async function reindexNotes(token) {
+    return request("/maintenance/reindex", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
+export async function reindexOCR(token) {
+    return request("/maintenance/reindex-ocr", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
+export async function reindexSTT(token) {
+    return request("/maintenance/reindex-stt", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 /**
  * Begin passkey login (discoverable / usernameless).
  */
