@@ -87,8 +87,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Refactor code
   - [x] Split NoteTypeRenderer.vue into multiple components for better maintainability.
   - [x] especially note types to see if we can abstract some common logic. 
-- [ ] Options Page for job list, create backup, logout, register passkey and other settings
-  - [ ] Re Index, OCR and STT failed once, button in UI with counter.
+- [x] Options Page for job list, create backup, logout, register passkey and other settings
+  - [x] Re Index, OCR and STT failed once, button in UI with counter.
 - [ ] better search (by title, path and tags)
 - [ ] mobile-app - consider Flutter for UI
 - [ ] add recipie printer function to help note types to print stuff
@@ -234,6 +234,40 @@ export MEDIA_S3_ENDPOINTS='[
     "force_path_style": true
   }
 ]'
+```
+
+## Thermal Receipt Printer
+
+For printing recipes (and other note types) on a thermal receipt printer, the server uses raw USB bulk transfers via Linux usbdevfs (`/dev/bus/usb/BBB/DDD`). This is the same path as Python's `escpos.printer.Usb(vendor, product)` — **no usblp kernel module required**.
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `THERMAL_PRINTER_VID` | `08a6` | USB vendor ID in hex (e.g. `08a6` for Epson) |
+| `THERMAL_PRINTER_PID` | `003d` | USB product ID in hex (e.g. `003d` for Epson TM-T88III) |
+| `THERMAL_PRINTER_DEVICE` | (auto-detect) | Explicit device path, e.g. `/dev/usb/lp0` — bypasses USB ID discovery |
+
+### Discovery order
+
+1. If `THERMAL_PRINTER_DEVICE` is set, open that device node directly (usblp path).
+2. Else try `/dev/usb/lp*` device nodes (usblp kernel module).
+3. Else scan `/sys/bus/usb/devices/` for a device matching `THERMAL_PRINTER_VID`/`THERMAL_PRINTER_PID` and use raw USB bulk transfers.
+4. As a final fallback, try `04b8:0202` (Epson TM-T88IV).
+
+### Common printer IDs
+
+| Printer | VID | PID |
+|---|---|---|
+| Epson TM-T88III | `08a6` | `003d` |
+| Epson TM-T88IV | `04b8` | `0202` |
+
+### Testing
+
+Real-printer tests are gated behind `PRINT_TEST=1` to avoid accidental printing:
+
+```bash
+PRINT_TEST=1 go test ./pkg/printer/ -run TestSmokePrint -v
 ```
 
 ## Database Backups
