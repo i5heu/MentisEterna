@@ -8,47 +8,39 @@ import (
 )
 
 // DefaultPrintWidth is the line width for receipt printing.
-// 32 chars at normal size → 16 chars at double size.
-const DefaultPrintWidth = 32
+// 48 chars on an 80 mm thermal printer at 203.2 dpi (~640 dots across,
+// standard Font A at 12 dots/char).  Characters are rendered in BigSize
+// (bold + double height, no double width).
+const DefaultPrintWidth = 48
 
 // FormatRecipeReceipt formats a recipe into an ESC/POS buffer suitable for
-// thermal receipt printing. It produces a nicely styled receipt with:
-//
-//   - Double-size centered title
-//   - Horizontal rule
-//   - Ingredient list (left-aligned, name on the left, amount+unit on the right)
-//   - Horizontal rule
-//   - Detail fields (servings, timing, nutrition, freezable, pre-cook)
-//   - Footer line feeds + partial cut
+// thermal receipt printing.  All text is BigSize (bold + double height,
+// ~1.5× normal) for readability while keeping the full 42-char, 80 mm line.
 //
 // Other note types can follow this same pattern:
 //  1. Create a printer.Buf
 //  2. Call b.Init(), set alignment and styles
 //  3. Write formatted text with b.Text(), b.Textf(), etc.
 //  4. Send to a printer.Printer with printer.SendAndCut()
-func FormatRecipeReceipt(payload Payload, title string) *printer.Buf {
+func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Buf {
 	b := new(printer.Buf)
 	b.Init()
-	w := DefaultPrintWidth
+	b.BigSize()
+	w := DefaultPrintWidth // 42
 
-	// Header — centered, double sized
+	// Header — centered.
 	b.AlignCenter()
-	b.DoubleSize()
-	maxTitle := w / 2 // double size halves available width
-	if len(title) > maxTitle {
-		title = title[:maxTitle]
+	if len(title) > w {
+		title = title[:w]
 	}
 	b.Text(title)
 	b.Ln()
-	b.NormalSize()
 
 	b.AlignLeft()
-	b.DoubleHLine(w)
+	b.HLine(w)
 
 	// --- Ingredients ---
-	b.Bold(true)
 	b.Text("Ingredients")
-	b.Bold(false)
 	b.Ln()
 
 	if len(payload.Ingredients) == 0 {
@@ -56,7 +48,7 @@ func FormatRecipeReceipt(payload Payload, title string) *printer.Buf {
 	}
 
 	for _, ing := range payload.Ingredients {
-		bullet := "  " + ing.Name
+		name := "  " + ing.Name
 		right := ""
 		if ing.Amount != "" {
 			right = ing.Amount
@@ -66,28 +58,26 @@ func FormatRecipeReceipt(payload Payload, title string) *printer.Buf {
 		}
 
 		if right != "" {
-			// Left-pad bullet to fill the line width minus the right side.
+			// Pad name to fill width minus right side.
 			maxName := w - len(right) - 1 // -1 for the gap
-			if len(bullet) > maxName {
+			if len(name) > maxName {
 				if maxName > 5 {
-					bullet = bullet[:maxName-1] + "\u2026" // ellipsis
+					name = name[:maxName-1] + "\u2026"
 				} else {
-					bullet = bullet[:maxName]
+					name = name[:maxName]
 				}
 			}
-			line := printer.PadRight(bullet, w-len(right))
+			line := printer.PadRight(name, w-len(right))
 			b.Text(line + right + "\n")
 		} else {
-			b.Text(bullet + "\n")
+			b.Text(name + "\n")
 		}
 	}
 
 	b.HLine(w)
 
 	// --- Details ---
-	b.Bold(true)
 	b.Text("Details")
-	b.Bold(false)
 	b.Ln()
 
 	detail := func(label, value string) {
@@ -99,13 +89,24 @@ func FormatRecipeReceipt(payload Payload, title string) *printer.Buf {
 	detail("Servings", payload.Servings)
 	detail("Attention time", payload.AttentionTime)
 	detail("Total time", payload.TotalTime)
-	detail("Grams/serving", payload.GramsPerServing)
-	detail("Kcal/serving", payload.KcalPerServing)
+	detail("Grams per serving", payload.GramsPerServing)
+	detail("Kcal per serving", payload.KcalPerServing)
 	if payload.Freezable {
 		b.Text("  Freezable: yes\n")
 	}
 	if payload.PreCookServings != "" {
 		detail("Pre-cook servings", payload.PreCookServings)
+	}
+
+	// --- Body (markdown notes) ---
+	if strings.TrimSpace(body) != "" {
+		b.HLine(w)
+		b.Text("Notes")
+		b.Ln()
+		// Wrap long lines.
+		for _, line := range WrapLines(body, w-2) {
+			b.Text("  " + line + "\n")
+		}
 	}
 
 	b.HLine(w)
@@ -117,18 +118,44 @@ func FormatRecipeReceipt(payload Payload, title string) *printer.Buf {
 	return b
 }
 
+// WrapLines splits text into lines no longer than maxWidth.
+// Exported for use by the print plugin.
+func WrapLines(text string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		return nil
+	}
+	var out []string
+	for _, paragraph := range strings.Split(text, "\n") {
+		paragraph = strings.TrimSpace(paragraph)
+		for len(paragraph) > maxWidth {
+			// Find last space within limit.
+			cut := maxWidth
+			if idx := strings.LastIndexByte(paragraph[:maxWidth], ' '); idx > maxWidth/2 {
+				cut = idx
+			}
+			out = append(out, strings.TrimSpace(paragraph[:cut]))
+			paragraph = strings.TrimSpace(paragraph[cut:])
+		}
+		if paragraph != "" {
+			out = append(out, paragraph)
+		}
+	}
+	return out
+}
+
 // RecipeTextPrint returns a plain-text rendition of the recipe formatted for
-// a thermal receipt. This is useful for:
+// a thermal receipt.  Matches the BigSize layout used by FormatRecipeReceipt.
+// This is useful for:
 //   - Preview when the printer is not connected
 //   - Testing the formatting logic
 //   - Sending to non-ESC/POS printers or logging
-func RecipeTextPrint(payload Payload, title string) string {
-	w := DefaultPrintWidth
+func RecipeTextPrint(payload Payload, title string, body string) string {
+	w := DefaultPrintWidth // 42
 	var sb strings.Builder
 
-	sb.WriteString(centerPad(title, w))
+	sb.WriteString(CenterPad(title, w))
 	sb.WriteByte('\n')
-	sb.WriteString(strings.Repeat("=", w))
+	sb.WriteString(strings.Repeat("-", w))
 	sb.WriteByte('\n')
 
 	sb.WriteString("Ingredients\n")
@@ -136,7 +163,7 @@ func RecipeTextPrint(payload Payload, title string) string {
 		sb.WriteString("  (none)\n")
 	}
 	for _, ing := range payload.Ingredients {
-		bullet := "  " + ing.Name
+		name := "  " + ing.Name
 		right := ""
 		if ing.Amount != "" {
 			right = ing.Amount
@@ -146,17 +173,17 @@ func RecipeTextPrint(payload Payload, title string) string {
 		}
 		if right != "" {
 			maxName := w - len(right) - 1
-			if len(bullet) > maxName {
+			if len(name) > maxName {
 				if maxName > 5 {
-					bullet = bullet[:maxName-1] + "\u2026"
+					name = name[:maxName-1] + "\u2026"
 				} else {
-					bullet = bullet[:maxName]
+					name = name[:maxName]
 				}
 			}
-			line := printer.PadRight(bullet, w-len(right))
+			line := printer.PadRight(name, w-len(right))
 			sb.WriteString(line + right + "\n")
 		} else {
-			sb.WriteString(bullet + "\n")
+			sb.WriteString(name + "\n")
 		}
 	}
 
@@ -172,13 +199,23 @@ func RecipeTextPrint(payload Payload, title string) string {
 	detailText("Servings", payload.Servings)
 	detailText("Attention time", payload.AttentionTime)
 	detailText("Total time", payload.TotalTime)
-	detailText("Grams/serving", payload.GramsPerServing)
-	detailText("Kcal/serving", payload.KcalPerServing)
+	detailText("Grams per serving", payload.GramsPerServing)
+	detailText("Kcal per serving", payload.KcalPerServing)
 	if payload.Freezable {
 		sb.WriteString("  Freezable: yes\n")
 	}
 	if payload.PreCookServings != "" {
 		detailText("Pre-cook servings", payload.PreCookServings)
+	}
+
+	// Body.
+	if strings.TrimSpace(body) != "" {
+		sb.WriteString(strings.Repeat("-", w))
+		sb.WriteByte('\n')
+		sb.WriteString("Notes\n")
+		for _, line := range WrapLines(body, w-2) {
+			sb.WriteString("  " + line + "\n")
+		}
 	}
 
 	sb.WriteString(strings.Repeat("-", w))
@@ -187,8 +224,9 @@ func RecipeTextPrint(payload Payload, title string) string {
 	return sb.String()
 }
 
-// centerPad centers s in a field of width w.
-func centerPad(s string, w int) string {
+// CenterPad centers s in a field of width w.
+// Exported for use by the print plugin.
+func CenterPad(s string, w int) string {
 	if len(s) >= w {
 		return s[:w]
 	}

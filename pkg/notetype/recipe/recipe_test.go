@@ -21,7 +21,7 @@ func TestRecipeTextPrint(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	out := RecipeTextPrint(payload, "My Cake")
+	out := RecipeTextPrint(payload, "My Cake", "Preheat oven to 180C.\nMix ingredients well.")
 
 	// Basic structure checks.
 	if !strings.Contains(out, "My Cake") {
@@ -48,11 +48,17 @@ func TestRecipeTextPrint(t *testing.T) {
 	if !strings.Contains(out, "Freezable: yes") {
 		t.Error("missing Freezable detail")
 	}
-	if !strings.Contains(out, "Pre-cook servings") {
-		t.Error("missing Pre-cook servings detail")
+	if !strings.Contains(out, "Pre-cook") {
+		t.Error("missing Pre-cook detail")
 	}
 	if !strings.Contains(out, "8") {
-		t.Error("missing pre-cook servings value")
+		t.Error("missing pre-cook value")
+	}
+	if !strings.Contains(out, "Notes") {
+		t.Error("missing Notes section")
+	}
+	if !strings.Contains(out, "Preheat oven") {
+		t.Error("missing body text")
 	}
 
 	t.Logf("Text output:\n%s", out)
@@ -64,7 +70,7 @@ func TestFormatRecipeReceipt(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	buf := FormatRecipeReceipt(payload, "Cookies")
+	buf := FormatRecipeReceipt(payload, "Cookies", "Bake at 180C for 12 minutes.")
 	b := buf.Bytes()
 	if len(b) == 0 {
 		t.Fatal("empty buffer")
