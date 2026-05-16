@@ -121,6 +121,13 @@
             <h4>
                 Latest Grocery List
                 <span class="list-meta">({{ latestList.num_people }}p)</span>
+                <button
+                    class="btn-ghost btn-sm btn-print"
+                    :disabled="printingListId === latestList.id"
+                    @click="printGroceryList(latestList.id)"
+                >
+                    {{ printingListId === latestList.id ? "..." : "🖨" }}
+                </button>
             </h4>
             <div
                 v-if="latestList.recipe_names && latestList.recipe_names.length"
@@ -170,6 +177,13 @@
                         @click="togglePastList(gl.id)"
                     >
                         {{ expandedLists.has(gl.id) ? "▾" : "▸" }}
+                    </button>
+                    <button
+                        class="btn-ghost btn-sm btn-print"
+                        :disabled="printingListId === gl.id"
+                        @click="printGroceryList(gl.id)"
+                    >
+                        {{ printingListId === gl.id ? "..." : "🖨" }}
                     </button>
                     <button
                         class="btn-ghost btn-sm btn-delete"
@@ -225,6 +239,7 @@ const configDays = ref(8);
 const configPeople = ref(1);
 const expandedLists = ref(new Set());
 const deletingListId = ref(null);
+const printingListId = ref(null);
 
 const latestList = computed(() => {
     const lists = overviewData.value?.grocery_lists;
@@ -328,6 +343,19 @@ async function deleteGroceryList(listId) {
         console.error("delete grocery list:", e);
     } finally {
         deletingListId.value = null;
+    }
+}
+
+async function printGroceryList(listId) {
+    printingListId.value = listId;
+    try {
+        await pluginActionV2(props.token, props.note.id, "print_grocery_list", {
+            list_id: listId,
+        });
+    } catch (e) {
+        console.error("print grocery list:", e);
+    } finally {
+        printingListId.value = null;
     }
 }
 
@@ -551,6 +579,11 @@ function formatDate(iso) {
     font-size: 0.9rem;
     flex-shrink: 0;
     margin-left: auto;
+}
+
+.btn-print {
+    flex-shrink: 0;
+    font-size: 0.95rem;
 }
 
 .btn-delete {

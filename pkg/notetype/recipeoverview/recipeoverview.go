@@ -134,6 +134,15 @@ func (p *RecipeOverviewPlugin) Manifest() notetype.Manifest {
 				RefreshStrategy: "reload_view",
 				SuccessMessage:  "Grocery list deleted",
 			},
+			{
+				ID:              "print_grocery_list",
+				Label:           "Print Grocery List",
+				Description:     "Format and print the latest grocery list on the thermal receipt printer",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"list_id":{"type":"integer"}},"required":["list_id"]}`),
+				Dangerous:       false,
+				RefreshStrategy: "none",
+				SuccessMessage:  "Grocery list printed",
+			},
 		},
 		HasConfig:  false,
 		HasView:    true,
@@ -249,6 +258,11 @@ func (p *RecipeOverviewPlugin) HandleAction(ctx context.Context, db *sql.DB, use
 		return deleteGroceryList(db, params)
 	case "list_grocery_lists":
 		return listGroceryLists(db, noteID)
+	case "print_grocery_list":
+		if db == nil {
+			return nil, fmt.Errorf("no database available")
+		}
+		return printGroceryListAction(db, params)
 	default:
 		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
 	}
