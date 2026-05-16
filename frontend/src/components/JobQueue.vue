@@ -1,6 +1,7 @@
 <template>
-    <div class="job-queue">
+    <div class="job-queue" :class="{ 'job-queue-inline': inline }">
         <button
+            v-if="!inline"
             class="job-queue-toggle"
             :title="'Job queue (' + pendingCount + ' pending)'"
             @click="expanded = !expanded"
@@ -11,8 +12,8 @@
             }}</span>
         </button>
 
-        <div v-if="expanded" class="job-queue-panel">
-            <div class="job-panel-header">
+        <div v-if="inline || expanded" class="job-queue-panel">
+            <div v-if="!inline" class="job-panel-header">
                 <span>Job Queue</span>
                 <button class="btn-ghost" @click="expanded = false">✕</button>
             </div>
@@ -79,7 +80,7 @@
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { fetchJobs, retryJob } from "../api.js";
 
-const props = defineProps({ token: String });
+const props = defineProps({ token: String, inline: Boolean });
 const emit = defineEmits(["job-done"]);
 
 const expanded = ref(false);
@@ -153,7 +154,7 @@ function startPolling() {
     if (pollTimer) return;
     load();
     pollTimer = setInterval(() => {
-        if (expanded.value) {
+        if (props.inline || expanded.value) {
             load();
         }
     }, 10000);
@@ -182,6 +183,11 @@ onMounted(() => {
 onUnmounted(() => {
     stopPolling();
 });
+
+// In inline mode, start polling immediately.
+if (props.inline) {
+    startPolling();
+}
 </script>
 
 <style scoped>
@@ -236,6 +242,19 @@ onUnmounted(() => {
     border-radius: 8px;
     box-shadow: 0 4px 16px var(--shadow-color);
     z-index: 100;
+}
+
+/* Inline variant: no absolute positioning, max-height with scroll */
+.job-queue-inline .job-queue-panel {
+    position: static;
+    width: 100%;
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 0;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+    background: transparent;
 }
 
 .job-panel-header {
