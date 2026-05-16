@@ -64,7 +64,7 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 	for i, it := range gl.Items {
 		// Guide line every 3 rows (after the 3rd, 6th, 9th, …).
 		if i > 0 && i%3 == 0 {
-			b.HLine(w)
+			b.SpacerLine(w)
 		}
 
 		right := it.Amount

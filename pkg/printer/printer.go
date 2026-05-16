@@ -105,6 +105,36 @@ func (p *Buf) HLine(width int) *Buf {
 	return p
 }
 
+// LineSpacing sets the line spacing in vertical dots (1 dot ≈ 0.125 mm).
+// Default is ~30 dots.  Smaller values tighten line spacing; larger values loosen it.
+// Use SpacerLine with LineSpacing to create a thin, tight guide line.
+func (p *Buf) LineSpacing(dots byte) *Buf {
+	p.b.Write([]byte{ESC, '3', dots})
+	return p
+}
+
+// ResetLineSpacing resets line spacing to the printer's default.
+func (p *Buf) ResetLineSpacing() *Buf {
+	p.b.Write([]byte{ESC, '2'})
+	return p
+}
+
+// SpacerLine draws a compact horizontal divider line — reduces spacing
+// before and after so the line hugs the surrounding rows.  The line itself
+// is thin dashes (shorter and tighter).
+// Call this instead of HLine when you want a tight guide line.
+func (p *Buf) SpacerLine(width int) *Buf {
+	p.LineSpacing(10) // tighter spacing
+	line := make([]byte, width)
+	for i := range line {
+		line[i] = '-'
+	}
+	p.b.Write(line)
+	p.Ln()
+	p.ResetLineSpacing()
+	return p
+}
+
 // DoubleHLine draws a horizontal double-width line (roughly half width).
 func (p *Buf) DoubleHLine(width int) *Buf {
 	line := make([]byte, width)
@@ -142,6 +172,7 @@ func (p *Buf) Feed(n byte) *Buf {
 
 // Cut triggers the auto-cutter. mode 0 = full cut, 1 = partial cut.
 func (p *Buf) Cut(mode byte) *Buf {
+	p.Ln()
 	p.b.Write([]byte{GS, 'V', mode})
 	return p
 }
