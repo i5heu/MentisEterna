@@ -198,8 +198,9 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { usePluginAction } from "../shared/usePluginAction.js";
+import { useTaskEventBus } from "../shared/useTaskEventBus.js";
 
 const props = defineProps({
     note: { type: Object, default: null },
@@ -218,6 +219,8 @@ const { loading: loadingDaily, execute: execDailyTasks } = usePluginAction(
 // Separate plugin action for quick status changes.
 const { execute: execQuickStatus } = usePluginAction(() => props.token);
 const statusLoading = ref({});
+
+const { emitStatusChange, onStatusChange } = useTaskEventBus();
 
 // View data from the server (BuildView result)
 const viewData = ref({ tasks: [], daily_tasks: [], stats: {} });
@@ -316,12 +319,49 @@ async function quickSetStatus(taskNoteId, status) {
             tasks[idx] = { ...tasks[idx], status };
             viewData.value = { ...viewData.value, tasks: [...tasks] };
         }
+        // Also update daily_tasks if the changed task is in there.
+        const dailies = viewData.value.daily_tasks || [];
+        const didx = dailies.findIndex((t) => t.note_id === taskNoteId);
+        if (didx >= 0) {
+            dailies[didx] = { ...dailies[didx], status };
+            viewData.value = { ...viewData.value, daily_tasks: [...dailies] };
+        }
+        // Broadcast so other components refresh.
+        emitStatusChange(taskNoteId, status);
     } catch {
         // Error handled silently
     } finally {
         statusLoading.value = { ...statusLoading.value, [taskNoteId]: false };
     }
 }
+
+// Listen for external status changes so we stay in sync when, e.g.,
+// the user changes status from a TaskNoteType or the thread sidebar.
+const unsubOverview = onStatusChange((noteId, status) => {
+    let changed = false;
+    const tasks = viewData.value.tasks || [];
+    const idx = tasks.findIndex((t) => t.note_id === noteId);
+    if (idx >= 0) {
+        tasks[idx] = { ...tasks[idx], status };
+        changed = true;
+    }
+    const dailies = viewData.value.daily_tasks || [];
+    const didx = dailies.findIndex((t) => t.note_id === noteId);
+    if (didx >= 0) {
+        dailies[didx] = { ...dailies[didx], status };
+        changed = true;
+    }
+    if (changed) {
+        viewData.value = {
+            ...viewData.value,
+            tasks: tasks === viewData.value.tasks ? [...tasks] : tasks,
+            daily_tasks:
+                dailies === viewData.value.daily_tasks ? [...dailies] : dailies,
+        };
+    }
+});
+
+onBeforeUnmount(unsubOverview);
 </script>
 
 <style scoped>

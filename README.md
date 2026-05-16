@@ -90,9 +90,10 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [ ] Options Page for job list, create backup, logout, register passkey and other settings
   - [ ] Re Index, OCR and STT failed once, button in UI with counter.
 - [ ] better search (by title, path and tags)
-- [ ] mobile-app - sync?
+- [ ] mobile-app - consider Flutter for UI
+- [ ] add recipie printer function to help note types to print stuff
 - [ ] UX Improvements
-  - [ ] Drag and Drop for notes
+  - [ ] Drag and Drop for notes 
   - [ ] Resizable panes
   - [ ] Better Keyboard Shortcuts
   - [ ] Autocomplete and predictive text

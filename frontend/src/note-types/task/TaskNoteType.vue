@@ -222,8 +222,9 @@
 </template>
 
 <script setup>
-import { ref, watch, computed } from "vue";
+import { ref, watch, computed, onBeforeUnmount } from "vue";
 import { usePluginAction } from "../shared/usePluginAction.js";
+import { useTaskEventBus } from "../shared/useTaskEventBus.js";
 
 const props = defineProps({
     note: { type: Object, default: null },
@@ -240,6 +241,8 @@ const {
     error: setError,
     execute: execSetStatus,
 } = usePluginAction(() => props.token);
+
+const { emitStatusChange, onStatusChange } = useTaskEventBus();
 
 // Local copies
 const localStatus = ref("todo");
@@ -350,6 +353,7 @@ function formatDate(dateStr) {
 
 async function quickSetStatus(status) {
     if (!props.note?.id) return;
+    const noteId = props.note.id;
     try {
         const result = await execSetStatus(props.note.id, "set_status", {
             status,
@@ -363,10 +367,29 @@ async function quickSetStatus(status) {
         }
         // Emit the full updated config so the parent syncs on save.
         emitCustomData();
+        // Broadcast to all other task components so they refresh.
+        emitStatusChange(noteId, status);
     } catch {
         // error is already captured in setError
     }
 }
+
+// Listen for external status changes so we stay in sync when, e.g.,
+// the user changes status from the task overview or thread sidebar.
+const unsubStatus = onStatusChange((noteId, status) => {
+    if (noteId !== props.note?.id) return;
+    localStatus.value = status;
+    if (status === "done") {
+        // completed_at is harder to know remotely; just clear and let
+        // the next full data load populate it.
+        localCompletedAt.value = new Date().toISOString();
+    } else if (localCompletedAt.value !== "") {
+        localCompletedAt.value = "";
+    }
+    emitCustomData();
+});
+
+onBeforeUnmount(unsubStatus);
 </script>
 
 <style scoped>
