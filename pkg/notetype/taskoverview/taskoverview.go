@@ -25,8 +25,19 @@ type TaskOverviewPlugin struct{}
 func (p *TaskOverviewPlugin) ID() string { return pluginID }
 
 func (p *TaskOverviewPlugin) InitSchema(db *sql.DB) error {
-	// No dedicated tables needed — this is a read-only dashboard.
-	return nil
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS ct_taskoverview_daily (
+			overview_note_id INTEGER NOT NULL,
+			task_note_id     INTEGER NOT NULL,
+			assigned_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			PRIMARY KEY (overview_note_id, task_note_id),
+			FOREIGN KEY (overview_note_id) REFERENCES notes(id) ON DELETE CASCADE,
+			FOREIGN KEY (task_note_id) REFERENCES notes(id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_ov
+			ON ct_taskoverview_daily(overview_note_id);
+	`)
+	return err
 }
 
 // TaskSummary is a lightweight task representation for the dashboard.
@@ -73,7 +84,13 @@ type DailyTaskParams struct {
 }
 
 func (p *TaskOverviewPlugin) CronJobs() []notetype.CronJob {
-	return nil
+	return []notetype.CronJob{
+		{
+			Name:     "regenerate_daily_tasks",
+			Schedule: "@daily",
+			Task:     regenerateAllDailyTasks,
+		},
+	}
 }
 
 func (p *TaskOverviewPlugin) Manifest() notetype.Manifest {
@@ -119,7 +136,16 @@ func (p *TaskOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID i
 	}
 
 	stats := computeStats(tasks)
-	dailyTasks := pickRandomTasks(tasks, 3)
+
+	// Load persisted daily tasks, regenerating if none exist yet.
+	dailyTasks, err := loadDailyTasks(db, noteID)
+	if err != nil {
+		return nil, err
+	}
+	if len(dailyTasks) == 0 {
+		dailyTasks = pickRandomTasks(tasks, 3)
+		_ = storeDailyTasks(db, noteID, dailyTasks) // best-effort
+	}
 
 	return &OverviewData{
 		Tasks:      tasks,
@@ -134,7 +160,7 @@ func (p *TaskOverviewPlugin) HandleAction(ctx context.Context, db *sql.DB, userI
 		if db == nil {
 			return nil, fmt.Errorf("no database available")
 		}
-		return handleDailyTasks(db, params)
+		return handleDailyTasks(db, noteID, params)
 	case "quick_set_status":
 		if db == nil {
 			return nil, fmt.Errorf("no database available")
@@ -143,6 +169,116 @@ func (p *TaskOverviewPlugin) HandleAction(ctx context.Context, db *sql.DB, userI
 	default:
 		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
 	}
+}
+
+// --- Daily task persistence ---
+
+// regenerateAllDailyTasks is the cron job that repicks daily tasks
+// for every task_overview note at midnight UTC.
+func regenerateAllDailyTasks(db *sql.DB, payload []byte) (string, error) {
+	tasks, err := loadAllTasks(db)
+	if err != nil {
+		return "", fmt.Errorf("load tasks: %w", err)
+	}
+
+	rows, err := db.Query(`SELECT id FROM notes WHERE type = 'task_overview'`)
+	if err != nil {
+		return "", fmt.Errorf("query overview notes: %w", err)
+	}
+	defer rows.Close()
+
+	var noteIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		noteIDs = append(noteIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	regenCount := 0
+	for _, noteID := range noteIDs {
+		picked := pickRandomTasks(tasks, 3)
+		if err := storeDailyTasks(db, noteID, picked); err != nil {
+			return "", fmt.Errorf("store daily for note %d: %w", noteID, err)
+		}
+		regenCount++
+	}
+
+	return fmt.Sprintf("regenerated daily tasks for %d task_overview notes", regenCount), nil
+}
+
+// loadDailyTasks returns the persisted daily tasks for a given overview note.
+func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
+	rows, err := db.Query(`
+		SELECT n.id, n.title, n.created_at,
+		       COALESCE(u.body, '') AS body,
+		       COALESCE(u.created_at, n.created_at) AS updated_at,
+		       COALESCE(tc.status, 'todo'),
+		       COALESCE(tc.priority, 0),
+		       COALESCE(tc.difficulty, 0),
+		       COALESCE(tc.fun, 0),
+		       COALESCE(tc.due_date, ''),
+		       COALESCE(tc.time_estimation, ''),
+		       COALESCE(tc.time_used, ''),
+		       COALESCE(tc.recurring, 'none'),
+		       COALESCE(tc.completed_at, '')
+		FROM ct_taskoverview_daily d
+		JOIN notes n ON n.id = d.task_note_id
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
+		LEFT JOIN ct_task_config tc ON tc.note_id = n.id
+		WHERE d.overview_note_id = ?
+		ORDER BY d.assigned_at DESC
+	`, overviewNoteID)
+	if err != nil {
+		return nil, fmt.Errorf("task_overview: load daily: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []TaskSummary
+	for rows.Next() {
+		var t TaskSummary
+		if err := rows.Scan(&t.NoteID, &t.Title, &t.CreatedAt, &t.Body, &t.UpdatedAt,
+			&t.Status, &t.Priority, &t.Difficulty, &t.Fun,
+			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt); err != nil {
+			return nil, fmt.Errorf("task_overview: scan daily: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Filter out tasks that have since been marked done.
+	filtered := make([]TaskSummary, 0, len(tasks))
+	for _, t := range tasks {
+		if t.Status != "done" {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered, nil
+}
+
+// storeDailyTasks persists daily task assignments for an overview note.
+// It replaces all existing assignments for this note.
+func storeDailyTasks(db *sql.DB, overviewNoteID int64, tasks []TaskSummary) error {
+	if _, err := db.Exec(`DELETE FROM ct_taskoverview_daily WHERE overview_note_id = ?`, overviewNoteID); err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		if _, err := db.Exec(
+			`INSERT OR IGNORE INTO ct_taskoverview_daily (overview_note_id, task_note_id) VALUES (?, ?)`,
+			overviewNoteID, t.NoteID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // --- Helpers ---
@@ -339,7 +475,7 @@ func pickRandomTasks(tasks []TaskSummary, count int) []TaskSummary {
 	return candidates[:count]
 }
 
-func handleDailyTasks(db *sql.DB, params json.RawMessage) (any, error) {
+func handleDailyTasks(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
 	var p DailyTaskParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -356,6 +492,13 @@ func handleDailyTasks(db *sql.DB, params json.RawMessage) (any, error) {
 	}
 
 	picked := pickRandomTasks(tasks, p.Count)
+
+	// Persist so BuildView returns the same set.
+	if err := storeDailyTasks(db, noteID, picked); err != nil {
+		// Non-fatal: still return the picked tasks even if persist fails.
+		fmt.Printf("task_overview: failed to store daily tasks for note %d: %v\n", noteID, err)
+	}
+
 	return map[string]any{
 		"daily_tasks": picked,
 	}, nil
