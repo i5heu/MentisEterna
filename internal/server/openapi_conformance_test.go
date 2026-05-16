@@ -245,7 +245,7 @@ func TestOpenAPI_Conformance(t *testing.T) {
 	})
 
 	t.Run("POST /notes with type and custom_data", func(t *testing.T) {
-		w := authPost("/notes", `{"title":"Recipe Note","type":"recipe","custom_data":{"ingredients":[{"name":"flour","amount":"2","unit":"cups"}],"servings":"4"}}`)
+		w := authPost("/notes", `{"title":"Recipe Note","type":"recipe","custom_data":{"ingredients":[{"name":"flour","amount":"200","unit":"g"}],"servings":"4"}}`)
 		assertStatus(t, w, http.StatusCreated)
 		var n NoteDetail
 		mustDecode(t, w, &n)
