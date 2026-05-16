@@ -317,7 +317,7 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 	}
 
 	// Build the ESC/POS buffer.
-	buf := formatRecipeReceipt(payload, title)
+	buf := FormatRecipeReceipt(payload, title)
 
 	// Connect to the printer.
 	var prDev printer.Printer

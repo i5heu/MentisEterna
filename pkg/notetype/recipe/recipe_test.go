@@ -64,7 +64,7 @@ func TestFormatRecipeReceipt(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	buf := formatRecipeReceipt(payload, "Cookies")
+	buf := FormatRecipeReceipt(payload, "Cookies")
 	b := buf.Bytes()
 	if len(b) == 0 {
 		t.Fatal("empty buffer")
