@@ -11,7 +11,7 @@ import (
 // 32 chars at normal size → 16 chars at double size.
 const DefaultPrintWidth = 32
 
-// formatRecipeReceipt formats a recipe into an ESC/POS buffer suitable for
+// FormatRecipeReceipt formats a recipe into an ESC/POS buffer suitable for
 // thermal receipt printing. It produces a nicely styled receipt with:
 //
 //   - Double-size centered title
@@ -26,7 +26,7 @@ const DefaultPrintWidth = 32
 //  2. Call b.Init(), set alignment and styles
 //  3. Write formatted text with b.Text(), b.Textf(), etc.
 //  4. Send to a printer.Printer with printer.SendAndCut()
-func formatRecipeReceipt(payload Payload, title string) *printer.Buf {
+func FormatRecipeReceipt(payload Payload, title string) *printer.Buf {
 	b := new(printer.Buf)
 	b.Init()
 	w := DefaultPrintWidth

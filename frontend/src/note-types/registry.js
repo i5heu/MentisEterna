@@ -270,6 +270,29 @@ const registry = [
         },
         supportsSchemaFallback: false,
     },
+
+    {
+        id: "print",
+        label: "Print",
+        component: defineAsyncComponent(
+            () => import("./print/PrintNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            target_note_id: 0,
+            candidates: [],
+        }),
+        normalizeCustomData(raw, _note) {
+            if (!raw || typeof raw !== "object") {
+                return { target_note_id: 0, candidates: [] };
+            }
+            return {
+                target_note_id: raw.target_note_id || 0,
+                candidates: Array.isArray(raw.candidates) ? raw.candidates : [],
+            };
+        },
+        supportsSchemaFallback: false,
+        supportsActions: true,
+    },
 ];
 
 // ---------------------------------------------------------------------------
