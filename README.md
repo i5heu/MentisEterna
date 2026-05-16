@@ -113,11 +113,12 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] Grocery List must recalculate the amounts to best metric unit (e.g. 1500g -> 1.5kg, 0.5l -> 500ml, etc.)
   - [ ] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
   - [ ] Print Grocery List and Recipes with a button via a recipe printer.
-- [ ] Task Sytem
-  - [ ] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
-  - [ ] Task overview dashboard - list all tasks, filter by status, due date, etc. 
-  - [ ] Daily task list - give 3 random tasks per day
-- [ ] Home Note Type - Shows latest notes, stats, has "Mind Dump" section for quick note creation.
+- [x] Task Sytem
+  - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
+  - [x] Task overview dashboard - list all tasks, filter by status, due date, etc. 
+  - [x] Daily task list - give 3 random tasks per day
+  - [ ] Todays 3 Todos should be printed via the recipe printer. 
+- [x] Home Note Type - Shows latest notes, stats, has "Mind Dump" section for quick note creation.
 - [ ] Jornal Note Type - daily journal with mood tracking, done todo items.
 - [ ] Skill Note Type - for tracking skills, subskills, resources, progress, etc.
   - [ ] Skill Overview Dashboard Note Type - shows all skills, progress, etc.
