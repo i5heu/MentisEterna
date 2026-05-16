@@ -483,6 +483,7 @@ async function quickSetStatus(taskNoteId, status) {
 .filter-select {
     padding: 0.3rem 0.5rem;
     font-size: 0.8rem;
+    color: var(--font-color);
     border: 1px solid var(--border-color);
     border-radius: 4px;
     background: var(--raised-bg);

@@ -3426,7 +3426,7 @@ function onPopstate() {
    ============================================= */
 
 .thread-sidebar {
-    width: 320px;
+    width: 33vw;
     min-width: 260px;
     background: var(--panel-bg);
     border-left: 1px solid var(--border-color);
