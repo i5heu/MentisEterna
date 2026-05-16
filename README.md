@@ -112,6 +112,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] Recipe ingredients must use metric units or pieces with dropdown. Decimal punctuation must be a dot. 
   - [x] Grocery List must recalculate the amounts to best metric unit (e.g. 1500g -> 1.5kg, 0.5l -> 500ml, etc.)
   - [ ] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
+  - [ ] Print Grocery List and Recipes with a button via a recipe printer.
 - [ ] Task Sytem
   - [ ] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
   - [ ] Task overview dashboard - list all tasks, filter by status, due date, etc. 
