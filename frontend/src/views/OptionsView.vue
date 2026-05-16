@@ -20,7 +20,11 @@
                     backups).
                 </p>
                 <div class="job-queue-embed">
-                    <JobQueue :token="token" @job-done="() => {}" />
+                    <JobQueue
+                        :token="token"
+                        :inline="true"
+                        @job-done="() => {}"
+                    />
                 </div>
             </section>
 
@@ -56,9 +60,7 @@
                 >
                     &#128273;
                     {{
-                        registeringPasskey
-                            ? "Registering…"
-                            : "Register Passkey"
+                        registeringPasskey ? "Registering…" : "Register Passkey"
                     }}
                 </button>
                 <p v-if="regPasskeyErr" class="msg-error">

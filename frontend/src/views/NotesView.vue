@@ -18,13 +18,6 @@
                 >
                     ⚙
                 </button>
-                <button
-                    class="btn-ghost icon-btn"
-                    title="Logout"
-                    @click="$emit('logout')"
-                >
-                    ⏻
-                </button>
             </div>
             <button class="btn-amber new-btn" @click="newNote">
                 + New Note
@@ -103,9 +96,6 @@
                 <div v-if="loading || searching" class="empty-list">
                     Loading…
                 </div>
-            </div>
-            <div class="sidebar-footer">
-                <JobQueue :token="token" @job-done="onJobDone" />
             </div>
         </aside>
 
@@ -930,7 +920,6 @@ import {
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
 import NoteAttachments from "../components/NoteAttachments.vue";
-import JobQueue from "../components/JobQueue.vue";
 import {
     uploadAttachment,
     uploadInlineFile,
@@ -1662,27 +1651,6 @@ async function sendReply() {
 function restoreBody(body) {
     editBody.value = body;
     dirty.value = true;
-}
-
-function onJobDone(job) {
-    if (job.name === "generate_title") {
-        loadNotes();
-        if (selected.value?.id) {
-            loadChildren(selected.value.id);
-            // Re-fetch the main note so title, breadcrumb, and URL update.
-            fetchNote(props.token, selected.value.id)
-                .then((updated) => {
-                    if (selected.value?.id === updated.id) {
-                        selected.value = updated;
-                        editTitle.value = updated.title;
-                        loadAncestors(updated.id);
-                        populateParentSearch(updated);
-                        pushURL();
-                    }
-                })
-                .catch(() => {});
-        }
-    }
 }
 
 function fmtDate(iso) {
@@ -3205,13 +3173,6 @@ function onPopstate() {
 .hotkey-desc {
     font-size: 0.85rem;
     color: var(--font-color-secondary);
-}
-
-/* Sidebar footer */
-.sidebar-footer {
-    padding: 0.6rem 0.75rem;
-    border-top: 1px solid var(--border-color);
-    text-align: center;
 }
 
 /* =============================================
