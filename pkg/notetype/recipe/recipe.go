@@ -7,9 +7,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
+	"github.com/i5heu/MentisEterna/pkg/printer"
 )
 
 const pluginID = "recipe"
@@ -177,7 +179,18 @@ func (p *RecipePlugin) Manifest() notetype.Manifest {
 		Viewer:     notetype.ViewerMeta{Mode: "custom"},
 		HasConfig:  true,
 		HasView:    false,
-		HasActions: false,
+		HasActions: true,
+		Actions: []notetype.ActionMeta{
+			{
+				ID:              "print_recipe",
+				Label:           "Print Recipe",
+				Description:     "Format and print this recipe on the thermal receipt printer",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"device_path":{"type":"string","description":"Optional path to the printer device (e.g. /dev/usb/lp0)"}},"additionalProperties":false}`),
+				Dangerous:       false,
+				RefreshStrategy: "none",
+				SuccessMessage:  "Recipe printed",
+			},
+		},
 	}
 }
 
@@ -256,6 +269,83 @@ func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, n
 	}
 
 	return nil
+}
+
+// HandleAction implements the notetype.ActionHandler interface.
+func (p *RecipePlugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteID int64, actionID string, params json.RawMessage) (any, error) {
+	switch actionID {
+	case "print_recipe":
+		if db == nil {
+			return nil, fmt.Errorf("no database available")
+		}
+		return p.printRecipe(ctx, db, userID, noteID, params)
+	default:
+		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
+	}
+}
+
+// printRecipeParams is the JSON body for the print_recipe action.
+type printRecipeParams struct {
+	DevicePath string `json:"device_path"`
+}
+
+// printRecipe loads the recipe config + note title, formats it for the
+// thermal printer, and sends it to the device.
+func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, noteID int64, params json.RawMessage) (any, error) {
+	var pr printRecipeParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &pr); err != nil {
+			return nil, fmt.Errorf("recipe: invalid print params: %w", err)
+		}
+	}
+
+	// Load the recipe payload.
+	config, err := p.LoadConfig(ctx, db, userID, noteID)
+	if err != nil {
+		return nil, fmt.Errorf("recipe: load config for print: %w", err)
+	}
+
+	var payload Payload
+	if err := json.Unmarshal(config, &payload); err != nil {
+		return nil, fmt.Errorf("recipe: unmarshal config for print: %w", err)
+	}
+
+	// Get the note title.
+	var title string
+	if err := db.QueryRow(`SELECT title FROM notes WHERE id = ?`, noteID).Scan(&title); err != nil {
+		return nil, fmt.Errorf("recipe: get title for print: %w", err)
+	}
+
+	// Build the ESC/POS buffer.
+	buf := formatRecipeReceipt(payload, title)
+
+	// Connect to the printer.
+	var prDev printer.Printer
+	if pr.DevicePath != "" {
+		prDev, err = printer.NewFilePrinter(pr.DevicePath)
+	} else {
+		prDev, err = printer.FindPrinter()
+	}
+	if err != nil {
+		// If printer isn't available, return a plain-text preview instead.
+		preview := RecipeTextPrint(payload, title)
+		log.Printf("printer not available (%v), returning preview", err)
+		return map[string]any{
+			"printed": false,
+			"preview": preview,
+			"error":   err.Error(),
+		}, nil
+	}
+
+	// Send and cut.
+	if err := printer.SendAndCut(prDev, buf); err != nil {
+		return nil, fmt.Errorf("recipe: send to printer: %w", err)
+	}
+
+	return map[string]any{
+		"printed": true,
+		"device":  pr.DevicePath,
+	}, nil
 }
 
 func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
