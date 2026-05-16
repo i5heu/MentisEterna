@@ -256,15 +256,15 @@ function formatDate(dateStr) {
 }
 
 .stat-todo {
-    border-left: 3px solid var(--font-color-secondary);
+    border-left: 3px solid #e8e8e8;
 }
 
 .stat-progress {
-    border-left: 3px solid var(--accent-teal);
+    border-left: 3px solid #22c55e;
 }
 
 .stat-done {
-    border-left: 3px solid var(--accent-teal);
+    border-left: 3px solid #3b82f6;
 }
 
 .section {
@@ -408,4 +408,8 @@ function formatDate(dateStr) {
     font-style: italic;
     padding: 0.5rem 0;
 }
+</style>
+
+<style>
+@import "../task/status-colors.css";
 </style>

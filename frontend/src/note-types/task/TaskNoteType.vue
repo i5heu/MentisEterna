@@ -562,21 +562,6 @@ onBeforeUnmount(unsubStatus);
     font-weight: 600;
 }
 
-.status-todo {
-    background: var(--panel-bg);
-    color: var(--font-color-secondary);
-}
-
-.status-in_progress {
-    background: var(--accent-teal-dim);
-    color: var(--font-color);
-}
-
-.status-done {
-    background: var(--accent-teal);
-    color: var(--font-color);
-}
-
 .fun-positive {
     color: var(--accent-teal);
 }
@@ -599,4 +584,8 @@ onBeforeUnmount(unsubStatus);
     color: var(--font-color-secondary);
     font-style: italic;
 }
+</style>
+
+<style>
+@import "./status-colors.css";
 </style>
