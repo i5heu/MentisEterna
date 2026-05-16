@@ -275,7 +275,10 @@ func formatNote(db *sql.DB, noteType string, noteID int64, title string) (*print
 	case "recipe":
 		return formatRecipeForPrint(db, noteID, title)
 	default:
-		return formatGenericForPrint(title)
+		// Fetch latest body for generic note types.
+		var body string
+		db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&body)
+		return formatGenericForPrint(title, body)
 	}
 }
 
@@ -326,26 +329,51 @@ func formatRecipeForPrint(db *sql.DB, noteID int64, title string) (*printer.Buf,
 	payload.Freezable = freezableInt != 0
 	payload.PreCookServings = preCookServings
 
-	buf := recipe.FormatRecipeReceipt(payload, title)
-	preview := recipe.RecipeTextPrint(payload, title)
+	// Fetch latest body.
+	var body string
+	db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&body)
+
+	buf := recipe.FormatRecipeReceipt(payload, title, body)
+	preview := recipe.RecipeTextPrint(payload, title, body)
 	return buf, preview, nil
 }
 
 // formatGenericForPrint formats a simple fallback receipt for note types
 // without dedicated formatters.
-func formatGenericForPrint(title string) (*printer.Buf, string, error) {
+func formatGenericForPrint(title string, body string) (*printer.Buf, string, error) {
+	w := 48
 	b := new(printer.Buf)
 	b.Init()
+	b.BigSize()
 	b.AlignCenter()
-	b.DoubleSize()
 	b.Text(title)
 	b.Ln()
-	b.NormalSize()
 	b.AlignLeft()
-	b.HLine(32)
-	b.Text("(no type-specific formatter)\n")
-	b.HLine(32)
+	b.HLine(w)
+	if strings.TrimSpace(body) != "" {
+		for _, line := range recipe.WrapLines(body, w-2) {
+			b.Text("  " + line + "\n")
+		}
+	} else {
+		b.Text("  (no content)\n")
+	}
+	b.HLine(w)
 
-	preview := title + "\n" + strings.Repeat("=", 32) + "\n(no type-specific formatter)\n" + strings.Repeat("-", 32) + "\n"
+	var sb strings.Builder
+	sb.WriteString(recipe.CenterPad(title, w))
+	sb.WriteByte('\n')
+	sb.WriteString(strings.Repeat("-", w))
+	sb.WriteByte('\n')
+	if strings.TrimSpace(body) != "" {
+		for _, line := range recipe.WrapLines(body, w-2) {
+			sb.WriteString("  " + line + "\n")
+		}
+	} else {
+		sb.WriteString("  (no content)\n")
+	}
+	sb.WriteString(strings.Repeat("-", w))
+	sb.WriteByte('\n')
+	preview := sb.String()
+
 	return b, preview, nil
 }

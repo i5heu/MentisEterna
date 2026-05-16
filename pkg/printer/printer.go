@@ -76,6 +76,13 @@ func (p *Buf) Underline(n byte) *Buf {
 	return p
 }
 
+// BigSize enables bold + double height (no double width).
+// Characters are taller but not wider — roughly 1.5× the normal
+// size while keeping the full ~42 chars on an 80 mm receipt.
+func (p *Buf) BigSize() *Buf {
+	return p.Style(0x08 | 0x10)
+}
+
 // DoubleSize enables bold + double height + double width.
 func (p *Buf) DoubleSize() *Buf {
 	return p.Style(0x08 | 0x10 | 0x20)

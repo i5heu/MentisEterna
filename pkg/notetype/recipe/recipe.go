@@ -310,14 +310,16 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 		return nil, fmt.Errorf("recipe: unmarshal config for print: %w", err)
 	}
 
-	// Get the note title.
-	var title string
+	// Get the note title and latest body.
+	var title, body string
 	if err := db.QueryRow(`SELECT title FROM notes WHERE id = ?`, noteID).Scan(&title); err != nil {
 		return nil, fmt.Errorf("recipe: get title for print: %w", err)
 	}
+	// Latest body from the updates table.
+	db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&body)
 
 	// Build the ESC/POS buffer.
-	buf := FormatRecipeReceipt(payload, title)
+	buf := FormatRecipeReceipt(payload, title, body)
 
 	// Connect to the printer.
 	var prDev printer.Printer
@@ -328,7 +330,7 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 	}
 	if err != nil {
 		// If printer isn't available, return a plain-text preview instead.
-		preview := RecipeTextPrint(payload, title)
+		preview := RecipeTextPrint(payload, title, body)
 		log.Printf("printer not available (%v), returning preview", err)
 		return map[string]any{
 			"printed": false,
