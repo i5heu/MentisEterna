@@ -13,6 +13,13 @@
                 <span class="app-title">MentisEterna</span>
                 <button
                     class="btn-ghost icon-btn"
+                    title="Options"
+                    @click="$emit('navigate-options')"
+                >
+                    ⚙
+                </button>
+                <button
+                    class="btn-ghost icon-btn"
                     title="Logout"
                     @click="$emit('logout')"
                 >
@@ -99,32 +106,6 @@
             </div>
             <div class="sidebar-footer">
                 <JobQueue :token="token" @job-done="onJobDone" />
-                <button
-                    class="btn-ghost backup-btn"
-                    :disabled="backingUp"
-                    title="Back up the database now"
-                    @click="triggerBackup"
-                >
-                    {{ backingUp ? "Backing up…" : "Backup Now" }}
-                </button>
-                <p v-if="backupErr" class="reg-error">
-                    {{ backupErr }}
-                </p>
-                <p v-if="backupOk" class="reg-ok">{{ backupOk }}</p>
-                <button
-                    class="btn-ghost passkey-btn"
-                    :disabled="registeringPasskey"
-                    @click="registerPasskey"
-                >
-                    &#128273;
-                    {{
-                        registeringPasskey ? "Registering…" : "Register Passkey"
-                    }}
-                </button>
-                <p v-if="regPasskeyErr" class="reg-error">
-                    {{ regPasskeyErr }}
-                </p>
-                <p v-if="regPasskeyOk" class="reg-ok">Passkey registered.</p>
             </div>
         </aside>
 
@@ -946,8 +927,6 @@ import {
     searchNotes,
     setNotePin,
     fetchTags,
-    beginPasskeyRegistration,
-    triggerBackup as apiTriggerBackup,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
 import NoteAttachments from "../components/NoteAttachments.vue";
@@ -964,7 +943,7 @@ import {
 } from "../note-types/registry.js";
 
 const props = defineProps({ token: String });
-const emit = defineEmits(["logout"]);
+const emit = defineEmits(["logout", "navigate-options"]);
 
 const notes = ref([]);
 const loading = ref(false);
@@ -1073,15 +1052,6 @@ const sendingReply = ref(false);
 const parentSearch = ref("");
 const parentOptions = ref([]);
 
-// Passkey registration state
-const registeringPasskey = ref(false);
-const regPasskeyErr = ref("");
-const regPasskeyOk = ref(false);
-
-// Backup state
-const backingUp = ref(false);
-const backupErr = ref("");
-const backupOk = ref("");
 const ancestors = ref([]);
 const parentSearching = ref(false);
 const showParentPicker = ref(false);
@@ -1114,41 +1084,6 @@ function isMac() {
     return /Mac|iPod|iPhone|iPad/.test(
         navigator.platform || navigator.userAgentData?.platform || "",
     );
-}
-
-async function registerPasskey() {
-    regPasskeyErr.value = "";
-    regPasskeyOk.value = false;
-    registeringPasskey.value = true;
-    try {
-        await beginPasskeyRegistration(props.token);
-        regPasskeyOk.value = true;
-    } catch (e) {
-        if (e.name === "NotAllowedError" || e.message?.includes("NotAllowed")) {
-            regPasskeyErr.value = "Cancelled.";
-        } else {
-            regPasskeyErr.value = e.message || "Registration failed";
-        }
-    } finally {
-        registeringPasskey.value = false;
-    }
-}
-
-async function triggerBackup() {
-    backupErr.value = "";
-    backupOk.value = "";
-    backingUp.value = true;
-    try {
-        const res = await apiTriggerBackup(props.token);
-        backupOk.value = `Backup queued (run #${res.run_id}). Check the job queue for progress.`;
-        setTimeout(() => {
-            backupOk.value = "";
-        }, 8000);
-    } catch (e) {
-        backupErr.value = e.message || "Backup failed";
-    } finally {
-        backingUp.value = false;
-    }
 }
 
 // Edit / View toggle
@@ -3272,32 +3207,11 @@ function onPopstate() {
     color: var(--font-color-secondary);
 }
 
-/* Sidebar footer (passkey registration) */
+/* Sidebar footer */
 .sidebar-footer {
     padding: 0.6rem 0.75rem;
     border-top: 1px solid var(--border-color);
     text-align: center;
-}
-.passkey-btn {
-    width: 100%;
-    padding: 0.4rem 0.5rem;
-    font-size: 0.8rem;
-}
-.backup-btn {
-    width: 100%;
-    padding: 0.4rem 0.5rem;
-    font-size: 0.8rem;
-    margin-bottom: 0.4rem;
-}
-.reg-error {
-    color: var(--heading-color);
-    font-size: 0.75rem;
-    margin-top: 0.3rem;
-}
-.reg-ok {
-    color: var(--accent-teal);
-    font-size: 0.75rem;
-    margin-top: 0.3rem;
 }
 
 /* =============================================

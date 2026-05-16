@@ -1,23 +1,38 @@
 <template>
     <LoginView v-if="!token" @logged-in="onLogin" />
-    <NotesView v-else :token="token" @logout="onLogout" />
+    <OptionsView
+        v-else-if="currentView === 'options'"
+        :token="token"
+        @logout="onLogout"
+        @back="currentView = 'notes'"
+    />
+    <NotesView
+        v-else
+        :token="token"
+        @logout="onLogout"
+        @navigate-options="currentView = 'options'"
+    />
 </template>
 
 <script setup>
 import { ref } from "vue";
 import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
+import OptionsView from "./views/OptionsView.vue";
 
 const token = ref(localStorage.getItem("me_token") || "");
+const currentView = ref("notes");
 
 function onLogin(t) {
     token.value = t;
     localStorage.setItem("me_token", t);
+    currentView.value = "notes";
 }
 
 function onLogout() {
     token.value = "";
     localStorage.removeItem("me_token");
+    currentView.value = "notes";
 }
 </script>
 

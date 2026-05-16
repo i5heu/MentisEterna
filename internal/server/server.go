@@ -319,6 +319,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/backup/trigger", s.handleBackupTrigger)
 	mux.HandleFunc("/backup/purge", s.handleBackupPurge)
 
+	// Maintenance reindex endpoints
+	mux.HandleFunc("/maintenance/reindex", s.handleReindexNotes)
+	mux.HandleFunc("/maintenance/reindex-ocr", s.handleReindexOCR)
+	mux.HandleFunc("/maintenance/reindex-stt", s.handleReindexSTT)
+
 	mux.HandleFunc("/file/", s.serveFile)
 
 	// Files routes: OCR and STT results
@@ -461,6 +466,164 @@ func (s *Server) handleBackupPurge(w http.ResponseWriter, r *http.Request) {
 		"status":  "queued",
 		"run_id":  runID,
 		"message": "Retention purge enqueued. Check /jobs for progress.",
+	})
+}
+
+// --- Maintenance Reindex Handlers ---
+
+// handleReindexNotes enqueues vss_index jobs for all notes that are missing
+// embeddings in vss_notes. Returns the count of enqueued jobs.
+func (s *Server) handleReindexNotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.db.VSSAvailable() || s.llm == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VSS or embedding client not available"})
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT n.id, n.title, COALESCE(u.body, '') AS body
+		FROM notes n
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
+		WHERE n.id NOT IN (SELECT rowid FROM vss_notes)
+		ORDER BY n.id ASC
+	`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query notes: %v", err)})
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var id int64
+		var title, body string
+		if err := rows.Scan(&id, &title, &body); err != nil {
+			log.Printf("reindex: scan note: %v", err)
+			continue
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"note_id": id,
+			"title":   title,
+			"body":    body,
+		})
+		if _, err := s.jobManager.Enqueue("_system", "vss_index", payload); err != nil {
+			log.Printf("reindex: enqueue vss_index for note %d: %v", id, err)
+			continue
+		}
+		count++
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"count":   count,
+		"message": fmt.Sprintf("Enqueued %d reindex jobs. Check /jobs for progress.", count),
+	})
+}
+
+// handleReindexOCR enqueues sync_ocr_embedding jobs for all files that have OCR
+// text but are missing embeddings in vss_files_ocr.
+func (s *Server) handleReindexOCR(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.db.VSSAvailable() || s.llm == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VSS or embedding client not available"})
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT focr.file_id, focr.ocr_text
+		FROM files_ocr focr
+		WHERE focr.ocr_text != ''
+		  AND focr.file_id NOT IN (SELECT rowid FROM vss_files_ocr)
+		ORDER BY focr.file_id ASC
+	`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files_ocr: %v", err)})
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var fileID int64
+		var ocrText string
+		if err := rows.Scan(&fileID, &ocrText); err != nil {
+			log.Printf("reindex-ocr: scan file: %v", err)
+			continue
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"file_id":  fileID,
+			"ocr_text": ocrText,
+		})
+		if _, err := s.jobManager.Enqueue("_system", "sync_ocr_embedding", payload); err != nil {
+			log.Printf("reindex-ocr: enqueue sync_ocr_embedding for file %d: %v", fileID, err)
+			continue
+		}
+		count++
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"count":   count,
+		"message": fmt.Sprintf("Enqueued %d OCR reindex jobs. Check /jobs for progress.", count),
+	})
+}
+
+// handleReindexSTT enqueues sync_stt_embedding jobs for all files that have STT
+// text but are missing embeddings in vss_files_stt.
+func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.db.VSSAvailable() || s.llm == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VSS or embedding client not available"})
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT fstt.file_id, fstt.stt_text
+		FROM files_stt fstt
+		WHERE fstt.stt_text != ''
+		  AND fstt.file_id NOT IN (SELECT rowid FROM vss_files_stt)
+		ORDER BY fstt.file_id ASC
+	`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files_stt: %v", err)})
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var fileID int64
+		var sttText string
+		if err := rows.Scan(&fileID, &sttText); err != nil {
+			log.Printf("reindex-stt: scan file: %v", err)
+			continue
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"file_id":  fileID,
+			"stt_text": sttText,
+		})
+		if _, err := s.jobManager.Enqueue("_system", "sync_stt_embedding", payload); err != nil {
+			log.Printf("reindex-stt: enqueue sync_stt_embedding for file %d: %v", fileID, err)
+			continue
+		}
+		count++
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"count":   count,
+		"message": fmt.Sprintf("Enqueued %d STT reindex jobs. Check /jobs for progress.", count),
 	})
 }
 
