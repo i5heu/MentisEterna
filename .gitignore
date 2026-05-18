@@ -11,3 +11,4 @@ start.sh
 /tmp/*
 /server
 /restore
+/bin
