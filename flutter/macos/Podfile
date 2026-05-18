@@ -2,7 +2,7 @@ platform :osx, '13.5'
 
 flutter_macos_podfile_setup
 
-target 'MentisEterna' do
+target 'Runner' do
   use_frameworks!
   use_modular_headers!
 
