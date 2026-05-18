@@ -21,7 +21,3 @@ dev_dependencies:
 
 flutter:
     uses-material-design: true
-
-    platforms:
-        macos:
-            deployment-target: "13.5"
