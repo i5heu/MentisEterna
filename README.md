@@ -81,6 +81,12 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
 - [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
 
+## TODO Bugs
+- [ ] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
+- [ ] Remove Light Mode, Only Dark Mode is supported.
+- [ ] Font Color of the Task Note Type > .status-badge is not visible in Dark Mode.
+- [ ] Click on Note Title should open the note in main view.
+
 ## TODO Future
 - [x] OCR for images and pdfs
 - [x] speech to text notes
@@ -90,16 +96,36 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Options Page for job list, create backup, logout, register passkey and other settings
   - [x] Re Index, OCR and STT failed once, button in UI with counter.
 - [ ] better search (by title, path and tags)
+  - [ ] Include Flieds in search:
+    - [ ] Note titles
+    - [ ] Note Paths
+    - [ ] Note tags
+  - [ ] Filter by note type
+    - [ ] Default exclution: Anything but default notes
+    - [ ] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
+    - [ ] Include all note types with '.a'
 - [ ] mobile-app - consider Flutter for UI
 - [ ] add recipie printer function to help note types to print stuff
 - [ ] UX Improvements
-  - [ ] Drag and Drop for notes 
-  - [ ] Resizable panes
-  - [ ] Better Keyboard Shortcuts
-  - [ ] Autocomplete and predictive text
-  - [ ] Brainstorm and Research mode
-  - [ ] Fast note creation with AI parent selection
-  - [ ] Fast Handnote import
+  - [ ] UI General
+    - [ ] Drag and Drop for notes 
+    - [ ] Resizable panes
+    - [ ] Better Keyboard Shortcuts
+      - [ ] Unified Keyboard Shortcuts System
+      - [ ] Any UI function gets mapped to a keyboard shortcut
+      - [ ] Keyboard shortcuts can be viewed with pressing and holding 'alt', they apread over relevant buttons and locations 
+  - [ ] Note Editor
+    - [ ] Inline note editing (From Child or thread or thread child)
+    - [ ] Autocomplete and predictive text
+    - [ ] Brainstorm and Research mode
+    - [ ] Fast note creation with AI parent selection
+  - [ ] New Input Methods
+    - [ ] Fast Handnote import
+    - [ ] Quick Voice Input
+      - [ ] Create Note from Voice Input
+      - [ ] Create Note from Audio File
+      - [ ] Live Transcription into Editor
+
 - [ ] support AsciiDoc and Markdown (with live preview)
 - [ ] SQLite AES-256 in OFB mode
 - [ ] Search for Note Types and Path should be shown instead of just title when selecting a note type.
@@ -115,9 +141,15 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [ ] Print Grocery List and Recipes with a button via a recipe printer.
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
+    - [ ] SubTasks (Child Task Notes)
+      - [ ] Create SubTasks (Child Task Notes) Quick add
+      - [ ] SubTasks List for said Task
+      - [ ] LLM Create "SubTasks" (Child Task Notes) From Task
   - [x] Task overview dashboard - list all tasks, filter by status, due date, etc. 
+    - [ ] Quick add ToDo
   - [x] Daily task list - give 3 random tasks per day
   - [ ] Todays 3 Todos should be printed via the recipe printer. 
+  - [ ] Task Category Note Type 
 - [x] Home Note Type - Shows latest notes, stats, has "Mind Dump" section for quick note creation.
 - [ ] Jornal Note Type - daily journal with mood tracking, done todo items.
 - [ ] Skill Note Type - for tracking skills, subskills, resources, progress, etc.
