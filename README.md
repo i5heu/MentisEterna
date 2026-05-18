@@ -82,7 +82,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
 
 ## TODO Bugs
-- [ ] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
+- [x] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
 - [ ] Remove Light Mode, Only Dark Mode is supported.
 - [ ] Font Color of the Task Note Type > .status-badge is not visible in Dark Mode.
 - [ ] Click on Note Title should open the note in main view.

@@ -1603,6 +1603,8 @@ async function onBodyDrop(e) {
             file,
         );
         insertAtCursor(result.markdown);
+        if (!selected.value.attachments) selected.value.attachments = [];
+        selected.value.attachments.push(result.file);
     } catch (err) {
         saveError.value = err.message;
     }

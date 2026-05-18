@@ -185,7 +185,7 @@ func (s *Server) loadNoteAttachments(noteID int64) ([]NoteFile, error) {
 		SELECT f.id, f.filename, f.mime_type, f.size_bytes
 		FROM files f
 		JOIN files_refs fr ON fr.file_id = f.id
-		WHERE fr.note_id = ? AND fr.ref_kind = 'attachment' AND f.deleted_at IS NULL
+		WHERE fr.note_id = ? AND fr.ref_kind IN ('attachment', 'inline') AND f.deleted_at IS NULL
 	`, noteID)
 	if err != nil {
 		return nil, err
