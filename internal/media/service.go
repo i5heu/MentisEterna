@@ -309,7 +309,7 @@ func (s *Service) ReadFile(ctx context.Context, fileID int64, w io.Writer) (File
 	return rec, fmt.Errorf("media: file %d unavailable from any replica", fileID)
 }
 
-// RemoveAttachment removes an attachment ref for a note. If no refs remain, soft-deletes the file.
+// RemoveAttachment removes a file ref for a note. If no refs remain, soft-deletes the file.
 func (s *Service) RemoveAttachment(ctx context.Context, noteID, fileID int64) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -317,9 +317,9 @@ func (s *Service) RemoveAttachment(ctx context.Context, noteID, fileID int64) er
 	}
 	defer tx.Rollback()
 
-	// Delete the attachment ref
-	_, err = tx.Exec(`DELETE FROM files_refs WHERE note_id = ? AND file_id = ? AND ref_kind = ?`,
-		noteID, fileID, string(RefKindAttachment))
+	// Delete all refs for this note+file pair (attachment and inline)
+	_, err = tx.Exec(`DELETE FROM files_refs WHERE note_id = ? AND file_id = ?`,
+		noteID, fileID)
 	if err != nil {
 		return fmt.Errorf("delete ref: %w", err)
 	}
