@@ -1,4 +1,4 @@
-platform :osx, '11.0'
+platform :osx, '13.0'
 
 flutter_macos_podfile_setup
 

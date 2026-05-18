@@ -11,6 +11,7 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   intl: ^0.20.2
+  passkeys: ^2.19.0
   shared_preferences: ^2.3.0
 
 dev_dependencies:

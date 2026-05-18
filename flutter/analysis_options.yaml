@@ -5,9 +5,3 @@ linter:
         prefer_const_constructors: true
         prefer_const_declarations: true
         avoid_print: false
-
-analyzer:
-    enable-experiment:
-        - dot-shorthands
-environment:
-    sdk: ">=3.6.0 <4.0.0"
