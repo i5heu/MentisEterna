@@ -13,9 +13,11 @@ internal/db/     — SQLite wrapper, migrations, auth, session management
 internal/llm/    — LocalAI embedding client (interface: Embedder)
 internal/server/ — HTTP handlers, WebAuthn, SPA static serving
 pkg/notetype/    — Note type plugin interface, registry, test harness, and built-in plugins
-frontend/        — Vue 3 + Vite app (dev proxy → :8080)
-frontend/src/note-types/ — Vue components per note type + shared registry
-FrontEndDist/    — Vite build output (served by Go server at runtime)
+flutter/         — Flutter client (Dart, cross-platform)
+flutter/lib/     — Shared UI code (models, screens, services)
+flutter/build/web/ — Flutter web build output (served by Go server at runtime)
+frontend/        — Vue 3 + Vite app (legacy, deprecated)
+FrontEndDist/    — Vite build output (legacy, deprecated)
 lib/             — Pre-built SQLite extensions: vector0.so, vss0.so (do NOT regenerate)
 ```
 
@@ -241,12 +243,18 @@ go test ./pkg/notetype/...   # run all plugin tests (harness + built-in plugins)
 go test ./pkg/notetype/recipe/ -run TestRecipePlugin  # run a single plugin's tests
 ```
 
-### Frontend
+### Flutter Web Frontend (current)
+```bash
+cd flutter
+flutter build web --release    # outputs to flutter/build/web (what the Go server serves)
+```
+
+### Vue Frontend (legacy, deprecated)
 ```bash
 cd frontend
 npm install
 npm run dev      # dev server with proxy to :8080
-npm run build    # outputs to ../FrontEndDist (what the Go server serves)
+npm run build    # outputs to ../FrontEndDist
 ```
 
 ## Environment Variables
@@ -282,7 +290,7 @@ INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
 
 **Auth**: Password-based (SHA-512, stored in `auth` table) + WebAuthn passkeys. Sessions last 24 hours. `initAdminPassword()` runs at server startup.
 
-**Static serving**: Go server serves `FrontEndDist/` as an SPA (falls back to `index.html` for unknown paths). Must `npm run build` to reflect frontend changes in production mode.
+**Static serving**: Go server serves `flutter/build/web/` as an SPA (falls back to `index.html` for unknown paths). Run `flutter build web --release` to reflect frontend changes in production mode. The dev server (`flutter run -d chrome`) proxies API calls to `:8080` automatically.
 
 ## Encrypted Backups
 

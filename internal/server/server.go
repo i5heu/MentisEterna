@@ -335,7 +335,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.handleFileOCR(w, r)
 	})
 
-	mux.Handle("/", newSPAHandler("./FrontEndDist"))
+	mux.Handle("/", newSPAHandler("./flutter/build/web"))
 
 	srv := &http.Server{
 		Addr:         s.addr,
