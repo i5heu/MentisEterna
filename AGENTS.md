@@ -246,7 +246,7 @@ go test ./pkg/notetype/recipe/ -run TestRecipePlugin  # run a single plugin's te
 ### Flutter Web Frontend (current)
 ```bash
 cd flutter
-flutter build web --release    # outputs to flutter/build/web (what the Go server serves)
+flutter build web --release --no-wasm-dry-run    # outputs to flutter/build/web (served by Go server)
 ```
 
 ### Vue Frontend (legacy, deprecated)
