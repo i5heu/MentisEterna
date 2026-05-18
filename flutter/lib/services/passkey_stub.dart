@@ -17,7 +17,6 @@ final _authenticator = PasskeyAuthenticator();
 // Login (authentication)
 // ---------------------------------------------------------------------------
 
-/// Calls the platform passkey authenticator to sign a challenge.
 Future<Map<String, dynamic>?> platformGetCredential(
     Map<String, dynamic> options) async {
   print('[passkey:native] platformGetCredential() called');
@@ -46,17 +45,18 @@ Future<Map<String, dynamic>?> platformGetCredential(
       ),
     );
 
-    print('[passkey:native] Authenticate success — converting response...');
+    print('[passkey:native] Authenticate success');
+    // AuthenticateResponseType has flat fields (no .response wrapper).
     return {
       'id': result.id,
       'rawId': _fromBase64Url(result.rawId),
-      'type': result.type,
+      'type': 'public-key',
       'response': {
-        'clientDataJSON': _fromBase64Url(result.response.clientDataJSON),
-        'authenticatorData': _fromBase64Url(result.response.authenticatorData),
-        'signature': _fromBase64Url(result.response.signature),
-        'userHandle': result.response.userHandle != null
-            ? _fromBase64Url(result.response.userHandle!)
+        'clientDataJSON': _fromBase64Url(result.clientDataJSON),
+        'authenticatorData': _fromBase64Url(result.authenticatorData),
+        'signature': _fromBase64Url(result.signature),
+        'userHandle': result.userHandle.isNotEmpty
+            ? _fromBase64Url(result.userHandle)
             : null,
       },
     };
@@ -77,7 +77,6 @@ Future<Map<String, dynamic>?> platformGetCredential(
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Calls the platform passkey authenticator to create a credential.
 Future<Map<String, dynamic>?> platformCreateCredential(
     Map<String, dynamic> options) async {
   print('[passkey:native] platformCreateCredential() called');
@@ -85,6 +84,10 @@ Future<Map<String, dynamic>?> platformCreateCredential(
     final pk = options['publicKey'] as Map<String, dynamic>;
     final user = pk['user'] as Map<String, dynamic>;
     final rp = pk['rp'] as Map<String, dynamic>;
+
+    // Build AuthenticatorSelectionType if present.
+    // Requires: requireResidentKey (bool), residentKey (String), userVerification (String).
+    final sel = pk['authenticatorSelection'] as Map<String, dynamic>?;
 
     final result = await _authenticator.register(
       RegisterRequestType(
@@ -100,15 +103,16 @@ Future<Map<String, dynamic>?> platformCreateCredential(
         challenge: _toBase64Url(pk['challenge'] as Uint8List),
         timeout: pk['timeout'] as int?,
         attestation: pk['attestation'] as String? ?? 'none',
-        authenticatorSelection:
-            (pk['authenticatorSelection'] as Map<String, dynamic>?)
-                ?.let((a) => AuthenticatorSelectionType(
-                      authenticatorAttachment:
-                          a['authenticatorAttachment'] as String?,
-                      residentKey: a['residentKey'] as String? ?? 'required',
-                      userVerification:
-                          a['userVerification'] as String? ?? 'required',
-                    )),
+        authSelectionType: sel != null
+            ? AuthenticatorSelectionType(
+                authenticatorAttachment:
+                    sel['authenticatorAttachment'] as String?,
+                requireResidentKey: sel['requireResidentKey'] as bool? ?? true,
+                residentKey: sel['residentKey'] as String? ?? 'required',
+                userVerification:
+                    sel['userVerification'] as String? ?? 'required',
+              )
+            : null,
         excludeCredentials: (pk['excludeCredentials'] as List<dynamic>?)
                 ?.map((c) => CredentialType(
                       id: _toBase64Url(c['id'] as Uint8List),
@@ -123,15 +127,16 @@ Future<Map<String, dynamic>?> platformCreateCredential(
       ),
     );
 
-    print('[passkey:native] Register success — converting response...');
+    print('[passkey:native] Register success');
+    // RegisterResponseType has flat fields (no .response wrapper).
     return {
       'id': result.id,
       'rawId': _fromBase64Url(result.rawId),
-      'type': result.type,
+      'type': 'public-key',
       'response': {
-        'clientDataJSON': _fromBase64Url(result.response.clientDataJSON),
-        'attestationObject': _fromBase64Url(result.response.attestationObject),
-        'transports': result.response.transports,
+        'clientDataJSON': _fromBase64Url(result.clientDataJSON),
+        'attestationObject': _fromBase64Url(result.attestationObject),
+        'transports': result.transports.whereType<String>().toList(),
       },
     };
   } on PasskeyAuthCancelledException {
@@ -148,7 +153,7 @@ Future<Map<String, dynamic>?> platformCreateCredential(
 }
 
 // ---------------------------------------------------------------------------
-// Base64url ↔ bytes (the passkeys package uses base64url strings internally)
+// Base64url ↔ bytes
 // ---------------------------------------------------------------------------
 
 String _toBase64Url(Uint8List bytes) {
@@ -160,26 +165,17 @@ Uint8List _fromBase64Url(String input) {
 }
 
 String base64UrlEncode(Uint8List bytes) {
-  final b64 = bytes is List<int> ? base64Encode(bytes) : '';
+  final b64 = base64Encode(bytes);
   return b64.replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
 Uint8List base64UrlDecode(String input) {
-  String normalized = input.replaceAll('-', '+').replaceAll('_', '/');
-  switch (normalized.length % 4) {
+  String n = input.replaceAll('-', '+').replaceAll('_', '/');
+  switch (n.length % 4) {
     case 2:
-      normalized += '==';
+      n += '==';
     case 3:
-      normalized += '=';
+      n += '=';
   }
-  final raw = base64Decode(normalized);
-  return Uint8List.fromList(raw);
-}
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-extension X<T> on T {
-  R let<R>(R Function(T) f) => f(this);
+  return Uint8List.fromList(base64Decode(n));
 }
