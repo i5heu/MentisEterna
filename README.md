@@ -74,6 +74,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 - [x] Go test bug "no usblp device nodes found at [/dev/usb/lp0 /dev/usb/lp1 /dev/usb/lp2]"
 - [ ] On S3: files that are not in our file list but present in the bucket should be deleted with a button in settings: "Delete Unknown Files"
+- [ ] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
 
 ## TODO Future
 - [x] OCR for images and pdfs
@@ -98,10 +99,10 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [ ] UI General
     - [ ] Drag and Drop for notes 
     - [ ] Resizable panes
-    - [ ] Better Keyboard Shortcuts
-      - [ ] Unified Keyboard Shortcuts System
-      - [ ] Any UI function gets mapped to a keyboard shortcut
-      - [ ] Keyboard shortcuts can be viewed with pressing and holding 'alt', they apread over relevant buttons and locations 
+    - [x] Better Keyboard Shortcuts
+      - [x] Unified Keyboard Shortcuts System
+      - [x] Any UI function gets mapped to a keyboard shortcut
+      - [x] Keyboard shortcuts can be viewed with pressing and holding 'strg', they apread over relevant buttons and locations 
   - [ ] Note Editor
     - [ ] Inline note editing (From Child or thread or thread child)
     - [ ] Autocomplete and predictive text
@@ -131,6 +132,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] Print Grocery List and Recipes with a button via a recipe printer.
   - [x] API based Recipe Import instead of frontend import.
   - [x] Add mg to allowed units.
+  - [ ] Add rating 0 to 10 stars to recipe note type and show it in the recipe overview.
+  - [ ] Add "prepare" value to ingredients to shows how a ingredient should be prepared (e.g. chopped, sliced, etc.), do not show it in the grocery list. 
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
     - [ ] SubTasks (Child Task Notes)
