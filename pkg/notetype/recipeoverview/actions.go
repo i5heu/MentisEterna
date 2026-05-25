@@ -154,6 +154,7 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 			factor = float64(p.NumPeople) / info.Servings
 		}
 		amount = scaleAmountFloat(amount, factor)
+		amount, unit = canonicalMetricAmount(amount, unit)
 
 		key := name + "|" + unit
 		if existing, ok := aggregated[key]; ok {
@@ -365,8 +366,37 @@ func formatAmount(num float64, unit string) string {
 	return s
 }
 
+// canonicalMetricAmount converts compatible metric units to a shared base unit
+// before aggregation so values like 500 mg and 0.5 g merge correctly.
+// - mass units are canonicalized to mg
+// - volume units are canonicalized to ml
+func canonicalMetricAmount(amount string, unit string) (string, string) {
+	num, u := splitAmount(amount)
+	if num < 0 || u != "" {
+		return amount, unit
+	}
+
+	switch unit {
+	case "mg":
+		return formatAmount(num, ""), "mg"
+	case "g":
+		return formatAmount(num*1000, ""), "mg"
+	case "kg":
+		return formatAmount(num*1000*1000, ""), "mg"
+	case "ml":
+		return formatAmount(num, ""), "ml"
+	case "l":
+		return formatAmount(num*1000, ""), "ml"
+	default:
+		return amount, unit
+	}
+}
+
 // normalizeMetricAmount normalizes amounts to the best metric unit.
+// - mg >= 1,000,000 → convert to kg
+// - mg >= 1000 → convert to g
 // - g >= 1000 → convert to kg
+// - g > 0 and < 1 → convert to mg
 // - kg > 0 and < 1 → convert to g
 // - ml >= 1000 → convert to l
 // - l > 0 and < 1 → convert to ml
@@ -378,9 +408,19 @@ func normalizeMetricAmount(amount string, unit string) (string, string) {
 	}
 
 	switch unit {
+	case "mg":
+		if num >= 1000*1000 {
+			return formatAmount(num/(1000*1000), ""), "kg"
+		}
+		if num >= 1000 {
+			return formatAmount(num/1000, ""), "g"
+		}
 	case "g":
 		if num >= 1000 {
 			return formatAmount(num/1000, ""), "kg"
+		}
+		if num > 0 && num < 1 {
+			return formatAmount(num*1000, ""), "mg"
 		}
 	case "kg":
 		if num > 0 && num < 1 {

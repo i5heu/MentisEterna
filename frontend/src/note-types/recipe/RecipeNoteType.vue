@@ -84,6 +84,7 @@
                     <td v-else>{{ ing.amount || "-" }}</td>
                     <td v-if="editing">
                         <select v-model="ing.unit" class="unit-select">
+                            <option value="mg">mg</option>
                             <option value="g">g</option>
                             <option value="kg">kg</option>
                             <option value="ml">ml</option>
@@ -219,7 +220,7 @@ const RECIPE_IMPORT_SCHEMA = {
                                 },
                                 unit: {
                                     type: "string",
-                                    enum: ["g", "kg", "ml", "l", "pcs"],
+                                    enum: ["mg", "g", "kg", "ml", "l", "pcs"],
                                 },
                             },
                         },
@@ -253,6 +254,7 @@ const RECIPE_IMPORT_EXAMPLE = {
             ingredients: [
                 { name: "Rice", amount: 250, unit: "g" },
                 { name: "Coconut milk", amount: 400, unit: "ml" },
+                { name: "Chili flakes", amount: 500, unit: "mg" },
                 { name: "Carrot", amount: 2, unit: "pcs" },
             ],
             servings: 4,
