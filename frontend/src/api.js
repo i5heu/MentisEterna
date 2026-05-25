@@ -322,6 +322,16 @@ export async function reindexSTT(token) {
 /**
  * Begin passkey login (discoverable / usernameless).
  */
+// --- System Status API ---
+
+export async function fetchPrinterStatus(token) {
+    return request("/system/printer-status", { headers: authHeaders(token) });
+}
+
+export async function fetchAIStatus(token) {
+    return request("/system/ai-status", { headers: authHeaders(token) });
+}
+
 export async function beginPasskeyLogin() {
     const pubKeyOpts = await request("/webauthn/login/begin");
 

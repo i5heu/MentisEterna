@@ -28,6 +28,156 @@
                 </div>
             </section>
 
+            <!-- Section: Printer Connection -->
+            <section class="options-section">
+                <h2 class="section-title">Printer Connection</h2>
+                <p class="section-desc">
+                    Thermal receipt printer used for printing recipes and other
+                    notes.
+                </p>
+                <button
+                    class="btn-ghost"
+                    :disabled="checkingPrinter"
+                    @click="checkPrinter"
+                >
+                    {{ checkingPrinter ? "Checking…" : "Check Connection" }}
+                </button>
+                <div v-if="printerStatus" class="status-block">
+                    <div class="status-row">
+                        <span class="status-label">Status</span>
+                        <span
+                            class="status-badge"
+                            :class="
+                                printerStatus.connected
+                                    ? 'status-ok'
+                                    : 'status-err'
+                            "
+                        >
+                            {{
+                                printerStatus.connected
+                                    ? "Connected"
+                                    : "Not Connected"
+                            }}
+                        </span>
+                    </div>
+                    <div v-if="printerStatus.connected" class="status-row">
+                        <span class="status-label">Details</span>
+                        <span class="status-value">{{
+                            printerStatus.method ||
+                            printerStatus.device_path ||
+                            "Detected"
+                        }}</span>
+                    </div>
+                    <div v-if="printerStatus.error" class="status-row">
+                        <span class="status-label">Error</span>
+                        <span class="status-msg status-err-msg">{{
+                            printerStatus.error
+                        }}</span>
+                    </div>
+                    <div
+                        v-if="
+                            printerStatus.checked &&
+                            printerStatus.checked.length
+                        "
+                        class="status-row"
+                    >
+                        <span class="status-label">Checked</span>
+                        <span class="status-value">{{
+                            printerStatus.checked.join(", ")
+                        }}</span>
+                    </div>
+                </div>
+                <p v-if="printerErr" class="msg-error">{{ printerErr }}</p>
+            </section>
+
+            <!-- Section: AI API Connection -->
+            <section class="options-section">
+                <h2 class="section-title">AI API Connection</h2>
+                <p class="section-desc">
+                    LocalAI instance providing embeddings, title generation,
+                    OCR, and speech-to-text.
+                </p>
+                <button
+                    class="btn-ghost"
+                    :disabled="checkingAI"
+                    @click="checkAI"
+                >
+                    {{ checkingAI ? "Testing…" : "Test Connection" }}
+                </button>
+                <div v-if="aiStatus" class="status-block">
+                    <div class="status-row">
+                        <span class="status-label">Base URL</span>
+                        <code class="status-value">{{
+                            aiStatus.base_url
+                        }}</code>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">VSS (Vector Search)</span>
+                        <span
+                            class="status-badge"
+                            :class="
+                                aiStatus.vss_available
+                                    ? 'status-ok'
+                                    : 'status-err'
+                            "
+                        >
+                            {{
+                                aiStatus.vss_available
+                                    ? "Available"
+                                    : "Unavailable"
+                            }}
+                        </span>
+                    </div>
+                    <div
+                        v-for="svc in ['embedding', 'chat', 'ocr', 'stt']"
+                        :key="svc"
+                        class="status-row"
+                    >
+                        <span class="status-label">{{
+                            svc.charAt(0).toUpperCase() + svc.slice(1)
+                        }}</span>
+                        <span
+                            class="status-badge"
+                            :class="
+                                aiStatus[svc].ok ? 'status-ok' : 'status-err'
+                            "
+                        >
+                            {{ aiStatus[svc].ok ? "OK" : "Error" }}
+                        </span>
+                    </div>
+                    <div
+                        v-for="svc in ['embedding', 'chat', 'ocr', 'stt']"
+                        :key="'model-' + svc"
+                        class="status-row"
+                    >
+                        <span class="status-label">{{
+                            svc.charAt(0).toUpperCase() +
+                            svc.slice(1) +
+                            " Model"
+                        }}</span>
+                        <code class="status-value">{{
+                            aiStatus[svc].model
+                        }}</code>
+                    </div>
+                    <div
+                        v-for="svc in ['embedding', 'chat', 'ocr', 'stt']"
+                        :key="'err-' + svc"
+                    >
+                        <div v-if="aiStatus[svc].error" class="status-row">
+                            <span class="status-label">{{
+                                svc.charAt(0).toUpperCase() +
+                                svc.slice(1) +
+                                " Error"
+                            }}</span>
+                            <span class="status-msg status-err-msg">{{
+                                aiStatus[svc].error
+                            }}</span>
+                        </div>
+                    </div>
+                </div>
+                <p v-if="aiErr" class="msg-error">{{ aiErr }}</p>
+            </section>
+
             <!-- Section: Backup -->
             <section class="options-section">
                 <h2 class="section-title">Database Backup</h2>
@@ -193,10 +343,22 @@ import {
     reindexNotes as apiReindexNotes,
     reindexOCR as apiReindexOCR,
     reindexSTT as apiReindexSTT,
+    fetchPrinterStatus,
+    fetchAIStatus,
 } from "../api.js";
 
 const props = defineProps({ token: String });
 const emit = defineEmits(["logout", "back"]);
+
+// Printer
+const checkingPrinter = ref(false);
+const printerStatus = ref(null);
+const printerErr = ref("");
+
+// AI
+const checkingAI = ref(false);
+const aiStatus = ref(null);
+const aiErr = ref("");
 
 // Passkey
 const registeringPasskey = ref(false);
@@ -236,6 +398,32 @@ async function registerPasskey() {
         }
     } finally {
         registeringPasskey.value = false;
+    }
+}
+
+async function checkPrinter() {
+    printerErr.value = "";
+    printerStatus.value = null;
+    checkingPrinter.value = true;
+    try {
+        printerStatus.value = await fetchPrinterStatus(props.token);
+    } catch (e) {
+        printerErr.value = e.message || "Failed to check printer status";
+    } finally {
+        checkingPrinter.value = false;
+    }
+}
+
+async function checkAI() {
+    aiErr.value = "";
+    aiStatus.value = null;
+    checkingAI.value = true;
+    try {
+        aiStatus.value = await fetchAIStatus(props.token);
+    } catch (e) {
+        aiErr.value = e.message || "Failed to check AI status";
+    } finally {
+        checkingAI.value = false;
     }
 }
 
@@ -375,6 +563,74 @@ function doLogout() {
     color: var(--font-color-secondary);
     margin-bottom: 0.75rem;
     line-height: 1.5;
+}
+
+/* Status block (used by Printer & AI API sections) */
+.status-block {
+    margin-top: 0.75rem;
+    background: var(--raised-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+}
+
+.status-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.status-row:last-child {
+    border-bottom: none;
+}
+
+.status-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--font-color-secondary);
+    flex-shrink: 0;
+    min-width: 100px;
+}
+
+.status-value {
+    font-size: 0.8rem;
+    color: var(--font-color);
+    text-align: right;
+    word-break: break-all;
+}
+
+.status-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.status-ok {
+    background: rgba(74, 222, 128, 0.12);
+    color: var(--accent-teal);
+}
+
+.status-err {
+    background: rgba(248, 113, 113, 0.12);
+    color: var(--heading-color);
+}
+
+.status-msg {
+    font-size: 0.78rem;
+    text-align: right;
+    word-break: break-all;
+    line-height: 1.5;
+}
+
+.status-err-msg {
+    color: var(--heading-color);
 }
 
 /* Messages */

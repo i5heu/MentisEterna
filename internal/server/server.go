@@ -21,6 +21,7 @@ import (
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/media"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
+	"github.com/i5heu/MentisEterna/pkg/printer"
 )
 
 type Server struct {
@@ -323,6 +324,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/maintenance/reindex", s.handleReindexNotes)
 	mux.HandleFunc("/maintenance/reindex-ocr", s.handleReindexOCR)
 	mux.HandleFunc("/maintenance/reindex-stt", s.handleReindexSTT)
+
+	// System status endpoints
+	mux.HandleFunc("/system/printer-status", s.handlePrinterStatus)
+	mux.HandleFunc("/system/ai-status", s.handleAIStatus)
 
 	mux.HandleFunc("/file/", s.serveFile)
 
@@ -629,6 +634,143 @@ func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
 
 // --- Helpers ---
 
+
+// --- System Status Handlers ---
+
+func (s *Server) handlePrinterStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Use the same printer.FindPrinter() that actual printing uses.
+	// This covers THERMAL_PRINTER_DEVICE, /dev/usb/lp*, and THERMAL_PRINTER_USB_ID.
+	prDev, err := printer.FindPrinter()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"connected":   false,
+			"device_path": "",
+			"error":       err.Error(),
+			"checked":     []string{"THERMAL_PRINTER_DEVICE", "/dev/usb/lp0-lp2", "THERMAL_PRINTER_USB_ID"},
+		})
+		return
+	}
+
+	// Close immediately - we only needed to verify connectivity.
+	prDev.Close()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"connected":   true,
+		"device_path": "", // raw USB devices don not have a simple path
+		"error":       "",
+		"method":      "Printer detected via FindPrinter()",
+	})
+}
+
+func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	baseURL := os.Getenv("LOCALAI_BASE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
+	}
+
+	embeddingModel := os.Getenv("LOCALAI_EMBEDDING_MODEL")
+	if embeddingModel == "" {
+		embeddingModel = "text-embedding-ada-002"
+	}
+
+	chatModel := os.Getenv("LOCALAI_CHAT_MODEL")
+	if chatModel == "" {
+		chatModel = "gpt-3.5-turbo"
+	}
+
+	ocrModel := os.Getenv("LOCALAI_OCR_MODEL")
+	if ocrModel == "" {
+		ocrModel = "gpt-4o-mini"
+	}
+
+	sttModel := os.Getenv("LOCALAI_STT_MODEL")
+	if sttModel == "" {
+		sttModel = "nemo-parakeet-tdt-0.6b"
+	}
+
+	// Test embedding connectivity
+	embeddingOK := false
+	embeddingErr := ""
+	if s.llm != nil {
+		_, err := s.llm.GenerateEmbedding("test")
+		if err != nil {
+			embeddingErr = err.Error()
+		} else {
+			embeddingOK = true
+		}
+	} else {
+		embeddingErr = "Embedding client not configured"
+	}
+
+	// Test chat connectivity
+	chatOK := false
+	chatErr := ""
+	if s.chatClient != nil {
+		_, err := s.chatClient.GenerateTitle("test")
+		if err != nil {
+			chatErr = err.Error()
+		} else {
+			chatOK = true
+		}
+	} else {
+		chatErr = "Chat client not configured"
+	}
+
+	// OCR and STT: verify client exists (actual test requires real media files)
+	ocrOK := s.ocrClient != nil
+	ocrErr := ""
+	if !ocrOK {
+		ocrErr = "OCR client not configured"
+	}
+
+	sttOK := s.sttClient != nil
+	sttErr := ""
+	if !sttOK {
+		sttErr = "STT client not configured"
+	}
+
+	vssAvailable := s.db.VSSAvailable()
+
+	allOK := embeddingOK && chatOK && ocrOK && sttOK
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"base_url":      baseURL,
+		"all_ok":        allOK,
+		"vss_available": vssAvailable,
+		"embedding": map[string]any{
+			"model": embeddingModel,
+			"ok":    embeddingOK,
+			"error": embeddingErr,
+		},
+		"chat": map[string]any{
+			"model": chatModel,
+			"ok":    chatOK,
+			"error": chatErr,
+		},
+		"ocr": map[string]any{
+			"model": ocrModel,
+			"ok":    ocrOK,
+			"error": ocrErr,
+		},
+		"stt": map[string]any{
+			"model": sttModel,
+			"ok":    sttOK,
+			"error": sttErr,
+		},
+	})
+}
+
+// --- Helpers ---
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

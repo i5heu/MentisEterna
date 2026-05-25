@@ -67,9 +67,11 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Remove Light Mode, Only Dark Mode is supported.
 - [x] Font Color of the Task Note Type > .status-badge is not visible because fontcolor is to dark.
 - [x] Click on Note Title should open the note in main view.
-- [ ] Printer Needs a connection section in settings.
+- [x] Printer and needs a connection section in settings to show connection status.
+- [x] AI API needs a connection section in settings to test connection and show error messages.
 - [ ] If a print via recipe printer fails, the user should get a notification and after the click the button should show spin.
-- [ ] AI API needs a connection section in settings to test connection and show error messages.
+- [ ] VSS shows no connection in the API test, but this should be integrated in SQLite via the `vss` extension and not be a separate service.
+- [ ] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 
 ## TODO Current
 - [ ] Recipe System
