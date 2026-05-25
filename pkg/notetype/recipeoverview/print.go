@@ -87,9 +87,6 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 		} else {
 			b.Text(name + "\n")
 		}
-		if strings.TrimSpace(it.NonMetric) != "" {
-			b.Text("    ≈ " + it.NonMetric + "\n")
-		}
 	}
 
 	b.HLine(w)
@@ -160,9 +157,6 @@ func FormatGroceryListText(gl GroceryList) string {
 			sb.WriteString(line + right + "\n")
 		} else {
 			sb.WriteString(name + "\n")
-		}
-		if strings.TrimSpace(it.NonMetric) != "" {
-			sb.WriteString("    ≈ " + it.NonMetric + "\n")
 		}
 	}
 
