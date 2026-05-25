@@ -796,6 +796,11 @@ func (s *Server) dispatchAction(w http.ResponseWriter, r *http.Request, noteID i
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
+		var badReq *notetype.BadRequestError
+		if errors.As(err, &badReq) {
+			http.Error(w, badReq.Error(), http.StatusBadRequest)
+			return
+		}
 		writeErr(w, err)
 		return
 	}

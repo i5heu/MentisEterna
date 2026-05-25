@@ -27,8 +27,8 @@
                     rows="10"
                     :placeholder="recipeImportExampleText"
                 ></textarea>
-                <p v-if="importError" class="recipe-import-error">
-                    {{ importError }}
+                <p v-if="displayImportError" class="recipe-import-error">
+                    {{ displayImportError }}
                 </p>
                 <div class="recipe-import-actions">
                     <button class="btn-amber btn-sm" @click="importRecipeJson">
@@ -189,8 +189,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 
-const VALID_UNITS = new Set(["g", "kg", "ml", "l", "pcs"]);
-
 const RECIPE_IMPORT_SCHEMA = {
     type: "object",
     additionalProperties: false,
@@ -291,6 +289,7 @@ const props = defineProps({
     editing: { type: Boolean, default: false },
     customData: { type: Object, default: null },
     uiSchema: { type: Object, default: null },
+    actionError: { type: String, default: "" },
 });
 
 const emit = defineEmits(["selectNote", "update:customData", "import:recipes"]);
@@ -316,6 +315,10 @@ const isRecipeEmpty = computed(() => {
         ? props.note.attachments.length > 0
         : false;
     return !hasIngredients && !hasBody && !hasAttachments;
+});
+
+const displayImportError = computed(() => {
+    return importError.value || props.actionError || "";
 });
 
 // Guard to break the echo-back loop:
@@ -354,30 +357,6 @@ function buildRecipeCustomData(raw) {
         kcal_per_serving: normalizeString(safe.kcal_per_serving),
         freezable: !!safe.freezable,
         pre_cook_servings: normalizeString(safe.pre_cook_servings),
-    };
-}
-
-function hasImportedRecipeContent(recipe) {
-    const data = recipe?.customData || {};
-    return (
-        hasText(recipe?.title) ||
-        hasText(recipe?.body) ||
-        (Array.isArray(data.ingredients) && data.ingredients.length > 0) ||
-        hasText(data.servings) ||
-        hasText(data.attention_time) ||
-        hasText(data.total_time) ||
-        hasText(data.grams_per_serving) ||
-        hasText(data.kcal_per_serving) ||
-        data.freezable ||
-        hasText(data.pre_cook_servings)
-    );
-}
-
-function normalizeImportedRecipe(raw) {
-    return {
-        title: normalizeString(raw?.title),
-        body: normalizeString(raw?.body),
-        customData: buildRecipeCustomData(raw),
     };
 }
 
@@ -483,63 +462,12 @@ async function copyRecipeSchema() {
 function importRecipeJson() {
     importError.value = "";
 
-    let parsed;
-    try {
-        parsed = JSON.parse(importJsonText.value);
-    } catch {
-        importError.value = "Recipe import JSON is not valid JSON.";
+    if (!importJsonText.value.trim()) {
+        importError.value = "Paste a recipe import JSON document first.";
         return;
     }
 
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        importError.value = "Recipe import must be a JSON object.";
-        return;
-    }
-
-    if (!Array.isArray(parsed.recipes) || parsed.recipes.length === 0) {
-        importError.value =
-            "Recipe import must include a non-empty recipes array.";
-        return;
-    }
-
-    const importedRecipes = [];
-    for (let i = 0; i < parsed.recipes.length; i += 1) {
-        const rawRecipe = parsed.recipes[i];
-        if (
-            !rawRecipe ||
-            typeof rawRecipe !== "object" ||
-            Array.isArray(rawRecipe)
-        ) {
-            importError.value = `Recipe ${i + 1} must be a JSON object.`;
-            return;
-        }
-
-        const recipe = normalizeImportedRecipe(rawRecipe);
-        const ingredients = recipe.customData.ingredients;
-        const emptyNameIndex = ingredients.findIndex((ing) => !ing.name);
-        if (emptyNameIndex >= 0) {
-            importError.value = `Recipe ${i + 1}, ingredient ${emptyNameIndex + 1} is missing a name.`;
-            return;
-        }
-
-        const invalidUnitIndex = ingredients.findIndex(
-            (ing) => !VALID_UNITS.has(ing.unit),
-        );
-        if (invalidUnitIndex >= 0) {
-            importError.value = `Recipe ${i + 1}, ingredient ${invalidUnitIndex + 1} has an invalid unit. Use one of: g, kg, ml, l, pcs.`;
-            return;
-        }
-
-        if (!hasImportedRecipeContent(recipe)) {
-            importError.value = `Recipe ${i + 1} is empty. Provide at least a title, body, ingredients, or recipe details.`;
-            return;
-        }
-
-        importedRecipes.push(recipe);
-    }
-
-    emit("import:recipes", importedRecipes);
-    resetImportPanel();
+    emit("import:recipes", importJsonText.value);
 }
 
 function addIngredient() {
