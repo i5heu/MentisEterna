@@ -74,10 +74,11 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 - [x] Go test bug "no usblp device nodes found at [/dev/usb/lp0 /dev/usb/lp1 /dev/usb/lp2]"
 - [ ] On S3: files that are not in our file list but present in the bucket should be deleted with a button in settings: "Delete Unknown Files"
+- [ ] Backups must contain media files.
 - [x] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
-- [ ] Grocery List needs to round to 2 decimal places.
-- [ ] Printed Recipes need to use non-metric if metric is not validated
-- [ ] If cursur in editor or input, ctrl+s should save the note even in edit mode, other hotkeys should be disabled.
+- [x] Grocery List needs to round to 2 decimal places.
+- [x] Printed Recipes need to use non-metric if metric is not validated
+- [x] If cursur in editor or input, ctrl+s should save the note even in edit mode, other hotkeys should be disabled.
 
 ## TODO Future
 - [x] OCR for images and pdfs
