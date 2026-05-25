@@ -3,36 +3,70 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <img
-                    src="../assets/MentisEterna_logo.svg"
-                    alt="Logo"
-                    class="app-logo"
-                    title="Keyboard shortcuts (Shift+?)"
-                    @click="showHotkeys = !showHotkeys"
-                />
+                <div class="shortcut-anchor sidebar-logo-anchor">
+                    <img
+                        src="../assets/MentisEterna_logo.svg"
+                        alt="Logo"
+                        class="app-logo"
+                        :title="getShortcutLabel('show-shortcuts')"
+                        @click="showHotkeys = !showHotkeys"
+                    />
+                    <ShortcutHint
+                        v-if="shortcutHintsVisible"
+                        :label="getHintLabel('show-shortcuts')"
+                    />
+                </div>
                 <span class="app-title">MentisEterna</span>
                 <button
-                    class="btn-ghost icon-btn"
-                    title="Options"
-                    @click="$emit('navigate-options')"
+                    class="btn-ghost icon-btn shortcut-anchor"
+                    :title="getShortcutLabel('open-options')"
+                    @click="openOptions"
                 >
                     ⚙
+                    <ShortcutHint
+                        v-if="shortcutHintsVisible"
+                        :label="getHintLabel('open-options')"
+                    />
                 </button>
             </div>
-            <button class="btn-amber new-btn" @click="newNote">
+            <button
+                class="btn-amber new-btn shortcut-anchor"
+                :title="getShortcutLabel('new-note')"
+                @click="newNote"
+            >
                 + New Note
+                <ShortcutHint
+                    v-if="shortcutHintsVisible"
+                    :label="getHintLabel('new-note')"
+                />
             </button>
-            <div class="search-box">
+            <div class="search-box shortcut-anchor">
                 <input
                     v-model="searchQuery"
                     type="text"
                     placeholder="Semantic search…"
                     class="search-input"
+                    :title="getShortcutLabel('focus-search')"
                     @input="onSearchInput"
                 />
                 <span v-if="searching" class="search-spinner">⟳</span>
+                <ShortcutHint
+                    v-if="shortcutHintsVisible"
+                    :label="getHintLabel('focus-search')"
+                    position="top-left"
+                />
             </div>
-            <div class="note-list">
+            <div class="note-list shortcut-anchor">
+                <ShortcutHint
+                    v-if="shortcutHintsVisible"
+                    label="↑↓"
+                    position="top-left"
+                />
+                <ShortcutHint
+                    v-if="shortcutHintsVisible"
+                    label="↵"
+                    position="top-right"
+                />
                 <!-- Search results mode -->
                 <template v-if="searchQuery.trim()">
                     <div
@@ -251,48 +285,104 @@
                         </div>
                     </div>
                     <div class="editor-actions">
-                        <button class="btn-ghost" @click="toggleEdit">
+                        <button
+                            class="btn-ghost shortcut-anchor"
+                            :title="getShortcutLabel('toggle-edit')"
+                            @click="toggleEdit"
+                        >
                             {{ isEditing ? "🖉 View" : "✎ Edit" }}
+                            <ShortcutHint
+                                v-if="shortcutHintsVisible"
+                                :label="getHintLabel('toggle-edit')"
+                            />
                         </button>
                         <button
-                            class="btn-amber btn-child"
+                            class="btn-amber btn-child shortcut-anchor"
+                            :title="getShortcutLabel('new-child-note')"
                             @click="newChildNote"
                         >
                             + Child
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('new-child-note')
+                                "
+                                :label="getHintLabel('new-child-note')"
+                            />
                         </button>
                         <button
-                            class="btn-ghost"
+                            class="btn-ghost shortcut-anchor"
+                            :title="getShortcutLabel('attach-file')"
                             @click="onAttachFile"
                             :disabled="!selected?.id"
                         >
                             📎 Attach
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('attach-file')
+                                "
+                                :label="getHintLabel('attach-file')"
+                            />
                         </button>
                         <button
-                            class="btn-primary"
+                            class="btn-primary shortcut-anchor"
+                            :title="getShortcutLabel('save-note')"
                             :disabled="!dirty || saving"
                             @click="save"
                         >
                             {{ saving ? "Saving…" : "Save" }}
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('save-note')
+                                "
+                                :label="getHintLabel('save-note')"
+                            />
                         </button>
                         <button
-                            class="btn-ghost"
+                            class="btn-ghost shortcut-anchor"
                             :class="{ active: showHistory }"
+                            :title="getShortcutLabel('toggle-history')"
                             @click="toggleHistory"
                         >
                             History
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('toggle-history')
+                                "
+                                :label="getHintLabel('toggle-history')"
+                            />
                         </button>
                         <button
-                            class="btn-ghost pin-editor-btn"
+                            class="btn-ghost pin-editor-btn shortcut-anchor"
                             :class="{ pinned: selected?.pinned }"
-                            :title="
-                                selected?.pinned ? 'Unpin note' : 'Pin note'
-                            "
+                            :title="getShortcutLabel('toggle-pin')"
                             @click="togglePin(selected)"
                         >
                             📌
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('toggle-pin')
+                                "
+                                :label="getHintLabel('toggle-pin')"
+                            />
                         </button>
-                        <button class="btn-danger" @click="confirmDelete">
+                        <button
+                            class="btn-danger shortcut-anchor"
+                            :title="getShortcutLabel('delete-note')"
+                            @click="confirmDelete"
+                        >
                             Delete
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('delete-note')
+                                "
+                                :label="getHintLabel('delete-note')"
+                            />
                         </button>
                     </div>
                 </div>
@@ -549,11 +639,20 @@
                             @keydown.enter.ctrl.exact="sendReply"
                         />
                         <button
-                            class="btn-primary composer-send"
+                            class="btn-primary composer-send shortcut-anchor"
+                            :title="getShortcutLabel('send-reply')"
                             :disabled="sendingReply"
                             @click="sendReply"
                         >
                             {{ sendingReply ? "…" : "Send" }}
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('send-reply')
+                                "
+                                :label="getHintLabel('send-reply')"
+                                position="top-left"
+                            />
                         </button>
                         <div
                             v-if="
@@ -643,19 +742,33 @@
         <aside v-if="threadNote" class="thread-sidebar">
             <div class="thread-sidebar-header">
                 <button
-                    class="btn-ghost icon-btn"
+                    class="btn-ghost icon-btn shortcut-anchor"
+                    :title="getShortcutLabel('close-thread')"
                     @click="closeThreadSidebar"
-                    title="Close thread"
                 >
                     ✕
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('close-thread')
+                        "
+                        :label="getHintLabel('close-thread')"
+                    />
                 </button>
                 <span class="thread-sidebar-title">Thread</span>
                 <button
-                    class="btn-ghost icon-btn"
+                    class="btn-ghost icon-btn shortcut-anchor"
+                    :title="getShortcutLabel('open-thread-main-view')"
                     @click="selectNote(threadNote)"
-                    title="Open full view"
                 >
                     ⤢
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('open-thread-main-view')
+                        "
+                        :label="getHintLabel('open-thread-main-view')"
+                    />
                 </button>
             </div>
             <!-- Breadcrumb -->
@@ -771,13 +884,24 @@
                         @click="onLinkEditorCaretMove('threadReply', $event)"
                         @keyup="onLinkEditorCaretMove('threadReply', $event)"
                         @scroll="onLinkEditorScroll('threadReply')"
+                        @keydown.enter.meta.exact="sendThreadReply"
+                        @keydown.enter.ctrl.exact="sendThreadReply"
                     />
                     <button
-                        class="btn-primary composer-send"
+                        class="btn-primary composer-send shortcut-anchor"
+                        :title="getShortcutLabel('send-thread-reply')"
                         :disabled="threadSendingReply"
                         @click="sendThreadReply"
                     >
                         {{ threadSendingReply ? "…" : "Send" }}
+                        <ShortcutHint
+                            v-if="
+                                shortcutHintsVisible &&
+                                isShortcutEnabled('send-thread-reply')
+                            "
+                            :label="getHintLabel('send-thread-reply')"
+                            position="top-left"
+                        />
                     </button>
                     <div
                         v-if="
@@ -882,30 +1006,7 @@
             </div>
         </div>
 
-        <!-- Hotkey help modal -->
-        <div
-            v-if="showHotkeys"
-            class="modal-overlay"
-            @click.self="showHotkeys = false"
-        >
-            <div class="modal hotkey-modal">
-                <div class="hotkey-modal-header">
-                    <span>Keyboard Shortcuts</span>
-                    <button
-                        class="btn-ghost icon-btn"
-                        @click="showHotkeys = false"
-                    >
-                        ✕
-                    </button>
-                </div>
-                <div class="hotkey-list">
-                    <div v-for="hk in hotkeys" :key="hk.key" class="hotkey-row">
-                        <kbd class="hotkey-key">{{ hk.key }}</kbd>
-                        <span class="hotkey-desc">{{ hk.desc }}</span>
-                    </div>
-                </div>
-            </div>
-        </div>
+        <KeyboardShortcutsHelpModal v-model="showHotkeys" :items="hotkeys" />
     </div>
 </template>
 
@@ -932,6 +1033,8 @@ import {
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
 import NoteAttachments from "../components/NoteAttachments.vue";
+import ShortcutHint from "../components/ShortcutHint.vue";
+import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
 import {
     uploadAttachment,
     uploadInlineFile,
@@ -942,6 +1045,10 @@ import {
     getNoteTypeOrDefault,
     fetchAndMergeManifests,
 } from "../note-types/registry.js";
+import {
+    isEditableElement,
+    useKeyboardShortcuts,
+} from "../composables/useKeyboardShortcuts.js";
 
 const props = defineProps({ token: String });
 const emit = defineEmits(["logout", "navigate-options"]);
@@ -985,7 +1092,6 @@ const saveError = ref("");
 const showDeleteModal = ref(false);
 const deleting = ref(false);
 const showHistory = ref(false);
-const showHotkeys = ref(false);
 const history = ref([]);
 const historyLoading = ref(false);
 
@@ -1069,24 +1175,200 @@ const sidebarList = computed(() =>
     searchQuery.value.trim() ? searchResults.value : rootNotes.value,
 );
 
-// Hotkeys definition
-const hotkeys = [
-    { key: isMac() ? "⌘ N" : "Ctrl+N", desc: "New note" },
-    { key: isMac() ? "⌘ S" : "Ctrl+S", desc: "Save note" },
-    { key: isMac() ? "⌘ E" : "Ctrl+E", desc: "Toggle edit / preview" },
-    { key: isMac() ? "⌘ H" : "Ctrl+H", desc: "Toggle history panel" },
-    { key: isMac() ? "⌘ K" : "Ctrl+K", desc: "Focus search bar" },
-    { key: "↑ ↓", desc: "Navigate list / search results" },
-    { key: "Enter", desc: "Open highlighted note" },
-    { key: "Esc", desc: "Close panel / blur / clear highlight" },
-    { key: "Shift+?", desc: "Toggle this help dialog" },
-];
-
-function isMac() {
-    return /Mac|iPod|iPhone|iPad/.test(
-        navigator.platform || navigator.userAgentData?.platform || "",
-    );
+function openOptions() {
+    emit("navigate-options");
 }
+
+function focusSearchInput() {
+    const input = document.querySelector(".search-input");
+    if (input) input.focus();
+}
+
+function focusBodyEditor() {
+    document.querySelector(".body-textarea")?.focus();
+}
+
+function toggleHotkeysHelp() {
+    const active = document.activeElement;
+    if (isEditing.value && isEditableElement(active)) {
+        return;
+    }
+    showHotkeys.value = !showHotkeys.value;
+}
+
+const shortcutDefinitions = computed(() => [
+    {
+        id: "show-shortcuts",
+        description: "Toggle keyboard shortcuts help",
+        hintKey: "K",
+        keys: ["Shift+?"],
+        allowInInput: true,
+        handler: () => toggleHotkeysHelp(),
+    },
+    {
+        id: "open-options",
+        description: "Open options",
+        hintKey: "O",
+        keys: ["Mod+,"],
+        allowInInput: true,
+        handler: () => openOptions(),
+    },
+    {
+        id: "new-note",
+        description: "Create a new note",
+        hintKey: "N",
+        keys: ["Mod+N"],
+        allowInInput: true,
+        handler: () => newNote(),
+    },
+    {
+        id: "focus-search",
+        description: "Focus the search bar",
+        hintKey: "F",
+        keys: ["Mod+K"],
+        allowInInput: true,
+        handler: () => focusSearchInput(),
+    },
+    {
+        id: "toggle-edit",
+        description: "Toggle edit / preview",
+        hintKey: "E",
+        keys: ["Mod+E"],
+        allowInInput: true,
+        enabled: () => Boolean(selected.value),
+        handler: () => {
+            if (!selected.value) return;
+            toggleEdit();
+            if (isEditing.value) {
+                requestAnimationFrame(() => focusBodyEditor());
+            }
+        },
+    },
+    {
+        id: "new-child-note",
+        description: "Create a child note",
+        hintKey: "C",
+        allowInInput: true,
+        enabled: () => Boolean(selected.value?.id),
+        handler: () => newChildNote(),
+    },
+    {
+        id: "attach-file",
+        description: "Attach a file",
+        hintKey: "A",
+        allowInInput: true,
+        enabled: () => Boolean(selected.value?.id),
+        handler: () => onAttachFile(),
+    },
+    {
+        id: "save-note",
+        description: "Save the current note",
+        hintKey: "S",
+        keys: ["Mod+S"],
+        allowInInput: true,
+        enabled: () => Boolean(selected.value) && dirty.value && !saving.value,
+        handler: () => {
+            if (dirty.value && selected.value) save();
+        },
+    },
+    {
+        id: "toggle-history",
+        description: "Toggle note history",
+        hintKey: "H",
+        keys: ["Mod+H"],
+        allowInInput: true,
+        enabled: () => Boolean(selected.value?.id),
+        handler: () => toggleHistory(),
+    },
+    {
+        id: "toggle-pin",
+        description: "Pin or unpin the current note",
+        hintKey: "P",
+        allowInInput: true,
+        enabled: () => Boolean(selected.value?.id),
+        handler: () => togglePin(selected.value),
+    },
+    {
+        id: "delete-note",
+        description: "Delete the current note",
+        hintKey: "D",
+        allowInInput: true,
+        enabled: () => Boolean(selected.value?.id),
+        handler: () => confirmDelete(),
+    },
+    {
+        id: "send-reply",
+        description: "Send the reply composer",
+        hintKey: "R",
+        allowInInput: true,
+        enabled: () => Boolean(selected.value?.id) && !sendingReply.value,
+        handler: () => sendReply(),
+    },
+    {
+        id: "close-thread",
+        description: "Close the thread sidebar",
+        hintKey: "X",
+        allowInInput: true,
+        enabled: () => Boolean(threadNote.value),
+        handler: () => closeThreadSidebar(),
+    },
+    {
+        id: "open-thread-main-view",
+        description: "Open the thread note in the main view",
+        hintKey: "U",
+        allowInInput: true,
+        enabled: () => Boolean(threadNote.value),
+        handler: () => {
+            if (threadNote.value) selectNote(threadNote.value);
+        },
+    },
+    {
+        id: "send-thread-reply",
+        description: "Send the thread reply composer",
+        hintKey: "T",
+        allowInInput: true,
+        enabled: () =>
+            Boolean(threadNote.value?.id) && !threadSendingReply.value,
+        handler: () => sendThreadReply(),
+    },
+    {
+        id: "sidebar-up",
+        description: "Move sidebar selection up",
+        keys: ["ArrowUp"],
+        allowInInput: true,
+        handler: (event) => handleArrowShortcut(event),
+    },
+    {
+        id: "sidebar-down",
+        description: "Move sidebar selection down",
+        keys: ["ArrowDown"],
+        allowInInput: true,
+        handler: (event) => handleArrowShortcut(event),
+    },
+    {
+        id: "sidebar-open",
+        description: "Open the highlighted note or link result",
+        keys: ["Enter"],
+        allowInInput: true,
+        handler: (event) => handleEnterShortcut(event),
+    },
+    {
+        id: "close-context",
+        description: "Close the active panel or clear focus",
+        keys: ["Escape"],
+        allowInInput: true,
+        handler: (event) => handleEscapeShortcut(event),
+    },
+]);
+
+const {
+    showHelp: showHotkeys,
+    hintOverlayVisible: shortcutHintsVisible,
+    helpItems: hotkeys,
+    getHintLabel,
+    getShortcutLabel,
+    isShortcutEnabled,
+} = useKeyboardShortcuts(shortcutDefinitions);
 
 // Edit / View toggle
 const isEditing = ref(false);
@@ -1973,186 +2255,125 @@ function selectLinkResult(note) {
     context.onChange?.();
 }
 
-// ── Keyboard shortcut handler ──
-function onKeyDown(e) {
-    const mod = isMac() ? e.metaKey : e.ctrlKey;
-
-    // Shift+? => toggle hotkey help (skip if typing in an editor field)
-    if (e.shiftKey && e.key === "?") {
-        const tag = document.activeElement?.tagName;
-        if (isEditing.value && (tag === "TEXTAREA" || tag === "INPUT")) return;
-        e.preventDefault();
-        showHotkeys.value = !showHotkeys.value;
+function handleEscapeShortcut(event) {
+    if (linkSearchVisible.value) {
+        event.preventDefault();
+        closeLinkSearch();
+        return;
+    }
+    if (showHotkeys.value) {
+        showHotkeys.value = false;
+        return;
+    }
+    if (showDeleteModal.value) {
+        showDeleteModal.value = false;
+        return;
+    }
+    if (showHistory.value) {
+        showHistory.value = false;
         return;
     }
 
-    // Esc => close link search / modals / history / clear search / clear highlight / blur
-    if (e.key === "Escape") {
-        if (linkSearchVisible.value) {
-            e.preventDefault();
-            closeLinkSearch();
-            return;
-        }
-        if (showHotkeys.value) {
-            showHotkeys.value = false;
-            return;
-        }
-        if (showDeleteModal.value) {
-            showDeleteModal.value = false;
-            return;
-        }
-        if (showHistory.value) {
-            showHistory.value = false;
-            return;
-        }
-        // If search bar is focused and has text, clear it
-        const inSearch =
-            document.activeElement?.classList.contains("search-input");
-        if (inSearch && searchQuery.value.trim()) {
-            searchQuery.value = "";
-            searchResults.value = [];
-            highlightedIndex.value = -1;
-            return;
-        }
-        if (highlightedIndex.value >= 0) {
-            highlightedIndex.value = -1;
-            return;
-        }
-        if (
-            document.activeElement?.tagName === "INPUT" ||
-            document.activeElement?.tagName === "TEXTAREA"
-        ) {
-            document.activeElement.blur();
-            return;
-        }
+    const active = document.activeElement;
+    const inSearch = active?.classList.contains("search-input");
+
+    if (inSearch && searchQuery.value.trim()) {
+        searchQuery.value = "";
+        searchResults.value = [];
+        highlightedIndex.value = -1;
         return;
     }
-
-    // Ctrl/Cmd+N => new note
-    if (mod && e.key === "n") {
-        e.preventDefault();
-        newNote();
+    if (highlightedIndex.value >= 0) {
+        highlightedIndex.value = -1;
         return;
     }
-
-    // Ctrl/Cmd+S => save
-    if (mod && e.key === "s") {
-        e.preventDefault();
-        if (dirty.value && selected.value) save();
-        return;
+    if (isEditableElement(active)) {
+        active.blur();
     }
+}
 
-    // Ctrl/Cmd+E => toggle edit/view
-    if (mod && e.key === "e") {
-        e.preventDefault();
-        if (selected.value) {
-            toggleEdit();
-            if (isEditing.value) {
-                requestAnimationFrame(() =>
-                    document.querySelector(".body-textarea")?.focus(),
-                );
-            }
-        }
-        return;
-    }
-
-    // Ctrl/Cmd+H => toggle history
-    if (mod && e.key === "h") {
-        e.preventDefault();
-        if (selected.value?.id) toggleHistory();
-        return;
-    }
-
-    // Ctrl/Cmd+K => focus search
-    if (mod && e.key === "k") {
-        e.preventDefault();
-        const inp = document.querySelector(".search-input");
-        if (inp) inp.focus();
-        return;
-    }
-
-    // Arrow Up / Down => navigate link search popup or sidebar list
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        if (linkSearchVisible.value) {
-            const linkList = linkSearchResults.value;
-            if (linkList.length === 0) return;
-            e.preventDefault();
-            if (linkSearchIndex.value < 0) {
-                linkSearchIndex.value =
-                    e.key === "ArrowDown" ? 0 : linkList.length - 1;
-            } else if (e.key === "ArrowDown") {
-                linkSearchIndex.value =
-                    (linkSearchIndex.value + 1) % linkList.length;
-            } else {
-                linkSearchIndex.value =
-                    (linkSearchIndex.value - 1 + linkList.length) %
-                    linkList.length;
-            }
-            // Scroll highlighted item into view
-            requestAnimationFrame(() => {
-                const lel = document.querySelector(
-                    ".link-search-item.highlighted",
-                );
-                if (lel) lel.scrollIntoView({ block: "nearest" });
-            });
-            return;
-        }
-        const list = sidebarList.value;
-        if (list.length === 0) return;
-        e.preventDefault();
-        if (highlightedIndex.value < 0) {
-            highlightedIndex.value =
-                e.key === "ArrowDown" ? 0 : list.length - 1;
-        } else if (e.key === "ArrowDown") {
-            highlightedIndex.value = (highlightedIndex.value + 1) % list.length;
+function handleArrowShortcut(event) {
+    if (linkSearchVisible.value) {
+        const linkList = linkSearchResults.value;
+        if (linkList.length === 0) return;
+        event.preventDefault();
+        if (linkSearchIndex.value < 0) {
+            linkSearchIndex.value =
+                event.key === "ArrowDown" ? 0 : linkList.length - 1;
+        } else if (event.key === "ArrowDown") {
+            linkSearchIndex.value =
+                (linkSearchIndex.value + 1) % linkList.length;
         } else {
-            highlightedIndex.value =
-                (highlightedIndex.value - 1 + list.length) % list.length;
+            linkSearchIndex.value =
+                (linkSearchIndex.value - 1 + linkList.length) % linkList.length;
         }
-        // Scroll highlighted item into view after DOM update
         requestAnimationFrame(() => {
-            const el = document.querySelector(".note-item.highlighted");
+            const el = document.querySelector(".link-search-item.highlighted");
             if (el) el.scrollIntoView({ block: "nearest" });
         });
         return;
     }
 
-    // Enter => select link search result, or open highlighted note, or first result if focus is in search input
-    if (e.key === "Enter") {
-        if (linkSearchVisible.value) {
-            const linkList = linkSearchResults.value;
-            if (
-                linkList.length > 0 &&
-                linkSearchIndex.value >= 0 &&
-                linkSearchIndex.value < linkList.length
-            ) {
-                e.preventDefault();
-                selectLinkResult(linkList[linkSearchIndex.value]);
-            }
-            return;
-        }
-        const tag = document.activeElement?.tagName;
-        const inSearch =
-            document.activeElement?.classList.contains("search-input");
-        // Don't intercept Enter in editor inputs/textarea (title, body, etc.)
-        if (!inSearch && (tag === "INPUT" || tag === "TEXTAREA")) return;
-        const idx = inSearch ? 0 : highlightedIndex.value;
-        if (idx >= 0 && idx < sidebarList.value.length) {
-            e.preventDefault();
-            const item = sidebarList.value[idx];
-            if (searchQuery.value.trim()) {
-                selectSearchResult(item);
-            } else {
-                selectNote(item);
-            }
-            if (inSearch) document.activeElement?.blur();
+    const active = document.activeElement;
+    const inSearch = active?.classList.contains("search-input");
+    if (!inSearch && isEditableElement(active)) {
+        return;
+    }
+
+    const list = sidebarList.value;
+    if (list.length === 0) return;
+    event.preventDefault();
+    if (highlightedIndex.value < 0) {
+        highlightedIndex.value =
+            event.key === "ArrowDown" ? 0 : list.length - 1;
+    } else if (event.key === "ArrowDown") {
+        highlightedIndex.value = (highlightedIndex.value + 1) % list.length;
+    } else {
+        highlightedIndex.value =
+            (highlightedIndex.value - 1 + list.length) % list.length;
+    }
+    requestAnimationFrame(() => {
+        const el = document.querySelector(".note-item.highlighted");
+        if (el) el.scrollIntoView({ block: "nearest" });
+    });
+}
+
+function handleEnterShortcut(event) {
+    if (linkSearchVisible.value) {
+        const linkList = linkSearchResults.value;
+        if (
+            linkList.length > 0 &&
+            linkSearchIndex.value >= 0 &&
+            linkSearchIndex.value < linkList.length
+        ) {
+            event.preventDefault();
+            selectLinkResult(linkList[linkSearchIndex.value]);
         }
         return;
+    }
+
+    const active = document.activeElement;
+    const inSearch = active?.classList.contains("search-input");
+    if (!inSearch && isEditableElement(active)) {
+        return;
+    }
+
+    const idx = inSearch ? 0 : highlightedIndex.value;
+    if (idx < 0 || idx >= sidebarList.value.length) return;
+
+    event.preventDefault();
+    const item = sidebarList.value[idx];
+    if (searchQuery.value.trim()) {
+        selectSearchResult(item);
+    } else {
+        selectNote(item);
+    }
+    if (inSearch) {
+        active?.blur();
     }
 }
 
 onMounted(() => {
-    window.addEventListener("keydown", onKeyDown);
     window.addEventListener("click", onClickOutside);
     window.addEventListener("popstate", onPopstate);
     // Restore state from URL on initial load
@@ -2160,7 +2381,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-    window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("click", onClickOutside);
     window.removeEventListener("popstate", onPopstate);
 });
@@ -2315,6 +2535,16 @@ function onPopstate() {
 }
 </script>
 <style scoped>
+.shortcut-anchor {
+    position: relative;
+}
+
+.sidebar-logo-anchor {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .layout {
     display: flex;
     height: 100vh;
@@ -3184,56 +3414,6 @@ function onPopstate() {
     display: flex;
     gap: 0.75rem;
     justify-content: flex-end;
-}
-
-/* Hotkey help modal */
-.hotkey-modal {
-    max-width: 420px;
-}
-
-.hotkey-modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1.25rem;
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: var(--header-title-color);
-}
-
-.hotkey-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
-}
-
-.hotkey-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.4rem 0;
-    border-bottom: 1px solid rgba(26, 44, 61, 0.4);
-}
-
-.hotkey-row:last-child {
-    border-bottom: none;
-}
-
-.hotkey-key {
-    background: var(--raised-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 5px;
-    padding: 0.2rem 0.55rem;
-    font-size: 0.78rem;
-    font-family:
-        "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
-    color: var(--pre-text-color);
-    white-space: nowrap;
-}
-
-.hotkey-desc {
-    font-size: 0.85rem;
-    color: var(--font-color-secondary);
 }
 
 /* =============================================
