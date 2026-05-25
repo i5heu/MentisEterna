@@ -87,6 +87,7 @@ type RecipeSummary struct {
 	Rating          int    `json:"rating"`
 	Freezable       bool   `json:"freezable"`
 	PreCookServings string `json:"pre_cook_servings"`
+	IsPantry        bool   `json:"is_pantry"`
 	ThumbnailURL    string `json:"thumbnail_url,omitempty"`
 }
 
@@ -179,6 +180,15 @@ func (p *RecipeOverviewPlugin) Manifest() notetype.Manifest {
 				RefreshStrategy: "none",
 				SuccessMessage:  "Grocery list printed",
 			},
+			{
+				ID:              "update_grocery_list",
+				Label:           "Update Grocery List",
+				Description:     "Update grocery list items after manual edits",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"list_id":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"amount":{"type":"string"},"unit":{"type":"string"}},"required":["name"]}}},"required":["list_id","items"]}`),
+				Dangerous:       false,
+				RefreshStrategy: "reload_view",
+				SuccessMessage:  "Grocery list updated",
+			},
 		},
 		HasConfig:  false,
 		HasView:    true,
@@ -206,6 +216,12 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 			COALESCE(rm.rating, 0) AS rating,
 			COALESCE(rm.freezable, 0) AS freezable,
 			COALESCE(rm.pre_cook_servings, '') AS pre_cook_servings,
+			EXISTS(
+				SELECT 1
+				FROM tags_refs tr
+				JOIN tags t ON t.id = tr.tag_id
+				WHERE tr.note_id = n.id AND lower(t.name) = 'pantry'
+			) AS is_pantry,
 			COALESCE(u.body, '') AS body,
 			COALESCE((
 				SELECT printf('/file/%d/%d', n.id, f.id)
@@ -239,7 +255,7 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 		var freezableInt int
 		var body string
 		var fallbackThumbnailURL string
-		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList, &r.Rating, &freezableInt, &r.PreCookServings, &body, &fallbackThumbnailURL); err != nil {
+		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList, &r.Rating, &freezableInt, &r.PreCookServings, &r.IsPantry, &body, &fallbackThumbnailURL); err != nil {
 			return nil, fmt.Errorf("recipe_overview: scan recipe: %w", err)
 		}
 		r.Freezable = freezableInt != 0
@@ -262,6 +278,12 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 		FROM notes n
 		JOIN ct_recipe_ingredients ri ON ri.note_id = n.id
 		WHERE n.type = 'recipe'
+		  AND NOT EXISTS(
+				SELECT 1
+				FROM tags_refs tr
+				JOIN tags t ON t.id = tr.tag_id
+				WHERE tr.note_id = n.id AND lower(t.name) = 'pantry'
+		  )
 		ORDER BY n.title, ri.sort_order, ri.id
 	`)
 	if err != nil {
@@ -369,6 +391,11 @@ func (p *RecipeOverviewPlugin) HandleAction(ctx context.Context, db *sql.DB, use
 			return nil, fmt.Errorf("no database available")
 		}
 		return printGroceryListAction(db, params)
+	case "update_grocery_list":
+		if db == nil {
+			return nil, fmt.Errorf("no database available")
+		}
+		return updateGroceryList(db, noteID, params)
 	default:
 		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
 	}

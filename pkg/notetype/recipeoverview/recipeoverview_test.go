@@ -118,6 +118,73 @@ func TestBuildView_UsesImageAttachmentFallbackWhenBodyHasNoImage(t *testing.T) {
 	}
 }
 
+func TestBuildView_MarksPantryRecipeAndExcludesItFromUnvalidIngredients(t *testing.T) {
+	d := plugintest.DB(t, &RecipeOverviewPlugin{})
+	defer d.Close()
+
+	recipePlugin := &recipe.RecipePlugin{}
+	if err := recipePlugin.InitSchema(d.DB); err != nil {
+		t.Fatalf("recipe InitSchema: %v", err)
+	}
+
+	pantryNote := plugintest.CreateNote(t, d, "Pantry Staples", recipePlugin)
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, 'Salt', '', '', '1', 'tablespoon', 0, 0)`, pantryNote); err != nil {
+		t.Fatalf("insert pantry ingredient: %v", err)
+	}
+	if _, err := d.DB.Exec(`INSERT OR IGNORE INTO tags (name) VALUES ('pantry')`); err != nil {
+		t.Fatalf("insert pantry tag: %v", err)
+	}
+	if _, err := d.DB.Exec(`INSERT INTO tags_refs (note_id, tag_id) SELECT ?, id FROM tags WHERE name = 'pantry'`, pantryNote); err != nil {
+		t.Fatalf("attach pantry tag: %v", err)
+	}
+
+	normalNote := plugintest.CreateNote(t, d, "Bread", recipePlugin)
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, 'Flour', '', '', '1', 'cup', 0, 0)`, normalNote); err != nil {
+		t.Fatalf("insert normal ingredient: %v", err)
+	}
+
+	overviewNote := plugintest.CreateNote(t, d, "Weekly Overview", &RecipeOverviewPlugin{})
+	plugin := &RecipeOverviewPlugin{}
+	result, err := plugin.BuildView(context.Background(), d.DB, 0, overviewNote)
+	if err != nil {
+		t.Fatalf("BuildView: %v", err)
+	}
+
+	data, ok := result.(*OverviewData)
+	if !ok {
+		t.Fatalf("expected *OverviewData, got %T", result)
+	}
+
+	var pantrySummary *RecipeSummary
+	for i := range data.Recipes {
+		if data.Recipes[i].NoteID == pantryNote {
+			pantrySummary = &data.Recipes[i]
+			break
+		}
+	}
+	if pantrySummary == nil {
+		t.Fatalf("expected pantry recipe %d in overview", pantryNote)
+	}
+	if !pantrySummary.IsPantry {
+		t.Fatalf("expected pantry recipe to be marked as pantry: %+v", pantrySummary)
+	}
+
+	for _, item := range data.UnvalidIngredients {
+		if item.RecipeNoteID == pantryNote {
+			t.Fatalf("expected pantry ingredients to be excluded from unvalid list, got %+v", item)
+		}
+	}
+	foundNormal := false
+	for _, item := range data.UnvalidIngredients {
+		if item.RecipeNoteID == normalNote {
+			foundNormal = true
+		}
+	}
+	if !foundNormal {
+		t.Fatal("expected normal recipe ingredient to remain in unvalid list")
+	}
+}
+
 func TestNormalizeMetricAmountSupportsMilligrams(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -335,6 +402,87 @@ func TestGenerateGroceryListIgnoresIngredientPrepare(t *testing.T) {
 	}
 	if gl.Items[0].Name != "Onion" {
 		t.Fatalf("expected grocery list to omit prepare text, got %+v", gl.Items[0])
+	}
+}
+
+func TestUpdateGroceryListPersistsManualEdits(t *testing.T) {
+	d := plugintest.DB(t, &RecipeOverviewPlugin{})
+	defer d.Close()
+
+	recipePlugin := &recipe.RecipePlugin{}
+	if err := recipePlugin.InitSchema(d.DB); err != nil {
+		t.Fatalf("recipe InitSchema: %v", err)
+	}
+
+	recipeNote := plugintest.CreateNote(t, d, "Pasta", recipePlugin)
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, metric_validated, sort_order) VALUES (?, 'Pasta', '200', 'g', 1, 0)`, recipeNote); err != nil {
+		t.Fatalf("insert ingredient: %v", err)
+	}
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_meta (note_id, servings) VALUES (?, '1')`, recipeNote); err != nil {
+		t.Fatalf("insert meta: %v", err)
+	}
+
+	overviewNote := plugintest.CreateNote(t, d, "Weekly Overview", &RecipeOverviewPlugin{})
+	generated, err := generateGroceryList(d.DB, overviewNote, json.RawMessage(fmt.Sprintf(`{"recipe_ids":[%d],"num_people":1}`, recipeNote)))
+	if err != nil {
+		t.Fatalf("generateGroceryList: %v", err)
+	}
+
+	payload, ok := generated.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", generated)
+	}
+	glRaw, ok := payload["grocery_list"]
+	if !ok {
+		t.Fatalf("expected grocery_list in result")
+	}
+	encoded, err := json.Marshal(glRaw)
+	if err != nil {
+		t.Fatalf("marshal grocery list: %v", err)
+	}
+	var gl GroceryList
+	if err := json.Unmarshal(encoded, &gl); err != nil {
+		t.Fatalf("unmarshal grocery list: %v", err)
+	}
+
+	updated, err := updateGroceryList(d.DB, overviewNote, json.RawMessage(fmt.Sprintf(`{"list_id":%d,"items":[{"name":"Pasta","amount":"250","unit":"g"},{"name":"Olive Oil","amount":"1","unit":"bottle"},{"name":"","amount":"","unit":""}]}`, gl.ID)))
+	if err != nil {
+		t.Fatalf("updateGroceryList: %v", err)
+	}
+
+	updatedPayload, ok := updated.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", updated)
+	}
+	updatedRaw, ok := updatedPayload["grocery_list"]
+	if !ok {
+		t.Fatalf("expected grocery_list in update result")
+	}
+	updatedEncoded, err := json.Marshal(updatedRaw)
+	if err != nil {
+		t.Fatalf("marshal updated grocery list: %v", err)
+	}
+	var updatedList GroceryList
+	if err := json.Unmarshal(updatedEncoded, &updatedList); err != nil {
+		t.Fatalf("unmarshal updated grocery list: %v", err)
+	}
+
+	if len(updatedList.Items) != 2 {
+		t.Fatalf("expected 2 items after update, got %d", len(updatedList.Items))
+	}
+	if updatedList.Items[0].Name != "Pasta" || updatedList.Items[0].Amount != "250" || updatedList.Items[0].Unit != "g" {
+		t.Fatalf("unexpected first item after update: %+v", updatedList.Items[0])
+	}
+	if updatedList.Items[1].Name != "Olive Oil" || updatedList.Items[1].Amount != "1" || updatedList.Items[1].Unit != "bottle" {
+		t.Fatalf("unexpected second item after update: %+v", updatedList.Items[1])
+	}
+
+	stored, err := loadGroceryListByID(d.DB, overviewNote, gl.ID)
+	if err != nil {
+		t.Fatalf("loadGroceryListByID: %v", err)
+	}
+	if len(stored.Items) != 2 || stored.Items[1].Name != "Olive Oil" {
+		t.Fatalf("expected stored grocery list to match manual edits, got %+v", stored.Items)
 	}
 }
 

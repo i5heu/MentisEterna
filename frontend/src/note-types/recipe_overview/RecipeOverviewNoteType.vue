@@ -3,31 +3,80 @@
         <h3>Recipe Overview</h3>
 
         <div class="overview-actions-row">
-            <button
-                v-if="unvalidIngredients.length > 0"
-                class="btn-ghost btn-sm"
-                @click="showUnvalidModal = true"
-            >
-                Unvalid Ingredients ({{ unvalidIngredients.length }})
-            </button>
+            <div class="overview-actions-group">
+                <button
+                    v-if="pantryRecipe"
+                    class="btn-ghost btn-sm"
+                    :disabled="creatingPantryRecipe || printingPantry"
+                    @click="printPantryStaples"
+                >
+                    {{
+                        printingPantry
+                            ? "Printing Pantry..."
+                            : "Print Pantry Staples"
+                    }}
+                </button>
+                <button
+                    v-if="pantryRecipe"
+                    class="btn-ghost btn-sm"
+                    @click="$emit('selectNote', pantryRecipe.note_id)"
+                >
+                    View Pantry Staples
+                </button>
+                <button
+                    v-if="pantryRecipe"
+                    class="btn-ghost btn-sm"
+                    :disabled="
+                        !latestList || loadingPantry || savingCurrentList
+                    "
+                    @click="openPantryModal"
+                >
+                    Add Pantry Staples
+                </button>
+                <button
+                    v-else
+                    class="btn-amber btn-sm"
+                    :disabled="creatingPantryRecipe"
+                    @click="createPantryStaplesRecipe"
+                >
+                    {{
+                        creatingPantryRecipe
+                            ? "Creating Pantry Staples..."
+                            : "Create Pantry Staples Recipe"
+                    }}
+                </button>
+                <button
+                    v-if="unvalidIngredients.length > 0"
+                    class="btn-ghost btn-sm"
+                    @click="showUnvalidModal = true"
+                >
+                    Unvalid Ingredients ({{ unvalidIngredients.length }})
+                </button>
+            </div>
+        </div>
+
+        <div
+            v-if="actionErrorMessage || actionPreviewText"
+            class="action-feedback"
+        >
+            <p v-if="actionErrorMessage" class="action-error">
+                {{ actionErrorMessage }}
+            </p>
+            <div v-if="actionPreviewText" class="action-preview">
+                <div class="action-preview-title">Printer Preview</div>
+                <pre class="action-preview-box">{{ actionPreviewText }}</pre>
+            </div>
         </div>
 
         <!-- Recipe selection list -->
         <div class="recipe-selection-section">
             <h4>Select Recipes</h4>
-            <p
-                v-if="
-                    !overviewData ||
-                    !overviewData.recipes ||
-                    !overviewData.recipes.length
-                "
-                class="empty-hint"
-            >
+            <p v-if="!selectableRecipes.length" class="empty-hint">
                 No recipe notes found. Create notes with type "recipe" first.
             </p>
             <div v-else class="recipe-select-list">
                 <div
-                    v-for="r in overviewData.recipes"
+                    v-for="r in selectableRecipes"
                     :key="r.note_id"
                     class="recipe-select-row"
                 >
@@ -76,11 +125,7 @@
                                 :disabled="
                                     !selectedRecipeIds.includes(r.note_id)
                                 "
-                                @change="
-                                    preCookRecipeIds.has(r.note_id)
-                                        ? preCookRecipeIds.delete(r.note_id)
-                                        : preCookRecipeIds.add(r.note_id)
-                                "
+                                @change="togglePreCookRecipe(r.note_id)"
                                 class="recipe-checkbox"
                             />
                             <span class="precook-label">Pre-cook</span>
@@ -139,40 +184,110 @@
         </div>
 
         <!-- Latest grocery list result -->
-        <div
-            v-if="latestList && latestList.items && latestList.items.length"
-            class="grocery-list-current"
-        >
-            <h4>
-                Latest Grocery List
-                <span class="list-meta">({{ latestList.num_people }}p)</span>
-                <button
-                    class="btn-ghost btn-sm btn-print"
-                    :disabled="printingListId === latestList.id"
-                    @click="printGroceryList(latestList.id)"
-                >
-                    {{ printingListId === latestList.id ? "..." : "🖨" }}
-                </button>
-            </h4>
+        <div v-if="latestList" class="grocery-list-current">
+            <div class="current-list-header">
+                <h4>
+                    Latest Grocery List
+                    <span class="list-meta"
+                        >({{ latestList.num_people }}p)</span
+                    >
+                </h4>
+                <div class="current-list-actions">
+                    <button
+                        class="btn-ghost btn-sm btn-print"
+                        :disabled="
+                            printingListId === latestList.id ||
+                            savingCurrentList ||
+                            generatingList
+                        "
+                        @click="printGroceryList(latestList.id)"
+                    >
+                        {{ printingListId === latestList.id ? "..." : "🖨" }}
+                    </button>
+                    <button
+                        class="btn-ghost btn-sm"
+                        :disabled="savingCurrentList"
+                        @click="addCurrentListItem"
+                    >
+                        Add Item
+                    </button>
+                    <button
+                        v-if="currentListDirty"
+                        class="btn-ghost btn-sm"
+                        :disabled="savingCurrentList"
+                        @click="hydrateCurrentListDraft"
+                    >
+                        Reset
+                    </button>
+                    <button
+                        class="btn-amber btn-sm"
+                        :disabled="savingCurrentList || !currentListDirty"
+                        @click="saveCurrentGroceryList()"
+                    >
+                        {{ savingCurrentList ? "Saving..." : "Save Changes" }}
+                    </button>
+                </div>
+            </div>
             <div
                 v-if="latestList.recipe_names && latestList.recipe_names.length"
                 class="list-recipes"
             >
                 Recipes: {{ latestList.recipe_names.join(", ") }}
             </div>
-            <table class="ingredient-table">
+            <p v-if="currentListDirty" class="current-list-hint">
+                Save your changes before printing so the printer uses the latest
+                grocery list.
+            </p>
+            <table class="ingredient-table ingredient-table-editable">
                 <thead>
                     <tr>
                         <th>Item</th>
                         <th>Amount</th>
                         <th>Unit</th>
+                        <th class="item-actions-col">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr v-for="(item, idx) in latestList.items" :key="idx">
-                        <td>{{ item.name }}</td>
-                        <td>{{ item.amount }}</td>
-                        <td>{{ item.unit }}</td>
+                    <tr
+                        v-for="(item, idx) in editableLatestListItems"
+                        :key="`${latestList.id}-${idx}`"
+                    >
+                        <td>
+                            <input
+                                v-model="item.name"
+                                class="grocery-input"
+                                placeholder="Item name"
+                            />
+                        </td>
+                        <td>
+                            <input
+                                v-model="item.amount"
+                                class="grocery-input"
+                                placeholder="Amount"
+                            />
+                        </td>
+                        <td>
+                            <input
+                                v-model="item.unit"
+                                class="grocery-input"
+                                placeholder="Unit"
+                            />
+                        </td>
+                        <td class="item-row-actions">
+                            <button
+                                class="btn-ghost btn-sm btn-delete-row"
+                                :disabled="savingCurrentList"
+                                @click="removeCurrentListItem(idx)"
+                            >
+                                ✕
+                            </button>
+                        </td>
+                    </tr>
+                    <tr v-if="editableLatestListItems.length === 0">
+                        <td colspan="4" class="empty-table-cell">
+                            No items yet. Add items manually or from Pantry
+                            Staples.
+                        </td>
                     </tr>
                 </tbody>
             </table>
@@ -235,6 +350,87 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+
+        <div
+            v-if="showPantryModal"
+            class="recipe-modal-overlay"
+            @click.self="closePantryModal"
+        >
+            <div class="recipe-modal pantry-modal">
+                <div class="recipe-modal-header">
+                    <div>
+                        <h4>Pantry Staples</h4>
+                        <p class="recipe-modal-hint pantry-modal-hint">
+                            Select the staples that are missing and add them to
+                            the current grocery list.
+                        </p>
+                    </div>
+                    <button class="btn-ghost btn-sm" @click="closePantryModal">
+                        ✕
+                    </button>
+                </div>
+
+                <p v-if="!latestList" class="recipe-modal-hint">
+                    Generate a grocery list first so Pantry Staples can be added
+                    to it.
+                </p>
+                <p v-else-if="loadingPantry" class="empty-hint">
+                    Loading Pantry Staples...
+                </p>
+                <p v-else-if="!pantryIngredientRows.length" class="empty-hint">
+                    The Pantry Staples recipe has no ingredients yet. Open the
+                    recipe and add some staples first.
+                </p>
+                <div v-else class="pantry-list">
+                    <label
+                        v-for="(item, idx) in pantryIngredientRows"
+                        :key="pantryIngredientSelectionKey(item, idx)"
+                        class="pantry-item"
+                    >
+                        <input
+                            type="checkbox"
+                            :value="pantryIngredientSelectionKey(item, idx)"
+                            v-model="selectedPantryIngredientIds"
+                            class="recipe-checkbox pantry-item-checkbox"
+                        />
+                        <div class="pantry-item-main">
+                            <div class="pantry-item-name">{{ item.name }}</div>
+                            <div
+                                v-if="item.prepare"
+                                class="pantry-item-prepare"
+                            >
+                                {{ item.prepare }}
+                            </div>
+                            <div class="pantry-item-meta">
+                                {{ formatGroceryItemLine(item) }}
+                            </div>
+                        </div>
+                    </label>
+                </div>
+
+                <div class="pantry-modal-actions">
+                    <button class="btn-ghost btn-sm" @click="closePantryModal">
+                        Cancel
+                    </button>
+                    <button
+                        class="btn-amber btn-sm"
+                        :disabled="
+                            !latestList ||
+                            !selectedPantryIngredientIds.length ||
+                            savingCurrentList ||
+                            loadingPantry
+                        "
+                        @click="addSelectedPantryItemsToCurrentList"
+                    >
+                        {{
+                            savingCurrentList
+                                ? "Adding..."
+                                : `Add ${selectedPantryIngredientIds.length} Item${selectedPantryIngredientIds.length === 1 ? "" : "s"}`
+                        }}
+                    </button>
                 </div>
             </div>
         </div>
@@ -391,7 +587,12 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { fetchNote, pluginActionV2, updateNote } from "../../api.js";
+import {
+    createNote,
+    fetchNote,
+    pluginActionV2,
+    updateNote,
+} from "../../api.js";
 
 const props = defineProps({
     note: { type: Object, default: null },
@@ -413,9 +614,33 @@ const configPeople = ref(1);
 const expandedLists = ref(new Set());
 const deletingListId = ref(null);
 const printingListId = ref(null);
+const printingPantry = ref(false);
+const creatingPantryRecipe = ref(false);
 const showUnvalidModal = ref(false);
 const editableUnvalidIngredients = ref([]);
 const savingIngredientIds = ref(new Set());
+
+const editableLatestListItems = ref([]);
+const savingCurrentList = ref(false);
+const showPantryModal = ref(false);
+const loadingPantry = ref(false);
+const pantryRecipeDetail = ref(null);
+const selectedPantryIngredientIds = ref([]);
+const actionErrorMessage = ref("");
+const actionPreviewText = ref("");
+
+const allRecipes = computed(() => {
+    const recipes = overviewData.value?.recipes;
+    return Array.isArray(recipes) ? recipes : [];
+});
+
+const pantryRecipe = computed(() => {
+    return allRecipes.value.find((recipe) => isPantryRecipe(recipe)) || null;
+});
+
+const selectableRecipes = computed(() => {
+    return allRecipes.value.filter((recipe) => !isPantryRecipe(recipe));
+});
 
 const latestList = computed(() => {
     const lists = overviewData.value?.grocery_lists;
@@ -432,30 +657,412 @@ const unvalidIngredients = computed(() => {
     return Array.isArray(items) ? items : [];
 });
 
+const pantryIngredientRows = computed(() => {
+    const rawIngredients =
+        pantryRecipeDetail.value?.plugin?.config?.ingredients ||
+        pantryRecipeDetail.value?.custom_data?.ingredients ||
+        [];
+    if (!Array.isArray(rawIngredients)) return [];
+    return rawIngredients.filter((item) => normalizeString(item?.name) !== "");
+});
+
+const currentListDirty = computed(() => {
+    const savedItems = latestList.value?.items || [];
+    return (
+        serializeGroceryItems(editableLatestListItems.value) !==
+        serializeGroceryItems(savedItems)
+    );
+});
+
 let hydrating = false;
 
-function hydrateFromProp() {
-    hydrating = true;
-    const cd = props.customData;
-    overviewData.value = cd || {
+function clearActionFeedback() {
+    actionErrorMessage.value = "";
+    actionPreviewText.value = "";
+}
+
+function isPantryRecipe(recipe) {
+    return recipe?.is_pantry === true;
+}
+
+function createEmptyOverviewData() {
+    return {
         recipes: [],
         grocery_lists: [],
         unvalid_ingredients: [],
     };
+}
 
-    const lists = overviewData.value.grocery_lists || [];
-    if (lists.length > 0 && selectedRecipeIds.value.length === 0) {
-        const latest = lists[0];
-        if (latest.recipe_ids && latest.recipe_ids.length > 0) {
-            selectedRecipeIds.value = [...latest.recipe_ids];
-            configDays.value = latest.num_days || 8;
-            configPeople.value = latest.num_people || 1;
-        }
+function createEmptyRecipePayload() {
+    return {
+        ingredients: [],
+        servings: "",
+        attention_time: "",
+        total_time: "",
+        grams_per_serving: "",
+        kcal_per_serving: "",
+        rating: 0,
+        freezable: false,
+        pre_cook_servings: "",
+    };
+}
+
+function createEmptyGroceryItem() {
+    return {
+        name: "",
+        amount: "",
+        unit: "",
+    };
+}
+
+function cloneGroceryItems(items) {
+    return Array.isArray(items)
+        ? items.map((item) => ({
+              name: item?.name || "",
+              amount: item?.amount || "",
+              unit: item?.unit || "",
+          }))
+        : [];
+}
+
+function serializeGroceryItems(items) {
+    return JSON.stringify(
+        (Array.isArray(items) ? items : [])
+            .map((item) => ({
+                name: normalizeString(item?.name),
+                amount: normalizeString(item?.amount),
+                unit: normalizeString(item?.unit),
+            }))
+            .filter(
+                (item) =>
+                    item.name !== "" || item.amount !== "" || item.unit !== "",
+            ),
+    );
+}
+
+function normalizeString(value) {
+    return String(value ?? "").trim();
+}
+
+function parseNumericAmount(value) {
+    const trimmed = normalizeString(value);
+    if (!/^\d+(?:[.,]\d+)?$/.test(trimmed)) {
+        return null;
     }
+    const parsed = Number.parseFloat(trimmed.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatNumericAmount(value) {
+    if (!Number.isFinite(value)) return "";
+    return String(Number(value.toFixed(6)));
+}
+
+function canonicalMetricAmountPair(amount, unit) {
+    const numericAmount = parseNumericAmount(amount);
+    const normalizedUnit = normalizeString(unit);
+    if (numericAmount == null || normalizedUnit === "") {
+        return null;
+    }
+
+    switch (normalizedUnit) {
+        case "mg":
+            return { amount: numericAmount, unit: "mg" };
+        case "g":
+            return { amount: numericAmount * 1000, unit: "mg" };
+        case "kg":
+            return { amount: numericAmount * 1000 * 1000, unit: "mg" };
+        case "ml":
+            return { amount: numericAmount, unit: "ml" };
+        case "l":
+            return { amount: numericAmount * 1000, unit: "ml" };
+        default:
+            return null;
+    }
+}
+
+function normalizeMetricAmountPair(amount, unit) {
+    const numericAmount = parseNumericAmount(amount);
+    const normalizedUnit = normalizeString(unit);
+    if (numericAmount == null || normalizedUnit === "") {
+        return {
+            amount: normalizeString(amount),
+            unit: normalizedUnit,
+        };
+    }
+
+    switch (normalizedUnit) {
+        case "mg":
+            if (numericAmount >= 1000 * 1000) {
+                return {
+                    amount: formatNumericAmount(numericAmount / (1000 * 1000)),
+                    unit: "kg",
+                };
+            }
+            if (numericAmount >= 1000) {
+                return {
+                    amount: formatNumericAmount(numericAmount / 1000),
+                    unit: "g",
+                };
+            }
+            return {
+                amount: formatNumericAmount(numericAmount),
+                unit: "mg",
+            };
+        case "g":
+            if (numericAmount >= 1000) {
+                return {
+                    amount: formatNumericAmount(numericAmount / 1000),
+                    unit: "kg",
+                };
+            }
+            if (numericAmount > 0 && numericAmount < 1) {
+                return {
+                    amount: formatNumericAmount(numericAmount * 1000),
+                    unit: "mg",
+                };
+            }
+            return {
+                amount: formatNumericAmount(numericAmount),
+                unit: "g",
+            };
+        case "kg":
+            if (numericAmount > 0 && numericAmount < 1) {
+                return {
+                    amount: formatNumericAmount(numericAmount * 1000),
+                    unit: "g",
+                };
+            }
+            return {
+                amount: formatNumericAmount(numericAmount),
+                unit: "kg",
+            };
+        case "ml":
+            if (numericAmount >= 1000) {
+                return {
+                    amount: formatNumericAmount(numericAmount / 1000),
+                    unit: "l",
+                };
+            }
+            return {
+                amount: formatNumericAmount(numericAmount),
+                unit: "ml",
+            };
+        case "l":
+            if (numericAmount > 0 && numericAmount < 1) {
+                return {
+                    amount: formatNumericAmount(numericAmount * 1000),
+                    unit: "ml",
+                };
+            }
+            return {
+                amount: formatNumericAmount(numericAmount),
+                unit: "l",
+            };
+        default:
+            return {
+                amount: formatNumericAmount(numericAmount),
+                unit: normalizedUnit,
+            };
+    }
+}
+
+function hasMetricIngredientValue(item) {
+    return (
+        normalizeString(item?.amount) !== "" &&
+        normalizeString(item?.unit) !== ""
+    );
+}
+
+function hasNonMetricIngredientValue(item) {
+    return (
+        normalizeString(item?.non_metric_amount) !== "" &&
+        normalizeString(item?.non_metric_unit) !== ""
+    );
+}
+
+function effectivePantryGroceryItem(item) {
+    const name = normalizeString(item?.name);
+    const metricAmount = normalizeString(item?.amount);
+    const metricUnit = normalizeString(item?.unit);
+    const nonMetricAmount = normalizeString(item?.non_metric_amount);
+    const nonMetricUnit = normalizeString(item?.non_metric_unit);
+    const metricValidated = !!item?.metric_validated;
+
+    if (
+        hasMetricIngredientValue(item) &&
+        (!hasNonMetricIngredientValue(item) || metricValidated)
+    ) {
+        const normalizedMetric = normalizeMetricAmountPair(
+            metricAmount,
+            metricUnit,
+        );
+        return {
+            name,
+            amount: normalizedMetric.amount,
+            unit: normalizedMetric.unit,
+        };
+    }
+
+    if (hasNonMetricIngredientValue(item)) {
+        return {
+            name,
+            amount: nonMetricAmount,
+            unit: nonMetricUnit,
+        };
+    }
+
+    return {
+        name,
+        amount: metricAmount,
+        unit: metricUnit,
+    };
+}
+
+function mergeAmountStrings(existingAmount, nextAmount) {
+    const left = parseNumericAmount(existingAmount);
+    const right = parseNumericAmount(nextAmount);
+    if (left != null && right != null) {
+        return formatNumericAmount(left + right);
+    }
+
+    const existing = normalizeString(existingAmount);
+    const next = normalizeString(nextAmount);
+    if (existing && next) {
+        return `${existing} + ${next}`;
+    }
+    return next || existing;
+}
+
+function mergeGroceryItems(baseItems, additions) {
+    const nextItems = cloneGroceryItems(baseItems);
+
+    for (const rawAddition of additions) {
+        const addition = {
+            name: normalizeString(rawAddition?.name),
+            amount: normalizeString(rawAddition?.amount),
+            unit: normalizeString(rawAddition?.unit),
+        };
+        if (!addition.name) continue;
+
+        const additionCanonical = canonicalMetricAmountPair(
+            addition.amount,
+            addition.unit,
+        );
+        const existingIndex = nextItems.findIndex((item) => {
+            const sameName =
+                normalizeString(item.name).toLowerCase() ===
+                addition.name.toLowerCase();
+            if (!sameName) return false;
+
+            const sameUnit =
+                normalizeString(item.unit).toLowerCase() ===
+                addition.unit.toLowerCase();
+            if (sameUnit) return true;
+
+            const existingCanonical = canonicalMetricAmountPair(
+                item.amount,
+                item.unit,
+            );
+            return (
+                additionCanonical != null &&
+                existingCanonical != null &&
+                additionCanonical.unit === existingCanonical.unit
+            );
+        });
+
+        if (existingIndex >= 0) {
+            const existingItem = nextItems[existingIndex];
+            const existingCanonical = canonicalMetricAmountPair(
+                existingItem.amount,
+                existingItem.unit,
+            );
+            if (
+                additionCanonical != null &&
+                existingCanonical != null &&
+                additionCanonical.unit === existingCanonical.unit
+            ) {
+                const normalizedMetric = normalizeMetricAmountPair(
+                    formatNumericAmount(
+                        existingCanonical.amount + additionCanonical.amount,
+                    ),
+                    additionCanonical.unit,
+                );
+                nextItems[existingIndex] = {
+                    ...existingItem,
+                    amount: normalizedMetric.amount,
+                    unit: normalizedMetric.unit,
+                };
+            } else {
+                nextItems[existingIndex] = {
+                    ...existingItem,
+                    amount: mergeAmountStrings(
+                        existingItem.amount,
+                        addition.amount,
+                    ),
+                    unit: normalizeString(existingItem.unit) || addition.unit,
+                };
+            }
+            continue;
+        }
+
+        nextItems.push(addition);
+    }
+
+    return nextItems;
+}
+
+function sanitizeGroceryItemsForSave(items) {
+    const sanitized = [];
+    for (const item of Array.isArray(items) ? items : []) {
+        const normalized = {
+            name: normalizeString(item?.name),
+            amount: normalizeString(item?.amount),
+            unit: normalizeString(item?.unit),
+        };
+        if (!normalized.name) {
+            if (!normalized.amount && !normalized.unit) continue;
+            throw new Error("Each grocery list item needs a name.");
+        }
+        sanitized.push(normalized);
+    }
+    return sanitized;
+}
+
+function hydrateCurrentListDraft() {
+    editableLatestListItems.value = cloneGroceryItems(latestList.value?.items);
+}
+
+function hydrateFromProp() {
+    hydrating = true;
+    clearActionFeedback();
+    const cd = props.customData;
+    overviewData.value =
+        cd && typeof cd === "object" ? cd : createEmptyOverviewData();
+
+    const latest =
+        overviewData.value.grocery_lists && overviewData.value.grocery_lists[0]
+            ? overviewData.value.grocery_lists[0]
+            : null;
+    const selectableRecipeIdSet = new Set(
+        (overviewData.value.recipes || [])
+            .filter((recipe) => !isPantryRecipe(recipe))
+            .map((recipe) => recipe.note_id),
+    );
+    selectedRecipeIds.value = Array.isArray(latest?.recipe_ids)
+        ? latest.recipe_ids.filter((id) => selectableRecipeIdSet.has(id))
+        : [];
+    configDays.value = latest?.num_days || 8;
+    configPeople.value = latest?.num_people || 1;
+    preCookRecipeIds.value = new Set();
     editableUnvalidIngredients.value = unvalidIngredients.value.map(
         createUnvalidIngredientDraft,
     );
+    pantryRecipeDetail.value = null;
+    selectedPantryIngredientIds.value = [];
+    showPantryModal.value = false;
     showUnvalidModal.value = false;
+    hydrateCurrentListDraft();
     hydrating = false;
 }
 
@@ -476,7 +1083,70 @@ watch(
     },
 );
 
+watch(
+    () =>
+        `${latestList.value?.id || 0}:${serializeGroceryItems(latestList.value?.items || [])}`,
+    () => {
+        hydrateCurrentListDraft();
+    },
+    { immediate: true },
+);
+
+watch(
+    () => pantryRecipe.value?.note_id || 0,
+    (nextPantryID) => {
+        if (!nextPantryID) {
+            pantryRecipeDetail.value = null;
+            selectedPantryIngredientIds.value = [];
+            showPantryModal.value = false;
+            return;
+        }
+        if (pantryRecipeDetail.value?.id !== nextPantryID) {
+            pantryRecipeDetail.value = null;
+            selectedPantryIngredientIds.value = [];
+        }
+    },
+);
+
+function replaceGroceryListInState(updatedList) {
+    const groceryLists = Array.isArray(overviewData.value?.grocery_lists)
+        ? overviewData.value.grocery_lists
+        : [];
+    overviewData.value = {
+        ...overviewData.value,
+        grocery_lists: groceryLists.map((list) =>
+            list.id === updatedList.id ? updatedList : list,
+        ),
+    };
+}
+
+async function refreshOverviewData() {
+    const refreshed = await fetchNote(props.token, props.note.id);
+    overviewData.value = {
+        recipes: refreshed.plugin?.view?.recipes || [],
+        grocery_lists: refreshed.plugin?.view?.grocery_lists || [],
+        unvalid_ingredients: refreshed.plugin?.view?.unvalid_ingredients || [],
+    };
+    editableUnvalidIngredients.value = unvalidIngredients.value.map(
+        createUnvalidIngredientDraft,
+    );
+    if (editableUnvalidIngredients.value.length === 0) {
+        showUnvalidModal.value = false;
+    }
+}
+
+function togglePreCookRecipe(recipeID) {
+    const next = new Set(preCookRecipeIds.value);
+    if (next.has(recipeID)) {
+        next.delete(recipeID);
+    } else {
+        next.add(recipeID);
+    }
+    preCookRecipeIds.value = next;
+}
+
 async function generateGroceryList() {
+    clearActionFeedback();
     generatingList.value = true;
     try {
         const result = await pluginActionV2(
@@ -495,17 +1165,67 @@ async function generateGroceryList() {
             ...overviewData.value,
             grocery_lists: [gl, ...(overviewData.value.grocery_lists || [])],
         };
-        emit("update:customData", { ...overviewData.value });
         preCookRecipeIds.value = new Set();
+        hydrateCurrentListDraft();
     } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to generate grocery list.";
         console.error("generate grocery list:", e);
     } finally {
         generatingList.value = false;
     }
 }
 
+async function saveCurrentGroceryList(itemsOverride = null) {
+    if (!latestList.value) return null;
+
+    clearActionFeedback();
+    savingCurrentList.value = true;
+    try {
+        const sanitizedItems = sanitizeGroceryItemsForSave(
+            itemsOverride ?? editableLatestListItems.value,
+        );
+        const result = await pluginActionV2(
+            props.token,
+            props.note.id,
+            "update_grocery_list",
+            {
+                list_id: latestList.value.id,
+                items: sanitizedItems,
+            },
+        );
+        const updatedList = result?.grocery_list;
+        if (updatedList) {
+            replaceGroceryListInState(updatedList);
+            hydrateCurrentListDraft();
+        }
+        return updatedList || null;
+    } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to save grocery list changes.";
+        console.error("save grocery list:", e);
+        return null;
+    } finally {
+        savingCurrentList.value = false;
+    }
+}
+
+function addCurrentListItem() {
+    editableLatestListItems.value = [
+        ...editableLatestListItems.value,
+        createEmptyGroceryItem(),
+    ];
+}
+
+function removeCurrentListItem(index) {
+    editableLatestListItems.value = editableLatestListItems.value.filter(
+        (_item, itemIndex) => itemIndex !== index,
+    );
+}
+
 async function deleteGroceryList(listId) {
     if (!confirm("Delete this grocery list?")) return;
+    clearActionFeedback();
     deletingListId.value = listId;
     try {
         await pluginActionV2(
@@ -524,8 +1244,12 @@ async function deleteGroceryList(listId) {
                 ) || [],
         };
         expandedLists.value.delete(listId);
-        emit("update:customData", { ...overviewData.value });
+        if (latestList.value?.id === listId) {
+            hydrateCurrentListDraft();
+        }
     } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to delete grocery list.";
         console.error("delete grocery list:", e);
     } finally {
         deletingListId.value = null;
@@ -533,15 +1257,162 @@ async function deleteGroceryList(listId) {
 }
 
 async function printGroceryList(listId) {
+    clearActionFeedback();
+    if (latestList.value?.id === listId && currentListDirty.value) {
+        const saved = await saveCurrentGroceryList();
+        if (!saved) return;
+    }
+
     printingListId.value = listId;
     try {
-        await pluginActionV2(props.token, props.note.id, "print_grocery_list", {
-            list_id: listId,
-        });
+        const result = await pluginActionV2(
+            props.token,
+            props.note.id,
+            "print_grocery_list",
+            {
+                list_id: listId,
+            },
+        );
+        if (result?.preview) {
+            actionPreviewText.value = result.preview;
+            actionErrorMessage.value = result.error || "Printer not available";
+        }
     } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to print grocery list.";
         console.error("print grocery list:", e);
     } finally {
         printingListId.value = null;
+    }
+}
+
+async function createPantryStaplesRecipe() {
+    clearActionFeedback();
+    creatingPantryRecipe.value = true;
+    try {
+        const created = await createNote(
+            props.token,
+            "Pantry Staples",
+            [
+                "Use this recipe as a pantry checklist.",
+                "",
+                "- Add one ingredient per staple you want to keep stocked.",
+                "- Use Recipe Overview to add missing staples to the current grocery list.",
+            ].join("\n"),
+            props.note?.parent_id ?? null,
+            "recipe",
+            createEmptyRecipePayload(),
+            ["pantry"],
+        );
+        pantryRecipeDetail.value = created;
+        await refreshOverviewData();
+        emit("selectNote", created.id);
+    } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to create Pantry Staples recipe.";
+        console.error("create pantry recipe:", e);
+    } finally {
+        creatingPantryRecipe.value = false;
+    }
+}
+
+async function ensurePantryRecipeLoaded() {
+    if (!pantryRecipe.value?.note_id) return null;
+    if (pantryRecipeDetail.value?.id === pantryRecipe.value.note_id) {
+        return pantryRecipeDetail.value;
+    }
+
+    loadingPantry.value = true;
+    try {
+        pantryRecipeDetail.value = await fetchNote(
+            props.token,
+            pantryRecipe.value.note_id,
+        );
+        return pantryRecipeDetail.value;
+    } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to load Pantry Staples recipe.";
+        console.error("load pantry recipe:", e);
+        return null;
+    } finally {
+        loadingPantry.value = false;
+    }
+}
+
+async function openPantryModal() {
+    clearActionFeedback();
+    showPantryModal.value = true;
+    selectedPantryIngredientIds.value = [];
+    await ensurePantryRecipeLoaded();
+}
+
+function closePantryModal() {
+    showPantryModal.value = false;
+    selectedPantryIngredientIds.value = [];
+}
+
+function pantryIngredientSelectionKey(item, index) {
+    if (item?.id != null && item.id !== "") {
+        return `id:${item.id}`;
+    }
+    return `idx:${index}:${normalizeString(item?.name)}`;
+}
+
+function formatGroceryItemLine(item) {
+    const effectiveItem = effectivePantryGroceryItem(item);
+    const amount = normalizeString(effectiveItem.amount);
+    const unit = normalizeString(effectiveItem.unit);
+    if (amount && unit) return `${amount} ${unit}`;
+    return amount || unit || "No amount set";
+}
+
+async function addSelectedPantryItemsToCurrentList() {
+    if (!latestList.value) return;
+
+    const pantryNote = await ensurePantryRecipeLoaded();
+    if (!pantryNote) return;
+
+    const selectedSet = new Set(selectedPantryIngredientIds.value);
+    const selectedItems = pantryIngredientRows.value
+        .filter((item, index) =>
+            selectedSet.has(pantryIngredientSelectionKey(item, index)),
+        )
+        .map((item) => effectivePantryGroceryItem(item));
+
+    if (selectedItems.length === 0) return;
+
+    const mergedItems = mergeGroceryItems(
+        editableLatestListItems.value,
+        selectedItems,
+    );
+    const saved = await saveCurrentGroceryList(mergedItems);
+    if (saved) {
+        closePantryModal();
+    }
+}
+
+async function printPantryStaples() {
+    if (!pantryRecipe.value?.note_id) return;
+
+    clearActionFeedback();
+    printingPantry.value = true;
+    try {
+        const result = await pluginActionV2(
+            props.token,
+            pantryRecipe.value.note_id,
+            "print_recipe",
+            {},
+        );
+        if (result?.preview) {
+            actionPreviewText.value = result.preview;
+            actionErrorMessage.value = result.error || "Printer not available";
+        }
+    } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to print Pantry Staples.";
+        console.error("print pantry staples:", e);
+    } finally {
+        printingPantry.value = false;
     }
 }
 
@@ -597,10 +1468,6 @@ function formatIssueType(issueType) {
         default:
             return "Needs review";
     }
-}
-
-function normalizeString(value) {
-    return String(value ?? "").trim();
 }
 
 function createUnvalidIngredientDraft(item) {
@@ -662,21 +1529,6 @@ function isSavingDraft(draft) {
     return savingIngredientIds.value.has(draft.ingredient_id);
 }
 
-async function refreshOverviewData() {
-    const refreshed = await fetchNote(props.token, props.note.id);
-    overviewData.value = {
-        recipes: refreshed.plugin?.view?.recipes || [],
-        grocery_lists: refreshed.plugin?.view?.grocery_lists || [],
-        unvalid_ingredients: refreshed.plugin?.view?.unvalid_ingredients || [],
-    };
-    editableUnvalidIngredients.value = unvalidIngredients.value.map(
-        createUnvalidIngredientDraft,
-    );
-    if (editableUnvalidIngredients.value.length === 0) {
-        showUnvalidModal.value = false;
-    }
-}
-
 async function saveUnvalidIngredient(draft) {
     const nextSaving = new Set(savingIngredientIds.value);
     nextSaving.add(draft.ingredient_id);
@@ -719,6 +1571,8 @@ async function saveUnvalidIngredient(draft) {
 
         await refreshOverviewData();
     } catch (e) {
+        actionErrorMessage.value =
+            (e && e.message) || "Failed to save ingredient changes.";
         console.error("save unvalid ingredient:", e);
     } finally {
         const next = new Set(savingIngredientIds.value);
@@ -749,6 +1603,47 @@ function viewRecipeFromModal(recipeNoteId) {
 .overview-actions-row {
     display: flex;
     justify-content: flex-end;
+}
+
+.overview-actions-group {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.4rem;
+}
+
+.action-feedback {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.action-error {
+    margin: 0;
+    color: var(--heading-color);
+}
+
+.action-preview {
+    background: var(--raised-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.75rem;
+}
+
+.action-preview-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--font-color-secondary);
+    margin-bottom: 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.action-preview-box {
+    margin: 0;
+    white-space: pre-wrap;
+    font-size: 0.85rem;
+    color: var(--font-color);
 }
 
 .recipe-selection-section {
@@ -890,10 +1785,61 @@ function viewRecipeFromModal(recipeNoteId) {
     margin: 0.5rem 0;
 }
 
+.current-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.25rem;
+}
+
 .grocery-list-current h4 {
     font-size: 0.95rem;
-    margin-bottom: 0.25rem;
+    margin: 0;
     color: var(--font-color-secondary);
+}
+
+.current-list-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.current-list-hint {
+    margin: 0.35rem 0 0.5rem;
+    font-size: 0.8rem;
+    color: var(--font-color-secondary);
+}
+
+.grocery-input {
+    width: 100%;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.9rem;
+}
+
+.ingredient-table-editable td {
+    vertical-align: middle;
+}
+
+.item-actions-col {
+    width: 1%;
+    white-space: nowrap;
+}
+
+.item-row-actions {
+    text-align: right;
+}
+
+.btn-delete-row {
+    color: var(--heading-color);
+}
+
+.empty-table-cell {
+    font-size: 0.85rem;
+    color: var(--font-color-secondary);
+    font-style: italic;
 }
 
 .list-recipes {
@@ -966,7 +1912,7 @@ function viewRecipeFromModal(recipeNoteId) {
 .btn-print {
     flex-shrink: 0;
     font-size: 0.95rem;
-    margin: 0 1em;
+    margin: 0 0.25rem;
 }
 
 .btn-delete {
@@ -1029,6 +1975,10 @@ function viewRecipeFromModal(recipeNoteId) {
     padding: 1rem 1.25rem;
 }
 
+.pantry-modal {
+    width: min(42rem, 92vw);
+}
+
 .recipe-modal-header {
     display: flex;
     align-items: center;
@@ -1046,6 +1996,56 @@ function viewRecipeFromModal(recipeNoteId) {
     margin: 0 0 1rem;
     color: var(--font-color-secondary);
     font-size: 0.9rem;
+}
+
+.pantry-modal-hint {
+    margin: 0.2rem 0 0;
+}
+
+.pantry-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.pantry-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.7rem 0.8rem;
+    background: var(--html-bg);
+    cursor: pointer;
+}
+
+.pantry-item-checkbox {
+    margin-top: 0.15rem;
+}
+
+.pantry-item-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.pantry-item-name {
+    font-weight: 600;
+}
+
+.pantry-item-prepare,
+.pantry-item-meta {
+    color: var(--font-color-secondary);
+    font-size: 0.88rem;
+}
+
+.pantry-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
 }
 
 .unvalid-list {
