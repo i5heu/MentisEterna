@@ -2956,9 +2956,11 @@ function onPopstate() {
 }
 
 .markdown-body :deep(img) {
+    display: block;
     max-width: 100%;
+    max-height: max(25vh, 20em);
+    margin: 0.6em auto;
     border-radius: 6px;
-    margin: 0.6em 0;
 }
 
 /* Footnotes */
