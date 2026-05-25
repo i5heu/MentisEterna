@@ -537,6 +537,7 @@
                             :note="selected"
                             :token="token"
                             :editing="isEditing"
+                            :dirty="dirty"
                             :customData="customData"
                             :uiSchema="
                                 selected.ui_schema || selected.plugin?.view

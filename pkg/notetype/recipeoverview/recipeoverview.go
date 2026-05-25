@@ -84,6 +84,7 @@ type RecipeSummary struct {
 	Title           string `json:"title"`
 	IngredientCount int    `json:"ingredient_count"`
 	InRecentList    bool   `json:"in_recent_list"` // true if this recipe appeared in any grocery list in the last 3 weeks
+	Rating          int    `json:"rating"`
 	Freezable       bool   `json:"freezable"`
 	PreCookServings string `json:"pre_cook_servings"`
 	ThumbnailURL    string `json:"thumbnail_url,omitempty"`
@@ -202,6 +203,7 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 				WHERE glr.recipe_note_id = n.id
 				AND gl.generated_at >= datetime('now', '-21 days')
 			) AS in_recent_list,
+			COALESCE(rm.rating, 0) AS rating,
 			COALESCE(rm.freezable, 0) AS freezable,
 			COALESCE(rm.pre_cook_servings, '') AS pre_cook_servings,
 			COALESCE(u.body, '') AS body,
@@ -237,7 +239,7 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 		var freezableInt int
 		var body string
 		var fallbackThumbnailURL string
-		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList, &freezableInt, &r.PreCookServings, &body, &fallbackThumbnailURL); err != nil {
+		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList, &r.Rating, &freezableInt, &r.PreCookServings, &body, &fallbackThumbnailURL); err != nil {
 			return nil, fmt.Errorf("recipe_overview: scan recipe: %w", err)
 		}
 		r.Freezable = freezableInt != 0

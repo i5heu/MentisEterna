@@ -7,6 +7,7 @@
             :note="activeNote"
             :token="token"
             :editing="editing"
+            :dirty="dirty"
             :customData="resolvedCustomData"
             :uiSchema="resolvedUiSchema"
             :actionError="actionError"
@@ -51,6 +52,7 @@ const props = defineProps({
     note: { type: Object, default: null },
     token: { type: String, required: true },
     editing: { type: Boolean, default: false },
+    dirty: { type: Boolean, default: false },
     customData: { type: Object, default: null },
     uiSchema: { type: Object, default: null },
     actionError: { type: String, default: "" },

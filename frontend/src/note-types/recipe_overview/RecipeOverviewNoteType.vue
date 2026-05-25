@@ -45,10 +45,18 @@
                             v-model="selectedRecipeIds"
                             class="recipe-checkbox"
                         />
-                        <span class="recipe-select-title">{{ r.title }}</span>
-                        <span class="recipe-select-count"
-                            >{{ r.ingredient_count }} ingredients</span
-                        >
+                        <div class="recipe-select-main">
+                            <span class="recipe-select-title">{{
+                                r.title
+                            }}</span>
+                            <span class="recipe-rating"
+                                >{{ formatRatingStars(r.rating) }}
+                                {{ normalizeRating(r.rating) }}/10</span
+                            >
+                            <span class="recipe-select-count"
+                                >{{ r.ingredient_count }} ingredients</span
+                            >
+                        </div>
                     </label>
                     <div class="recipe-row-right">
                         <span
@@ -556,6 +564,17 @@ function formatDate(iso) {
     }
 }
 
+function normalizeRating(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 0;
+    return Math.max(0, Math.min(10, Math.round(num)));
+}
+
+function formatRatingStars(rating) {
+    const safeRating = normalizeRating(rating);
+    return "★".repeat(safeRating) + "☆".repeat(10 - safeRating);
+}
+
 function formatNonMetricUnit(unit) {
     switch (unit) {
         case "teaspoon":
@@ -778,6 +797,13 @@ function viewRecipeFromModal(recipeNoteId) {
     cursor: pointer;
 }
 
+.recipe-select-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 0.1rem;
+}
+
 .recipe-row-right {
     display: flex;
     align-items: center;
@@ -800,6 +826,12 @@ function viewRecipeFromModal(recipeNoteId) {
 .recipe-select-count {
     font-size: 0.8rem;
     color: var(--font-color-secondary);
+}
+
+.recipe-rating {
+    font-size: 0.8rem;
+    color: var(--font-color-secondary);
+    letter-spacing: 0.02em;
 }
 
 .precook-checkbox-label {

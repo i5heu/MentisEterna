@@ -286,23 +286,24 @@ func formatNote(db *sql.DB, noteType string, noteID int64, title string) (*print
 func formatRecipeForPrint(db *sql.DB, noteID int64, title string) (*printer.Buf, string, error) {
 	var payload recipe.Payload
 	var servings, attentionTime, totalTime, gramsPerServing, kcalPerServing string
+	var rating int
 	var freezableInt int
 	var preCookServings string
 
 	// Load metadata.
 	err := db.QueryRow(`
 		SELECT servings, attention_time, total_time, grams_per_serving,
-		       kcal_per_serving, freezable, pre_cook_servings
+		       kcal_per_serving, rating, freezable, pre_cook_servings
 		FROM ct_recipe_meta WHERE note_id = ?`, noteID,
 	).Scan(&servings, &attentionTime, &totalTime, &gramsPerServing,
-		&kcalPerServing, &freezableInt, &preCookServings)
+		&kcalPerServing, &rating, &freezableInt, &preCookServings)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, "", fmt.Errorf("load recipe meta: %w", err)
 	}
 
 	// Load ingredients.
 	rows, err := db.Query(
-		`SELECT id, name, amount, unit FROM ct_recipe_ingredients
+		`SELECT id, name, prepare, amount, unit FROM ct_recipe_ingredients
 		 WHERE note_id = ? ORDER BY sort_order`, noteID,
 	)
 	if err != nil {
@@ -312,7 +313,7 @@ func formatRecipeForPrint(db *sql.DB, noteID int64, title string) (*printer.Buf,
 
 	for rows.Next() {
 		var ing recipe.IngredientRow
-		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Amount, &ing.Unit); err != nil {
+		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Prepare, &ing.Amount, &ing.Unit); err != nil {
 			return nil, "", fmt.Errorf("scan ingredient: %w", err)
 		}
 		payload.Ingredients = append(payload.Ingredients, ing)
@@ -326,6 +327,7 @@ func formatRecipeForPrint(db *sql.DB, noteID int64, title string) (*printer.Buf,
 	payload.TotalTime = totalTime
 	payload.GramsPerServing = gramsPerServing
 	payload.KcalPerServing = kcalPerServing
+	payload.Rating = rating
 	payload.Freezable = freezableInt != 0
 	payload.PreCookServings = preCookServings
 

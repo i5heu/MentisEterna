@@ -47,6 +47,7 @@ const registry = [
             total_time: "",
             grams_per_serving: "",
             kcal_per_serving: "",
+            rating: 0,
             freezable: false,
             pre_cook_servings: "",
         }),
@@ -59,6 +60,7 @@ const registry = [
                     total_time: "",
                     grams_per_serving: "",
                     kcal_per_serving: "",
+                    rating: 0,
                     freezable: false,
                     pre_cook_servings: "",
                 };
@@ -71,6 +73,7 @@ const registry = [
             return {
                 ingredients: ings.map((i) => ({
                     name: i.name || "",
+                    prepare: i.prepare || "",
                     amount: i.amount || "",
                     unit: i.unit || "",
                     non_metric_amount: i.non_metric_amount || "",
@@ -82,6 +85,9 @@ const registry = [
                 total_time: raw.total_time || "",
                 grams_per_serving: raw.grams_per_serving || "",
                 kcal_per_serving: raw.kcal_per_serving || "",
+                rating: Number.isFinite(Number(raw.rating))
+                    ? Math.max(0, Math.min(10, Number(raw.rating)))
+                    : 0,
                 freezable: !!raw.freezable,
                 pre_cook_servings: raw.pre_cook_servings || "",
             };

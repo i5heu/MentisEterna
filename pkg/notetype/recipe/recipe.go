@@ -35,6 +35,7 @@ var validNonMetricUnits = map[string]bool{
 type IngredientRow struct {
 	ID              int64  `json:"id"`
 	Name            string `json:"name"`
+	Prepare         string `json:"prepare"`
 	Amount          string `json:"amount"` // stored as string to support "1-2", "to taste", etc.
 	Unit            string `json:"unit"`
 	NonMetricAmount string `json:"non_metric_amount"`
@@ -50,6 +51,7 @@ type Payload struct {
 	TotalTime       string          `json:"total_time"`
 	GramsPerServing string          `json:"grams_per_serving"`
 	KcalPerServing  string          `json:"kcal_per_serving"`
+	Rating          int             `json:"rating"`
 	Freezable       bool            `json:"freezable"`
 	PreCookServings string          `json:"pre_cook_servings"`
 }
@@ -69,6 +71,7 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
 			note_id             INTEGER NOT NULL,
 			name                TEXT    NOT NULL,
+			prepare             TEXT    NOT NULL DEFAULT '',
 			amount              TEXT    NOT NULL DEFAULT '',
 			unit                TEXT    NOT NULL DEFAULT '',
 			non_metric_amount   TEXT    NOT NULL DEFAULT '',
@@ -91,6 +94,7 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 			total_time        TEXT    NOT NULL DEFAULT '',
 			grams_per_serving TEXT    NOT NULL DEFAULT '',
 			kcal_per_serving  TEXT    NOT NULL DEFAULT '',
+			rating            INTEGER NOT NULL DEFAULT 0,
 			freezable         INTEGER NOT NULL DEFAULT 0,
 			pre_cook_servings TEXT    NOT NULL DEFAULT '',
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
@@ -103,6 +107,8 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	}
 	// Migrations for databases created before newer columns existed.
 	db.Exec(`ALTER TABLE ct_recipe_meta ADD COLUMN pre_cook_servings TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE ct_recipe_meta ADD COLUMN rating INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN prepare TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN non_metric_amount TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN non_metric_unit TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN metric_validated INTEGER NOT NULL DEFAULT 0`)
@@ -120,7 +126,7 @@ func (p *RecipePlugin) Manifest() notetype.Manifest {
 		Description:   "A recipe with ingredients, servings, and timing info",
 		Category:      "Cooking",
 		SortOrder:     200,
-		DefaultConfig: json.RawMessage(`{"ingredients":[],"servings":"","attention_time":"","total_time":"","grams_per_serving":"","kcal_per_serving":"","freezable":false,"pre_cook_servings":""}`),
+		DefaultConfig: json.RawMessage(`{"ingredients":[],"servings":"","attention_time":"","total_time":"","grams_per_serving":"","kcal_per_serving":"","rating":0,"freezable":false,"pre_cook_servings":""}`),
 		Editor: notetype.EditorMeta{Mode: "custom", Schema: json.RawMessage(`[
 	{
 		"$el": "h3",
@@ -135,6 +141,11 @@ func (p *RecipePlugin) Manifest() notetype.Manifest {
 				"name": "name",
 				"label": "Name",
 				"validation": "required"
+			},
+			{
+				"$formkit": "text",
+				"name": "prepare",
+				"label": "Prepare"
 			},
 			{
 				"$formkit": "text",
@@ -193,6 +204,14 @@ func (p *RecipePlugin) Manifest() notetype.Manifest {
 		"label": "Kcal per Serving"
 	},
 	{
+		"$formkit": "range",
+		"name": "rating",
+		"label": "Rating",
+		"min": "0",
+		"max": "10",
+		"step": "1"
+	},
+	{
 		"$formkit": "checkbox",
 		"name": "freezable",
 		"label": "Freezable"
@@ -242,6 +261,9 @@ func (p *RecipePlugin) ValidateConfig(payload json.RawMessage) error {
 	if err := json.Unmarshal(payload, &pld); err != nil {
 		return fmt.Errorf("recipe: invalid payload: %w", err)
 	}
+	if pld.Rating < 0 || pld.Rating > 10 {
+		return fmt.Errorf("recipe: rating must be between 0 and 10")
+	}
 	for i, ing := range pld.Ingredients {
 		if strings.TrimSpace(ing.Name) == "" {
 			return fmt.Errorf("recipe: ingredient %d: name is required", i+1)
@@ -289,9 +311,10 @@ func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, n
 			metricValidated = 1
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO ct_recipe_ingredients (note_id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			noteID,
 			strings.TrimSpace(ing.Name),
+			strings.TrimSpace(ing.Prepare),
 			strings.TrimSpace(ing.Amount),
 			strings.TrimSpace(ing.Unit),
 			strings.TrimSpace(ing.NonMetricAmount),
@@ -309,14 +332,15 @@ func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, n
 		freezableInt = 1
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO ct_recipe_meta (note_id, servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO ct_recipe_meta (note_id, servings, attention_time, total_time, grams_per_serving, kcal_per_serving, rating, freezable, pre_cook_servings)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(note_id) DO UPDATE SET
 			servings          = excluded.servings,
 			attention_time    = excluded.attention_time,
 			total_time        = excluded.total_time,
 			grams_per_serving = excluded.grams_per_serving,
 			kcal_per_serving  = excluded.kcal_per_serving,
+			rating            = excluded.rating,
 			freezable         = excluded.freezable,
 			pre_cook_servings = excluded.pre_cook_servings`,
 		noteID,
@@ -325,6 +349,7 @@ func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, n
 		strings.TrimSpace(payload.TotalTime),
 		strings.TrimSpace(payload.GramsPerServing),
 		strings.TrimSpace(payload.KcalPerServing),
+		payload.Rating,
 		freezableInt,
 		strings.TrimSpace(payload.PreCookServings),
 	); err != nil {
@@ -421,7 +446,7 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
 	// Load ingredients.
 	rows, err := db.Query(
-		`SELECT id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
+		`SELECT id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
 		noteID,
 	)
 	if err != nil {
@@ -433,7 +458,7 @@ func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, n
 	for rows.Next() {
 		var ing IngredientRow
 		var metricValidatedInt int
-		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Amount, &ing.Unit, &ing.NonMetricAmount, &ing.NonMetricUnit, &metricValidatedInt); err != nil {
+		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Prepare, &ing.Amount, &ing.Unit, &ing.NonMetricAmount, &ing.NonMetricUnit, &metricValidatedInt); err != nil {
 			return nil, fmt.Errorf("recipe: scan ingredient: %w", err)
 		}
 		ing.MetricValidated = metricValidatedInt != 0
@@ -447,7 +472,7 @@ func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, n
 	payload := Payload{Ingredients: ingredients}
 	var freezableInt int
 	err = db.QueryRow(
-		`SELECT servings, attention_time, total_time, grams_per_serving, kcal_per_serving, freezable, pre_cook_servings
+		`SELECT servings, attention_time, total_time, grams_per_serving, kcal_per_serving, rating, freezable, pre_cook_servings
 		 FROM ct_recipe_meta WHERE note_id = ?`,
 		noteID,
 	).Scan(
@@ -456,6 +481,7 @@ func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, n
 		&payload.TotalTime,
 		&payload.GramsPerServing,
 		&payload.KcalPerServing,
+		&payload.Rating,
 		&freezableInt,
 		&payload.PreCookServings,
 	)

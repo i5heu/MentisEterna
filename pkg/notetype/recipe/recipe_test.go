@@ -11,7 +11,7 @@ import (
 
 func TestRecipePlugin(t *testing.T) {
 	plugintest.Run(t, &RecipePlugin{}, plugintest.TestData{
-		ValidPayload:   `{"ingredients":[{"name":"Flour","amount":"2","unit":"g","non_metric_amount":"1","non_metric_unit":"cup","metric_validated":true},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","freezable":true,"pre_cook_servings":"8"}`,
+		ValidPayload:   `{"ingredients":[{"name":"Flour","prepare":"sifted","amount":"2","unit":"g","non_metric_amount":"1","non_metric_unit":"cup","metric_validated":true},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","rating":7,"freezable":true,"pre_cook_servings":"8"}`,
 		InvalidPayload: `{"ingredients":[{"name":"","amount":"2","unit":"g"}]}`,
 	})
 }
@@ -26,15 +26,23 @@ func TestValidateConfigAllowsMilligrams(t *testing.T) {
 
 func TestValidateConfigAllowsNonMetricFields(t *testing.T) {
 	plugin := &RecipePlugin{}
-	err := plugin.ValidateConfig(json.RawMessage(`{"ingredients":[{"name":"Sugar","amount":"200","unit":"g","non_metric_amount":"1","non_metric_unit":"cup","metric_validated":true}]}`))
+	err := plugin.ValidateConfig(json.RawMessage(`{"ingredients":[{"name":"Sugar","amount":"200","unit":"g","non_metric_amount":"1","non_metric_unit":"cup","metric_validated":true}],"rating":6}`))
 	if err != nil {
 		t.Fatalf("expected non-metric fields to be valid, got: %v", err)
 	}
 }
 
+func TestValidateConfigRejectsOutOfRangeRating(t *testing.T) {
+	plugin := &RecipePlugin{}
+	err := plugin.ValidateConfig(json.RawMessage(`{"ingredients":[{"name":"Sugar"}],"rating":11}`))
+	if err == nil {
+		t.Fatal("expected out-of-range rating to be rejected")
+	}
+}
+
 func TestRecipeTextPrint(t *testing.T) {
 	var payload Payload
-	if err := json.Unmarshal([]byte(`{"ingredients":[{"name":"Flour","amount":"2","unit":"g"},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","freezable":true,"pre_cook_servings":"8"}`), &payload); err != nil {
+	if err := json.Unmarshal([]byte(`{"ingredients":[{"name":"Flour","prepare":"sifted","amount":"2","unit":"g"},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","rating":8,"freezable":true,"pre_cook_servings":"8"}`), &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
@@ -50,6 +58,9 @@ func TestRecipeTextPrint(t *testing.T) {
 	if !strings.Contains(out, "Eggs") {
 		t.Error("missing ingredient Eggs")
 	}
+	if !strings.Contains(out, "Flour (sifted)") {
+		t.Error("missing ingredient preparation for Flour")
+	}
 	if !strings.Contains(out, "2 g") {
 		t.Error("missing amount+unit for Flour")
 	}
@@ -61,6 +72,9 @@ func TestRecipeTextPrint(t *testing.T) {
 	}
 	if !strings.Contains(out, "4") {
 		t.Error("missing servings value")
+	}
+	if !strings.Contains(out, "Rating: 8/10") {
+		t.Error("missing rating detail")
 	}
 	if !strings.Contains(out, "Freezable: yes") {
 		t.Error("missing Freezable detail")
@@ -83,7 +97,7 @@ func TestRecipeTextPrint(t *testing.T) {
 
 func TestFormatRecipeReceipt(t *testing.T) {
 	var payload Payload
-	if err := json.Unmarshal([]byte(`{"ingredients":[{"name":"Sugar","amount":"100","unit":"g"}],"servings":"2","attention_time":"","total_time":"30m","grams_per_serving":"","kcal_per_serving":"","freezable":false,"pre_cook_servings":""}`), &payload); err != nil {
+	if err := json.Unmarshal([]byte(`{"ingredients":[{"name":"Sugar","prepare":"finely ground","amount":"100","unit":"g"}],"servings":"2","attention_time":"","total_time":"30m","grams_per_serving":"","kcal_per_serving":"","rating":5,"freezable":false,"pre_cook_servings":""}`), &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
@@ -106,8 +120,36 @@ func TestFormatRecipeReceipt(t *testing.T) {
 	if !strings.Contains(s, "Sugar") {
 		t.Error("missing ingredient")
 	}
+	if !strings.Contains(s, "finely ground") {
+		t.Error("missing ingredient preparation")
+	}
+	if !strings.Contains(s, "5/10") {
+		t.Error("missing rating")
+	}
 
 	t.Logf("Buffer length: %d bytes", len(b))
+}
+
+func TestImportRecipesJSONRejectsNonIntegerRating(t *testing.T) {
+	d := plugintest.DB(t, &RecipePlugin{})
+	defer d.Close()
+
+	noteID := plugintest.CreateNote(t, d, "Existing Recipe", &RecipePlugin{})
+	params, err := json.Marshal(map[string]any{
+		"import_json": `{"recipes":[{"title":"Bad Rating","rating":7.5}]}`,
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	plugin := &RecipePlugin{}
+	_, err = plugin.HandleAction(context.Background(), d.DB, 0, noteID, "import_recipes_json", params)
+	if err == nil {
+		t.Fatal("expected non-integer rating import to fail")
+	}
+	if !strings.Contains(err.Error(), "rating") {
+		t.Fatalf("expected rating error, got: %v", err)
+	}
 }
 
 func TestImportRecipesJSONAction(t *testing.T) {
@@ -134,9 +176,10 @@ func TestImportRecipesJSONAction(t *testing.T) {
 				"title": "Imported Chili",
 				"body":  "Simmer slowly.",
 				"ingredients": []map[string]any{
-					{"name": "Beans", "amount": 2, "unit": "pcs", "non_metric_amount": 1, "non_metric_unit": "cup", "metric_validated": true},
+					{"name": "Beans", "prepare": "drained", "amount": 2, "unit": "pcs", "non_metric_amount": 1, "non_metric_unit": "cup", "metric_validated": true},
 				},
 				"servings": 4,
+				"rating":   9,
 			},
 			{
 				"title": "Imported Soup",
@@ -198,13 +241,21 @@ func TestImportRecipesJSONAction(t *testing.T) {
 		t.Fatalf("expected 1 primary ingredient, got %d", ingredientCount)
 	}
 
-	var nonMetricAmount, nonMetricUnit string
+	var prepare, nonMetricAmount, nonMetricUnit string
 	var metricValidated int
-	if err := d.QueryRow(`SELECT non_metric_amount, non_metric_unit, metric_validated FROM ct_recipe_ingredients WHERE note_id = ? LIMIT 1`, noteID).Scan(&nonMetricAmount, &nonMetricUnit, &metricValidated); err != nil {
+	if err := d.QueryRow(`SELECT prepare, non_metric_amount, non_metric_unit, metric_validated FROM ct_recipe_ingredients WHERE note_id = ? LIMIT 1`, noteID).Scan(&prepare, &nonMetricAmount, &nonMetricUnit, &metricValidated); err != nil {
 		t.Fatalf("query primary ingredient extended fields: %v", err)
 	}
-	if nonMetricAmount != "1" || nonMetricUnit != "cup" || metricValidated != 1 {
-		t.Fatalf("expected imported non-metric fields to persist, got amount=%q unit=%q validated=%d", nonMetricAmount, nonMetricUnit, metricValidated)
+	if prepare != "drained" || nonMetricAmount != "1" || nonMetricUnit != "cup" || metricValidated != 1 {
+		t.Fatalf("expected imported ingredient fields to persist, got prepare=%q amount=%q unit=%q validated=%d", prepare, nonMetricAmount, nonMetricUnit, metricValidated)
+	}
+
+	var rating int
+	if err := d.QueryRow(`SELECT rating FROM ct_recipe_meta WHERE note_id = ?`, noteID).Scan(&rating); err != nil {
+		t.Fatalf("query primary rating: %v", err)
+	}
+	if rating != 9 {
+		t.Fatalf("expected imported rating 9, got %d", rating)
 	}
 
 	createdID := out.CreatedNoteIDs[0]
