@@ -13,38 +13,36 @@ import (
 )
 
 func init() {
-	extPath := os.Getenv("VSS_EXT_PATH")
+	extPath := os.Getenv("VEC_EXT_PATH")
+	if extPath == "" {
+		extPath = os.Getenv("VSS_EXT_PATH")
+	}
 	if extPath == "" {
 		extPath = findExtPath()
 	}
-	vectorLib := filepath.Join(extPath, "vector0")
-	vssLib := filepath.Join(extPath, "vss0")
+	vecLib := filepath.Join(extPath, "vec0")
 
-	sql.Register("sqlite3-vss", &gosqlite3.SQLiteDriver{
+	sql.Register("sqlite3-vec", &gosqlite3.SQLiteDriver{
 		ConnectHook: func(conn *gosqlite3.SQLiteConn) error {
-			if err := conn.LoadExtension(vectorLib, "sqlite3_vector_init"); err != nil {
-				return fmt.Errorf("load vector0: %w", err)
-			}
-			if err := conn.LoadExtension(vssLib, "sqlite3_vss_init"); err != nil {
-				return fmt.Errorf("load vss0: %w", err)
+			if err := conn.LoadExtension(vecLib, "sqlite3_vec_init"); err != nil {
+				return fmt.Errorf("load vec0: %w", err)
 			}
 			return nil
 		},
 	})
 }
 
-// findExtPath locates the directory containing vector0.so and vss0.so.
-// It checks VSS_EXT_PATH env, then searches from CWD up to the module root.
+// findExtPath locates the directory containing vec0.
+// It checks VEC_EXT_PATH, then legacy VSS_EXT_PATH, then searches from CWD up to the module root.
 func findExtPath() string {
-	// Walk up from the current working directory looking for "lib/vector0.so".
 	dir, err := os.Getwd()
 	if err != nil {
 		return "lib"
 	}
 	for {
-		candidate := filepath.Join(dir, "lib", "vector0.so")
-		if _, err := os.Stat(candidate); err == nil {
-			return filepath.Join(dir, "lib")
+		candidateDir := filepath.Join(dir, "lib")
+		if hasVecExtension(candidateDir) {
+			return candidateDir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -53,6 +51,15 @@ func findExtPath() string {
 		dir = parent
 	}
 	return "lib"
+}
+
+func hasVecExtension(dir string) bool {
+	for _, name := range []string{"vec0.so", "vec0.dylib", "vec0.dll", "vec0"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 var ErrNotFound = errors.New("not found")
@@ -65,9 +72,9 @@ type DB struct {
 func (d *DB) VSSAvailable() bool { return d.vssAvailable }
 
 func Open(path string) (*DB, error) {
-	d, err := openWithDriver("sqlite3-vss", path+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000", true)
+	d, err := openWithDriver("sqlite3-vec", path+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000", true)
 	if err != nil {
-		log.Printf("VSS extensions not available, falling back to standard SQLite: %v", err)
+		log.Printf("sqlite-vec extension not available, falling back to standard SQLite: %v", err)
 		d, err = openWithDriver("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000", false)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite: %w", err)
@@ -80,7 +87,7 @@ func Open(path string) (*DB, error) {
 // This is significantly faster than opening on-disk databases.
 // The connection pool is pinned to 1 so all operations share the same in-memory database.
 func OpenInMemory() (*DB, error) {
-	d, err := openWithDriver("sqlite3-vss", ":memory:?_foreign_keys=on", true)
+	d, err := openWithDriver("sqlite3-vec", ":memory:?_foreign_keys=on", true)
 	if err != nil {
 		d, err = openWithDriver("sqlite3", ":memory:?_foreign_keys=on", false)
 		if err != nil {
@@ -233,8 +240,8 @@ func (d *DB) migrateNotes() error {
 		return err
 	}
 
-	// Create the VSS virtual table if extensions are loaded.
-	// sqlite-vss requires the embedding dimension, which for Qwen3-Embedding-4B is 2560.
+	// Create the vector-search virtual tables if sqlite-vec is available.
+	// The embedding dimension for the current embedding model is 2560.
 	if d.vssAvailable {
 		if err := d.ensureVSSDimension(2560); err != nil {
 			return fmt.Errorf("vss_notes: %w", err)
@@ -383,97 +390,18 @@ func (d *DB) ensureOCRTables() error {
 }
 
 // ensureVSSDimension ensures the vss_notes virtual table uses the expected
-// embedding dimension. If the table doesn't exist it creates it. If it exists
-// with a different dimension it drops and recreates it (embeddings need to be
-// regenerated via backfill). Otherwise it leaves existing embeddings intact.
+// sqlite-vec schema and embedding dimension. If the table is still using the
+// legacy sqlite-vss module or an incompatible dimension/metric, it is dropped
+// and recreated (embeddings then need to be regenerated via backfill).
 func (d *DB) ensureVSSDimension(expectedDim int) error {
-	// Check whether vss_notes already exists.
-	var name string
-	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='vss_notes'`).Scan(&name)
-	if err != nil {
-		// Table doesn't exist yet — create it.
-		if _, createErr := d.Exec(`
-			CREATE VIRTUAL TABLE IF NOT EXISTS vss_notes USING vss0(
-				body_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
-			)
-		`); createErr != nil {
-			return fmt.Errorf("create vss_notes: %w", createErr)
-		}
-		return nil
-	}
-
-	// Table exists — probe its dimension by inserting a dummy row.
-	// Build a JSON array of expectedDim zeros.
-	parts := make([]string, expectedDim)
-	for i := range parts {
-		parts[i] = "0"
-	}
-	dummyJSON := "[" + strings.Join(parts, ",") + "]"
-
-	// Try inserting a test row. vss0 validates dimension on insert.
-	testRowID := int64(-1) // negative rowid to avoid collision with real notes.
-	_, insertErr := d.Exec(`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`, testRowID, dummyJSON)
-	if insertErr != nil {
-		// Dimension mismatch detected. Drop and recreate.
-		log.Printf("vss_notes dimension mismatch detected, recreating table (run backfill to regenerate embeddings)")
-		if _, dropErr := d.Exec(`DROP TABLE IF EXISTS vss_notes`); dropErr != nil {
-			return fmt.Errorf("drop old vss_notes: %w", dropErr)
-		}
-		if _, createErr := d.Exec(`
-			CREATE VIRTUAL TABLE vss_notes USING vss0(
-				body_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
-			)
-		`); createErr != nil {
-			return fmt.Errorf("recreate vss_notes: %w", createErr)
-		}
-		return nil
-	}
-
-	// Clean up the test row.
-	_, _ = d.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, testRowID)
-	return nil
+	return d.ensureVecTable("vss_notes", "body_embedding", expectedDim)
 }
 
 // ensureVSSFilesOCR ensures the vss_files_ocr virtual table exists with the
-// expected embedding dimension. rowid = files.id for direct file lookup.
+// expected sqlite-vec schema and embedding dimension. rowid = files.id for
+// direct file lookup.
 func (d *DB) ensureVSSFilesOCR(expectedDim int) error {
-	var name string
-	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='vss_files_ocr'`).Scan(&name)
-	if err != nil {
-		if _, createErr := d.Exec(`
-			CREATE VIRTUAL TABLE IF NOT EXISTS vss_files_ocr USING vss0(
-				ocr_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
-			)
-		`); createErr != nil {
-			return fmt.Errorf("create vss_files_ocr: %w", createErr)
-		}
-		return nil
-	}
-
-	// Probe dimension with a dummy row.
-	parts := make([]string, expectedDim)
-	for i := range parts {
-		parts[i] = "0"
-	}
-	dummyJSON := "[" + strings.Join(parts, ",") + "]"
-	testRowID := int64(-1)
-	_, insertErr := d.Exec(`INSERT INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`, testRowID, dummyJSON)
-	if insertErr != nil {
-		log.Printf("vss_files_ocr dimension mismatch detected, recreating table")
-		if _, dropErr := d.Exec(`DROP TABLE IF EXISTS vss_files_ocr`); dropErr != nil {
-			return fmt.Errorf("drop old vss_files_ocr: %w", dropErr)
-		}
-		if _, createErr := d.Exec(`
-			CREATE VIRTUAL TABLE vss_files_ocr USING vss0(
-				ocr_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
-			)
-		`); createErr != nil {
-			return fmt.Errorf("recreate vss_files_ocr: %w", createErr)
-		}
-		return nil
-	}
-	_, _ = d.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, testRowID)
-	return nil
+	return d.ensureVecTable("vss_files_ocr", "ocr_embedding", expectedDim)
 }
 
 func (d *DB) tableColumns(table string) (map[string]bool, error) {
@@ -514,43 +442,75 @@ func (d *DB) ensureSTTTables() error {
 }
 
 // ensureVSSFilesSTT ensures the vss_files_stt virtual table exists with the
-// expected embedding dimension. rowid = files.id for direct file lookup.
+// expected sqlite-vec schema and embedding dimension. rowid = files.id for
+// direct file lookup.
 func (d *DB) ensureVSSFilesSTT(expectedDim int) error {
-	var name string
-	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='vss_files_stt'`).Scan(&name)
-	if err != nil {
-		if _, createErr := d.Exec(`
-			CREATE VIRTUAL TABLE IF NOT EXISTS vss_files_stt USING vss0(
-				stt_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
-			)
-		`); createErr != nil {
-			return fmt.Errorf("create vss_files_stt: %w", createErr)
-		}
-		return nil
+	return d.ensureVecTable("vss_files_stt", "stt_embedding", expectedDim)
+}
+
+func (d *DB) ensureVecTable(tableName, columnName string, expectedDim int) error {
+	var tableSQL sql.NullString
+	err := d.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`, tableName).Scan(&tableSQL)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return d.createVecTable(tableName, columnName, expectedDim)
+	case err != nil:
+		return fmt.Errorf("inspect %s: %w", tableName, err)
 	}
 
-	// Probe dimension with a dummy row.
-	parts := make([]string, expectedDim)
+	if needsVecTableRecreate(tableSQL.String, columnName, expectedDim) {
+		log.Printf("%s uses legacy or incompatible vector schema; recreating table", tableName)
+		return d.recreateVecTable(tableName, columnName, expectedDim)
+	}
+
+	testRowID := int64(-1)
+	if _, err := d.Exec(
+		`INSERT OR REPLACE INTO `+tableName+`(rowid, `+columnName+`) VALUES (?, ?)`,
+		testRowID,
+		zeroVectorJSON(expectedDim),
+	); err != nil {
+		log.Printf("%s rejected the expected embedding shape; recreating table", tableName)
+		return d.recreateVecTable(tableName, columnName, expectedDim)
+	}
+	_, _ = d.Exec(`DELETE FROM `+tableName+` WHERE rowid = ?`, testRowID)
+	return nil
+}
+
+func (d *DB) recreateVecTable(tableName, columnName string, expectedDim int) error {
+	if _, err := d.Exec(`DROP TABLE IF EXISTS ` + tableName); err != nil {
+		return fmt.Errorf("drop %s: %w", tableName, err)
+	}
+	return d.createVecTable(tableName, columnName, expectedDim)
+}
+
+func (d *DB) createVecTable(tableName, columnName string, expectedDim int) error {
+	if _, err := d.Exec(`
+		CREATE VIRTUAL TABLE ` + tableName + ` USING vec0(
+			` + columnName + ` float[` + fmt.Sprintf("%d", expectedDim) + `] distance_metric=cosine
+		)
+	`); err != nil {
+		return fmt.Errorf("create %s: %w", tableName, err)
+	}
+	return nil
+}
+
+func needsVecTableRecreate(tableSQL, columnName string, expectedDim int) bool {
+	normalized := normalizeSQL(tableSQL)
+	expectedColumn := strings.ToLower(columnName) + ` float[` + fmt.Sprintf("%d", expectedDim) + `]`
+	return normalized == "" ||
+		!strings.Contains(normalized, `using vec0`) ||
+		!strings.Contains(normalized, expectedColumn) ||
+		!strings.Contains(normalized, `distance_metric=cosine`)
+}
+
+func normalizeSQL(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+func zeroVectorJSON(dim int) string {
+	parts := make([]string, dim)
 	for i := range parts {
 		parts[i] = "0"
 	}
-	dummyJSON := "[" + strings.Join(parts, ",") + "]"
-	testRowID := int64(-1)
-	_, insertErr := d.Exec(`INSERT INTO vss_files_stt(rowid, stt_embedding) VALUES (?, ?)`, testRowID, dummyJSON)
-	if insertErr != nil {
-		log.Printf("vss_files_stt dimension mismatch detected, recreating table")
-		if _, dropErr := d.Exec(`DROP TABLE IF EXISTS vss_files_stt`); dropErr != nil {
-			return fmt.Errorf("drop old vss_files_stt: %w", dropErr)
-		}
-		if _, createErr := d.Exec(`
-			CREATE VIRTUAL TABLE vss_files_stt USING vss0(
-				stt_embedding(` + fmt.Sprintf("%d", expectedDim) + `)
-			)
-		`); createErr != nil {
-			return fmt.Errorf("recreate vss_files_stt: %w", createErr)
-		}
-		return nil
-	}
-	_, _ = d.Exec(`DELETE FROM vss_files_stt WHERE rowid = ?`, testRowID)
-	return nil
+	return "[" + strings.Join(parts, ",") + "]"
 }

@@ -27,7 +27,7 @@ func main() {
 	defer database.Close()
 
 	if !database.VSSAvailable() {
-		fmt.Println("VSS extensions are not loaded. Ensure vector0 and vss0 are in the lib/ directory.")
+		fmt.Println("sqlite-vec is not available, so vector indexing cannot run.")
 		os.Exit(1)
 	}
 
@@ -80,10 +80,8 @@ func main() {
 			continue
 		}
 		vecJSON := llm.EmbeddingToJSON(vec)
-		// vss0 doesn't support UPDATE/INSERT OR REPLACE; DELETE then INSERT.
-		database.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.id)
 		_, err = database.Exec(
-			`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
+			`INSERT OR REPLACE INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
 			p.id, vecJSON,
 		)
 		if err != nil {
