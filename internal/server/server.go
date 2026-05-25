@@ -634,7 +634,6 @@ func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
 
 // --- Helpers ---
 
-
 // --- System Status Handlers ---
 
 func (s *Server) handlePrinterStatus(w http.ResponseWriter, r *http.Request) {
@@ -741,12 +740,50 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 
 	vssAvailable := s.db.VSSAvailable()
 
+	// Detailed VSS diagnostics
+	vssNotesCount := int64(-1) // -1 = not checked
+	vssOCRFilesCount := int64(-1)
+	vssSTTFilesCount := int64(-1)
+	vssError := ""
+	vssTablesExist := false
+
+	if vssAvailable {
+		var count int64
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_notes`).Scan(&count); err != nil {
+			vssError = fmt.Sprintf("vss_notes query error: %v", err)
+		} else {
+			vssTablesExist = true
+			vssNotesCount = count
+		}
+
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_ocr`).Scan(&count); err == nil {
+			vssOCRFilesCount = count
+		}
+
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_stt`).Scan(&count); err == nil {
+			vssSTTFilesCount = count
+		}
+
+		if vssError == "" && !vssTablesExist {
+			vssError = "VSS extension loaded but no vss tables exist (migration may have failed)"
+		}
+	} else {
+		vssError = "VSS extension (vector0.so / vss0.so) not loaded — vector search is unavailable"
+	}
+
 	allOK := embeddingOK && chatOK && ocrOK && sttOK
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"base_url":      baseURL,
 		"all_ok":        allOK,
 		"vss_available": vssAvailable,
+		"vss": map[string]any{
+			"available":       vssAvailable,
+			"error":           vssError,
+			"notes_count":     vssNotesCount,
+			"ocr_files_count": vssOCRFilesCount,
+			"stt_files_count": vssSTTFilesCount,
+		},
 		"embedding": map[string]any{
 			"model": embeddingModel,
 			"ok":    embeddingOK,
