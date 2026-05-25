@@ -46,7 +46,7 @@ func TestRecipeTextPrint(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	out := RecipeTextPrint(payload, "My Cake", "Preheat oven to 180C.\nMix ingredients well.")
+	out := RecipeTextPrint(payload, "My Cake", "Preheat oven to 180C.\n\n![Cake slice](/file/1/2)\n\n- Mix ingredients well.")
 
 	// Basic structure checks.
 	if !strings.Contains(out, "My Cake") {
@@ -91,8 +91,48 @@ func TestRecipeTextPrint(t *testing.T) {
 	if !strings.Contains(out, "Preheat oven") {
 		t.Error("missing body text")
 	}
+	if strings.Contains(out, "![") {
+		t.Error("raw markdown image tag should not be printed")
+	}
+	if !strings.Contains(out, "[Image: Cake slice]") {
+		t.Error("image placeholder should be readable")
+	}
+	if !strings.Contains(out, "  Preheat oven to 180C.\n\n  [Image: Cake slice]") {
+		t.Error("paragraph breaks should be preserved in printed notes")
+	}
+	if !strings.Contains(out, "• Mix ingredients well.") {
+		t.Error("markdown list items should be rendered readably")
+	}
 
 	t.Logf("Text output:\n%s", out)
+}
+
+func TestFormatMarkdownForPrintPreservesParagraphsAndCleansImages(t *testing.T) {
+	body := "# Method\n\nFirst paragraph.\n\n![Plated dish](/file/1/2)\n\n- Mix well\n1. Bake\n[See details](https://example.com)"
+	lines := FormatMarkdownForPrint(body, 40)
+	joined := strings.Join(lines, "\n")
+
+	if strings.Contains(joined, "![") {
+		t.Fatalf("expected markdown image tags to be removed, got: %q", joined)
+	}
+	if strings.Contains(joined, "# Method") {
+		t.Fatalf("expected markdown heading markers to be removed, got: %q", joined)
+	}
+	if !strings.Contains(joined, "Method\n\nFirst paragraph.") {
+		t.Fatalf("expected paragraph separation to be preserved, got: %q", joined)
+	}
+	if !strings.Contains(joined, "[Image: Plated dish]") {
+		t.Fatalf("expected image placeholder to be readable, got: %q", joined)
+	}
+	if !strings.Contains(joined, "• Mix well") {
+		t.Fatalf("expected bullet formatting, got: %q", joined)
+	}
+	if !strings.Contains(joined, "1. Bake") {
+		t.Fatalf("expected ordered list formatting, got: %q", joined)
+	}
+	if !strings.Contains(joined, "See details") {
+		t.Fatalf("expected markdown links to keep link text, got: %q", joined)
+	}
 }
 
 func TestFormatRecipeReceipt(t *testing.T) {

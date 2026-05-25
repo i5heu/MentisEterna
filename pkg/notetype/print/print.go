@@ -353,7 +353,11 @@ func formatGenericForPrint(title string, body string) (*printer.Buf, string, err
 	b.AlignLeft()
 	b.HLine(w)
 	if strings.TrimSpace(body) != "" {
-		for _, line := range recipe.WrapLines(body, w-2) {
+		for _, line := range recipe.FormatMarkdownForPrint(body, w-2) {
+			if line == "" {
+				b.Ln()
+				continue
+			}
 			b.Text("  " + line + "\n")
 		}
 	} else {
@@ -367,7 +371,11 @@ func formatGenericForPrint(title string, body string) (*printer.Buf, string, err
 	sb.WriteString(strings.Repeat("-", w))
 	sb.WriteByte('\n')
 	if strings.TrimSpace(body) != "" {
-		for _, line := range recipe.WrapLines(body, w-2) {
+		for _, line := range recipe.FormatMarkdownForPrint(body, w-2) {
+			if line == "" {
+				sb.WriteByte('\n')
+				continue
+			}
 			sb.WriteString("  " + line + "\n")
 		}
 	} else {

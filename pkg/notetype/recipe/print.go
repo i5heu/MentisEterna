@@ -2,6 +2,7 @@ package recipe
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/i5heu/MentisEterna/pkg/printer"
@@ -12,6 +13,16 @@ import (
 // standard Font A at 12 dots/char).  Characters are rendered in BigSize
 // (bold + double height, no double width).
 const DefaultPrintWidth = 48
+
+var (
+	markdownImagePattern   = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]*)\)`)
+	markdownLinkPattern    = regexp.MustCompile(`\[([^\]]+)\]\(([^)]*)\)`)
+	markdownHeadingPattern = regexp.MustCompile(`^\s{0,3}(#{1,6})\s+(.*)$`)
+	markdownTaskPattern    = regexp.MustCompile(`^(\s*)[-+*]\s+\[([ xX])\]\s+(.*)$`)
+	markdownBulletPattern  = regexp.MustCompile(`^(\s*)[-+*]\s+(.*)$`)
+	markdownOrderedPattern = regexp.MustCompile(`^(\s*)(\d+)[.)]\s+(.*)$`)
+	markdownRulePattern    = regexp.MustCompile(`^\s*([-*_]\s*){3,}$`)
+)
 
 // FormatRecipeReceipt formats a recipe into an ESC/POS buffer suitable for
 // thermal receipt printing.  All text is BigSize (bold + double height,
@@ -102,8 +113,11 @@ func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Bu
 		b.HLine(w)
 		b.Text("Notes")
 		b.Ln()
-		// Wrap long lines.
-		for _, line := range WrapLines(body, w-2) {
+		for _, line := range FormatMarkdownForPrint(body, w-2) {
+			if line == "" {
+				b.Ln()
+				continue
+			}
 			b.Text("  " + line + "\n")
 		}
 	}
@@ -117,7 +131,7 @@ func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Bu
 	return b
 }
 
-// WrapLines splits text into lines no longer than maxWidth.
+// WrapLines splits plain text into lines no longer than maxWidth.
 // Exported for use by the print plugin.
 func WrapLines(text string, maxWidth int) []string {
 	if maxWidth <= 0 {
@@ -126,26 +140,226 @@ func WrapLines(text string, maxWidth int) []string {
 	var out []string
 	for _, paragraph := range strings.Split(text, "\n") {
 		paragraph = strings.TrimSpace(paragraph)
-		for printer.TextWidth(paragraph) > maxWidth {
-			runes := []rune(paragraph)
-			cut := maxWidth
-			if cut > len(runes) {
-				cut = len(runes)
-			}
-			for i := cut; i > maxWidth/2; i-- {
-				if runes[i-1] == ' ' {
-					cut = i - 1
-					break
-				}
-			}
-			out = append(out, strings.TrimSpace(string(runes[:cut])))
-			paragraph = strings.TrimSpace(string(runes[cut:]))
+		if paragraph == "" {
+			continue
 		}
-		if paragraph != "" {
-			out = append(out, paragraph)
-		}
+		out = append(out, wrapWithPrefixes("", "", paragraph, maxWidth)...)
 	}
 	return out
+}
+
+// FormatMarkdownForPrint converts markdown into readable plain text while
+// preserving paragraphs and common list structure for receipt printing.
+func FormatMarkdownForPrint(markdown string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		return nil
+	}
+
+	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
+	markdown = strings.ReplaceAll(markdown, "\r", "\n")
+
+	var out []string
+	inCodeFence := false
+	for _, rawLine := range strings.Split(markdown, "\n") {
+		lines, blankAfter := markdownLineToPrint(rawLine, maxWidth, &inCodeFence)
+		if len(lines) == 0 {
+			if len(out) > 0 && out[len(out)-1] != "" {
+				out = append(out, "")
+			}
+			continue
+		}
+		for _, line := range lines {
+			if line == "" {
+				if len(out) > 0 && out[len(out)-1] != "" {
+					out = append(out, "")
+				}
+				continue
+			}
+			out = append(out, wrapMarkdownLine(line, maxWidth)...)
+		}
+		if blankAfter && len(out) > 0 && out[len(out)-1] != "" {
+			out = append(out, "")
+		}
+	}
+
+	for len(out) > 0 && out[0] == "" {
+		out = out[1:]
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+func markdownLineToPrint(rawLine string, maxWidth int, inCodeFence *bool) ([]string, bool) {
+	line := strings.TrimRight(rawLine, " \t")
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+		*inCodeFence = !*inCodeFence
+		return nil, false
+	}
+	if *inCodeFence {
+		if trimmed == "" {
+			return []string{""}, false
+		}
+		return []string{line}, false
+	}
+	if trimmed == "" {
+		return []string{""}, false
+	}
+	if markdownRulePattern.MatchString(trimmed) {
+		return []string{strings.Repeat("-", maxWidth)}, false
+	}
+	if matches := markdownHeadingPattern.FindStringSubmatch(line); len(matches) == 3 {
+		text := cleanMarkdownInline(matches[2])
+		if text == "" {
+			return nil, false
+		}
+		return []string{text}, true
+	}
+	if matches := markdownTaskPattern.FindStringSubmatch(line); len(matches) == 4 {
+		marker := "☐ "
+		if strings.EqualFold(matches[2], "x") {
+			marker = "☑ "
+		}
+		return []string{matches[1] + marker + cleanMarkdownInline(matches[3])}, false
+	}
+	if matches := markdownBulletPattern.FindStringSubmatch(line); len(matches) == 3 {
+		return []string{matches[1] + "• " + cleanMarkdownInline(matches[2])}, false
+	}
+	if matches := markdownOrderedPattern.FindStringSubmatch(line); len(matches) == 4 {
+		return []string{matches[1] + matches[2] + ". " + cleanMarkdownInline(matches[3])}, false
+	}
+	if strings.HasPrefix(trimmed, ">") {
+		quoted := strings.TrimSpace(strings.TrimLeft(trimmed, ">"))
+		if quoted == "" {
+			return []string{""}, false
+		}
+		return []string{"| " + cleanMarkdownInline(quoted)}, false
+	}
+	text := cleanMarkdownInline(line)
+	if text == "" {
+		return nil, false
+	}
+	return []string{text}, false
+}
+
+func cleanMarkdownInline(line string) string {
+	line = markdownImagePattern.ReplaceAllStringFunc(line, func(match string) string {
+		parts := markdownImagePattern.FindStringSubmatch(match)
+		if len(parts) < 2 {
+			return "[Image]"
+		}
+		alt := strings.TrimSpace(parts[1])
+		if alt == "" {
+			return "[Image]"
+		}
+		return "[Image: " + alt + "]"
+	})
+	line = markdownLinkPattern.ReplaceAllStringFunc(line, func(match string) string {
+		parts := markdownLinkPattern.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		text := strings.TrimSpace(parts[1])
+		url := strings.TrimSpace(parts[2])
+		if text != "" {
+			return text
+		}
+		return url
+	})
+	line = strings.NewReplacer(
+		"**", "",
+		"__", "",
+		"~~", "",
+		"`", "",
+		"*", "",
+		"_", "",
+	).Replace(line)
+	line = strings.TrimSpace(line)
+	line = strings.Join(strings.Fields(line), " ")
+	return line
+}
+
+func wrapMarkdownLine(line string, maxWidth int) []string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return []string{""}
+	}
+	if strings.HasPrefix(trimmed, "• ") {
+		return wrapWithPrefixes("• ", "  ", strings.TrimSpace(strings.TrimPrefix(trimmed, "• ")), maxWidth)
+	}
+	if strings.HasPrefix(trimmed, "☐ ") {
+		return wrapWithPrefixes("☐ ", "  ", strings.TrimSpace(strings.TrimPrefix(trimmed, "☐ ")), maxWidth)
+	}
+	if strings.HasPrefix(trimmed, "☑ ") {
+		return wrapWithPrefixes("☑ ", "  ", strings.TrimSpace(strings.TrimPrefix(trimmed, "☑ ")), maxWidth)
+	}
+	if strings.HasPrefix(trimmed, "| ") {
+		return wrapWithPrefixes("| ", "  ", strings.TrimSpace(strings.TrimPrefix(trimmed, "| ")), maxWidth)
+	}
+	if matches := markdownOrderedPattern.FindStringSubmatch(trimmed); len(matches) == 4 {
+		prefix := matches[2] + ". "
+		return wrapWithPrefixes(prefix, strings.Repeat(" ", printer.TextWidth(prefix)), strings.TrimSpace(matches[3]), maxWidth)
+	}
+	return wrapWithPrefixes("", "", trimmed, maxWidth)
+}
+
+func wrapWithPrefixes(prefix string, continuationPrefix string, text string, maxWidth int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return []string{strings.TrimRight(prefix, " ")}
+	}
+	var out []string
+	currentPrefix := prefix
+	remaining := text
+	for remaining != "" {
+		available := maxWidth - printer.TextWidth(currentPrefix)
+		if available <= 0 {
+			out = append(out, currentPrefix+remaining)
+			break
+		}
+		if printer.TextWidth(remaining) <= available {
+			out = append(out, currentPrefix+remaining)
+			break
+		}
+		cut := wrapCutIndex(remaining, available)
+		part := strings.TrimSpace(remaining[:cut])
+		if part == "" {
+			part = strings.TrimSpace(remaining)
+			out = append(out, currentPrefix+part)
+			break
+		}
+		out = append(out, currentPrefix+part)
+		remaining = strings.TrimSpace(remaining[cut:])
+		currentPrefix = continuationPrefix
+	}
+	return out
+}
+
+func wrapCutIndex(text string, maxWidth int) int {
+	lastSpace := -1
+	lastRuneEnd := 0
+	width := 0
+	for idx, r := range text {
+		runeWidth := printer.TextWidth(string(r))
+		next := idx + len(string(r))
+		if width+runeWidth > maxWidth {
+			if lastSpace > 0 {
+				return lastSpace
+			}
+			if lastRuneEnd > 0 {
+				return lastRuneEnd
+			}
+			return next
+		}
+		width += runeWidth
+		if r == ' ' {
+			lastSpace = idx
+		}
+		lastRuneEnd = next
+	}
+	return len(text)
 }
 
 // RecipeTextPrint returns a plain-text rendition of the recipe formatted for
@@ -219,7 +433,11 @@ func RecipeTextPrint(payload Payload, title string, body string) string {
 		sb.WriteString(strings.Repeat("-", w))
 		sb.WriteByte('\n')
 		sb.WriteString("Notes\n")
-		for _, line := range WrapLines(body, w-2) {
+		for _, line := range FormatMarkdownForPrint(body, w-2) {
+			if line == "" {
+				sb.WriteByte('\n')
+				continue
+			}
 			sb.WriteString("  " + line + "\n")
 		}
 	}
