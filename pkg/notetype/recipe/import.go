@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
@@ -18,9 +19,10 @@ type importRecipesJSONParams struct {
 }
 
 type importedIngredient struct {
-	Name   string `json:"name"`
-	Amount string `json:"amount"`
-	Unit   string `json:"unit"`
+	Name    string `json:"name"`
+	Prepare string `json:"prepare"`
+	Amount  string `json:"amount"`
+	Unit    string `json:"unit"`
 }
 
 type importedRecipe struct {
@@ -172,6 +174,11 @@ func parseImportedRecipes(raw string) ([]importedRecipe, error) {
 }
 
 func payloadFromImportedRecipeMap(recipeMap map[string]any, index int) (Payload, []importedIngredient, error) {
+	rating, err := ratingFromAny(recipeMap["rating"])
+	if err != nil {
+		return Payload{}, nil, badImportRequest("Recipe %d: %v", index, err)
+	}
+
 	ingVals, ok := recipeMap["ingredients"]
 	if !ok || ingVals == nil {
 		return Payload{
@@ -181,6 +188,7 @@ func payloadFromImportedRecipeMap(recipeMap map[string]any, index int) (Payload,
 			TotalTime:       stringFromAny(recipeMap["total_time"]),
 			GramsPerServing: stringFromAny(recipeMap["grams_per_serving"]),
 			KcalPerServing:  stringFromAny(recipeMap["kcal_per_serving"]),
+			Rating:          rating,
 			Freezable:       boolFromAny(recipeMap["freezable"]),
 			PreCookServings: stringFromAny(recipeMap["pre_cook_servings"]),
 		}, []importedIngredient{}, nil
@@ -202,6 +210,7 @@ func payloadFromImportedRecipeMap(recipeMap map[string]any, index int) (Payload,
 		if strings.TrimSpace(name) == "" {
 			return Payload{}, nil, badImportRequest("Recipe %d: ingredient %d is missing a name.", index, j+1)
 		}
+		prepare := stringFromAny(ingMap["prepare"])
 		amount := stringFromAny(ingMap["amount"])
 		unit := stringFromAny(ingMap["unit"])
 		nonMetricAmount := stringFromAny(ingMap["non_metric_amount"])
@@ -209,13 +218,14 @@ func payloadFromImportedRecipeMap(recipeMap map[string]any, index int) (Payload,
 		metricValidated := boolFromAny(ingMap["metric_validated"])
 		rows = append(rows, IngredientRow{
 			Name:            name,
+			Prepare:         prepare,
 			Amount:          amount,
 			Unit:            unit,
 			NonMetricAmount: nonMetricAmount,
 			NonMetricUnit:   nonMetricUnit,
 			MetricValidated: metricValidated,
 		})
-		imported = append(imported, importedIngredient{Name: name, Amount: amount, Unit: unit})
+		imported = append(imported, importedIngredient{Name: name, Prepare: prepare, Amount: amount, Unit: unit})
 	}
 
 	return Payload{
@@ -225,6 +235,7 @@ func payloadFromImportedRecipeMap(recipeMap map[string]any, index int) (Payload,
 		TotalTime:       stringFromAny(recipeMap["total_time"]),
 		GramsPerServing: stringFromAny(recipeMap["grams_per_serving"]),
 		KcalPerServing:  stringFromAny(recipeMap["kcal_per_serving"]),
+		Rating:          rating,
 		Freezable:       boolFromAny(recipeMap["freezable"]),
 		PreCookServings: stringFromAny(recipeMap["pre_cook_servings"]),
 	}, imported, nil
@@ -237,6 +248,7 @@ func importedRecipeHasContent(recipe importedRecipe) bool {
 		strings.TrimSpace(recipe.Payload.TotalTime) != "" ||
 		strings.TrimSpace(recipe.Payload.GramsPerServing) != "" ||
 		strings.TrimSpace(recipe.Payload.KcalPerServing) != "" ||
+		recipe.Payload.Rating > 0 ||
 		recipe.Payload.Freezable ||
 		strings.TrimSpace(recipe.Payload.PreCookServings) != "" {
 		return true
@@ -244,6 +256,7 @@ func importedRecipeHasContent(recipe importedRecipe) bool {
 
 	for _, ing := range recipe.Payload.Ingredients {
 		if strings.TrimSpace(ing.Name) != "" ||
+			strings.TrimSpace(ing.Prepare) != "" ||
 			strings.TrimSpace(ing.Amount) != "" ||
 			strings.TrimSpace(ing.Unit) != "" ||
 			strings.TrimSpace(ing.NonMetricAmount) != "" ||
@@ -273,6 +286,30 @@ func stringFromAny(v any) string {
 		return "false"
 	default:
 		return strings.TrimSpace(fmt.Sprint(x))
+	}
+}
+
+func ratingFromAny(v any) (int, error) {
+	switch x := v.(type) {
+	case nil:
+		return 0, nil
+	case string:
+		x = strings.TrimSpace(x)
+		if x == "" {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(x)
+		if err != nil {
+			return 0, fmt.Errorf("rating must be an integer between 0 and 10")
+		}
+		return n, nil
+	case float64:
+		if math.Trunc(x) != x {
+			return 0, fmt.Errorf("rating must be an integer between 0 and 10")
+		}
+		return int(x), nil
+	default:
+		return 0, fmt.Errorf("rating must be an integer between 0 and 10")
 	}
 }
 

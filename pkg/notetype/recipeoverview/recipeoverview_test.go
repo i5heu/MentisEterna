@@ -29,6 +29,7 @@ func TestBuildView_WithRealRecipes(t *testing.T) {
 	d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, 'Flour', '2', 'g', 0)`, note1)
 	d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, 'Sugar', '1', 'g', 1)`, note1)
 	d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, 'Tomatoes', '5', 'ml', 0)`, note2)
+	d.DB.Exec(`INSERT INTO ct_recipe_meta (note_id, rating) VALUES (?, 8), (?, 3)`, note1, note2)
 	expectedBodyThumb := fmt.Sprintf("/file/%d/%d", note1, 101)
 	d.DB.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, note1, fmt.Sprintf("![Cake](%s)\nStep 1", expectedBodyThumb))
 
@@ -64,6 +65,9 @@ func TestBuildView_WithRealRecipes(t *testing.T) {
 	}
 	if cake.ThumbnailURL != expectedBodyThumb {
 		t.Fatalf("expected markdown thumbnail URL %q, got %q", expectedBodyThumb, cake.ThumbnailURL)
+	}
+	if cake.Rating != 8 {
+		t.Fatalf("expected cake rating 8, got %d", cake.Rating)
 	}
 }
 
@@ -283,6 +287,54 @@ func TestGenerateGroceryListUsesNonMetricWhenOnlyNonMetricExists(t *testing.T) {
 	}
 	if gl.Items[0].Name != "Soy Sauce" || gl.Items[0].Amount != "2" || gl.Items[0].Unit != "tablespoon" {
 		t.Fatalf("expected non-metric-only ingredient to use non-metric values, got %+v", gl.Items[0])
+	}
+}
+
+func TestGenerateGroceryListIgnoresIngredientPrepare(t *testing.T) {
+	d := plugintest.DB(t, &RecipeOverviewPlugin{})
+	defer d.Close()
+
+	recipePlugin := &recipe.RecipePlugin{}
+	if err := recipePlugin.InitSchema(d.DB); err != nil {
+		t.Fatalf("recipe InitSchema: %v", err)
+	}
+
+	noteID := plugintest.CreateNote(t, d, "Salad", recipePlugin)
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, prepare, amount, unit, metric_validated, sort_order) VALUES (?, 'Onion', 'finely chopped', '1', 'pcs', 1, 0)`, noteID); err != nil {
+		t.Fatalf("insert ingredient: %v", err)
+	}
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_meta (note_id, servings) VALUES (?, '1')`, noteID); err != nil {
+		t.Fatalf("insert meta: %v", err)
+	}
+
+	overviewNote := plugintest.CreateNote(t, d, "Weekly Overview", &RecipeOverviewPlugin{})
+	params := json.RawMessage(fmt.Sprintf(`{"recipe_ids":[%d],"num_people":1}`, noteID))
+	result, err := generateGroceryList(d.DB, overviewNote, params)
+	if err != nil {
+		t.Fatalf("generateGroceryList: %v", err)
+	}
+
+	payload, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	glRaw, ok := payload["grocery_list"]
+	if !ok {
+		t.Fatalf("expected grocery_list in result")
+	}
+	encoded, err := json.Marshal(glRaw)
+	if err != nil {
+		t.Fatalf("marshal grocery list: %v", err)
+	}
+	var gl GroceryList
+	if err := json.Unmarshal(encoded, &gl); err != nil {
+		t.Fatalf("unmarshal grocery list: %v", err)
+	}
+	if len(gl.Items) != 1 {
+		t.Fatalf("expected 1 grocery item, got %d", len(gl.Items))
+	}
+	if gl.Items[0].Name != "Onion" {
+		t.Fatalf("expected grocery list to omit prepare text, got %+v", gl.Items[0])
 	}
 }
 

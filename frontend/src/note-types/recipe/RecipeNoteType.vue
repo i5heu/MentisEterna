@@ -55,12 +55,32 @@
             </div>
         </div>
 
+        <div v-if="note?.id && !editing" class="recipe-actions-row">
+            <button
+                class="btn-amber btn-sm"
+                :disabled="printingRecipe || dirty"
+                @click="printRecipe"
+            >
+                {{ printingRecipe ? "Printing..." : "Print Recipe" }}
+            </button>
+        </div>
+        <p v-if="dirty && !editing" class="recipe-print-hint">
+            Save your changes before printing so the printer uses the latest
+            recipe.
+        </p>
+        <p v-if="printError" class="recipe-print-error">{{ printError }}</p>
+        <div v-if="printPreview" class="recipe-print-preview">
+            <div class="recipe-print-preview-title">Printer Preview</div>
+            <pre class="recipe-print-preview-box">{{ printPreview }}</pre>
+        </div>
+
         <h3>Ingredients</h3>
 
         <table class="ingredient-table">
             <thead>
                 <tr>
                     <th>Name</th>
+                    <th>Prepare</th>
                     <th>Metric Amount</th>
                     <th>Metric Unit</th>
                     <th>Non-Metric Amount</th>
@@ -78,6 +98,14 @@
                         />
                     </td>
                     <td v-else>{{ ing.name || "-" }}</td>
+
+                    <td v-if="editing">
+                        <input
+                            v-model="ing.prepare"
+                            placeholder="e.g. chopped"
+                        />
+                    </td>
+                    <td v-else>{{ ing.prepare || "-" }}</td>
 
                     <td v-if="editing">
                         <input
@@ -210,6 +238,27 @@
                 />
                 <span v-else>{{ localKcalPerServing || "-" }}</span>
             </div>
+            <div class="detail-row detail-row-rating">
+                <span class="detail-label">Rating</span>
+                <div v-if="editing" class="rating-editor">
+                    <input
+                        v-model.number="localRating"
+                        type="range"
+                        min="0"
+                        max="10"
+                        step="1"
+                        class="rating-range"
+                    />
+                    <span class="rating-value"
+                        >{{ formatRatingStars(localRating) }}
+                        {{ localRating }}/10</span
+                    >
+                </div>
+                <span v-else class="rating-value"
+                    >{{ formatRatingStars(localRating) }}
+                    {{ localRating }}/10</span
+                >
+            </div>
             <div class="detail-row detail-row-checkbox">
                 <span class="detail-label">Freezable</span>
                 <input
@@ -236,6 +285,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
+import { usePluginAction } from "../shared/usePluginAction.js";
 
 const RECIPE_IMPORT_SCHEMA = {
     type: "object",
@@ -273,6 +323,11 @@ const RECIPE_IMPORT_SCHEMA = {
                                     type: "string",
                                     minLength: 1,
                                     description: "Ingredient name.",
+                                },
+                                prepare: {
+                                    type: "string",
+                                    description:
+                                        "How the ingredient should be prepared, e.g. chopped or sliced.",
                                 },
                                 amount: {
                                     oneOf: [
@@ -339,6 +394,11 @@ const RECIPE_IMPORT_SCHEMA = {
                     kcal_per_serving: {
                         oneOf: [{ type: "string" }, { type: "number" }],
                     },
+                    rating: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 10,
+                    },
                     freezable: { type: "boolean" },
                     pre_cook_servings: {
                         oneOf: [{ type: "string" }, { type: "number" }],
@@ -355,23 +415,25 @@ const RECIPE_IMPORT_EXAMPLE = {
             title: "Coconut Rice Bowl",
             body: "Steam the rice. Saute the vegetables. Mix everything together and serve warm.",
             ingredients: [
-                { name: "Rice", amount: 250, unit: "g" },
+                { name: "Rice", prepare: "washed", amount: 250, unit: "g" },
                 { name: "Coconut milk", amount: 400, unit: "ml" },
                 {
                     name: "Chili flakes",
+                    prepare: "crushed",
                     amount: 500,
                     unit: "mg",
                     non_metric_amount: 1,
                     non_metric_unit: "teaspoon",
                     metric_validated: false,
                 },
-                { name: "Carrot", amount: 2, unit: "pcs" },
+                { name: "Carrot", prepare: "sliced", amount: 2, unit: "pcs" },
             ],
             servings: 4,
             attention_time: "20m",
             total_time: "35m",
             grams_per_serving: 480,
             kcal_per_serving: 620,
+            rating: 8,
             freezable: true,
             pre_cook_servings: 8,
         },
@@ -381,6 +443,7 @@ const RECIPE_IMPORT_EXAMPLE = {
             ingredients: [
                 {
                     name: "Parmesan",
+                    prepare: "grated",
                     amount: 80,
                     unit: "g",
                     non_metric_amount: 1,
@@ -397,6 +460,7 @@ const RECIPE_IMPORT_EXAMPLE = {
             attention_time: "15m",
             total_time: "25m",
             kcal_per_serving: 540,
+            rating: 6,
             freezable: false,
         },
     ],
@@ -409,6 +473,7 @@ const props = defineProps({
     note: { type: Object, default: null },
     token: { type: String, required: true },
     editing: { type: Boolean, default: false },
+    dirty: { type: Boolean, default: false },
     customData: { type: Object, default: null },
     uiSchema: { type: Object, default: null },
     actionError: { type: String, default: "" },
@@ -416,18 +481,25 @@ const props = defineProps({
 
 const emit = defineEmits(["selectNote", "update:customData", "import:recipes"]);
 
+const { loading: printingRecipe, execute: execRecipeAction } = usePluginAction(
+    () => props.token,
+);
+
 const localIngredients = ref([]);
 const localServings = ref("");
 const localAttentionTime = ref("");
 const localTotalTime = ref("");
 const localGramsPerServing = ref("");
 const localKcalPerServing = ref("");
+const localRating = ref(0);
 const localFreezable = ref(false);
 const localPreCookServings = ref("");
 const showImportPanel = ref(false);
 const importJsonText = ref("");
 const importError = ref("");
 const copyingSchema = ref(false);
+const printError = ref("");
+const printPreview = ref("");
 
 const isRecipeEmpty = computed(() => {
     const hasIngredients = localIngredients.value.length > 0;
@@ -456,6 +528,7 @@ function normalizeString(value) {
 function normalizeIngredient(raw) {
     const normalized = {
         name: normalizeString(raw?.name),
+        prepare: normalizeString(raw?.prepare),
         amount: normalizeString(raw?.amount),
         unit: normalizeString(raw?.unit),
         non_metric_amount: normalizeString(raw?.non_metric_amount),
@@ -466,6 +539,12 @@ function normalizeIngredient(raw) {
         normalized.metric_validated = false;
     }
     return normalized;
+}
+
+function normalizeRating(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 0;
+    return Math.max(0, Math.min(10, Math.round(num)));
 }
 
 function buildRecipeCustomData(raw) {
@@ -479,6 +558,7 @@ function buildRecipeCustomData(raw) {
         total_time: normalizeString(safe.total_time),
         grams_per_serving: normalizeString(safe.grams_per_serving),
         kcal_per_serving: normalizeString(safe.kcal_per_serving),
+        rating: normalizeRating(safe.rating),
         freezable: !!safe.freezable,
         pre_cook_servings: normalizeString(safe.pre_cook_servings),
     };
@@ -490,6 +570,21 @@ function shouldShowMetricValidatedField(ingredient) {
         hasText(ingredient?.unit) &&
         hasText(ingredient?.non_metric_amount) &&
         hasText(ingredient?.non_metric_unit)
+    );
+}
+
+function hasRecipeCustomData(raw) {
+    const data = buildRecipeCustomData(raw);
+    return (
+        data.ingredients.length > 0 ||
+        hasText(data.servings) ||
+        hasText(data.attention_time) ||
+        hasText(data.total_time) ||
+        hasText(data.grams_per_serving) ||
+        hasText(data.kcal_per_serving) ||
+        data.rating > 0 ||
+        data.freezable ||
+        hasText(data.pre_cook_servings)
     );
 }
 
@@ -516,6 +611,7 @@ function setLocalRecipeState(raw, { emitAfter = false } = {}) {
     localTotalTime.value = data.total_time;
     localGramsPerServing.value = data.grams_per_serving;
     localKcalPerServing.value = data.kcal_per_serving;
+    localRating.value = data.rating;
     localFreezable.value = data.freezable;
     localPreCookServings.value = data.pre_cook_servings;
     hydrating = false;
@@ -535,6 +631,8 @@ function resetImportPanel() {
 function hydrateFromProp() {
     setLocalRecipeState(props.customData, { emitAfter: false });
     resetImportPanel();
+    printError.value = "";
+    printPreview.value = "";
 }
 
 watch(() => props.note?.id, hydrateFromProp, { immediate: true });
@@ -543,8 +641,20 @@ watch(
     () => props.customData,
     (cd) => {
         if (hydrating) return;
-        const ings = cd && Array.isArray(cd.ingredients) ? cd.ingredients : [];
-        if (ings.length > 0 && localIngredients.value.length === 0) {
+        if (
+            hasRecipeCustomData(cd) &&
+            !hasRecipeCustomData({
+                ingredients: localIngredients.value,
+                servings: localServings.value,
+                attention_time: localAttentionTime.value,
+                total_time: localTotalTime.value,
+                grams_per_serving: localGramsPerServing.value,
+                kcal_per_serving: localKcalPerServing.value,
+                rating: localRating.value,
+                freezable: localFreezable.value,
+                pre_cook_servings: localPreCookServings.value,
+            })
+        ) {
             hydrateFromProp();
         }
     },
@@ -555,6 +665,7 @@ function emitCustomData() {
     emit("update:customData", {
         ingredients: localIngredients.value.map((ingredient) => ({
             name: ingredient.name,
+            prepare: ingredient.prepare,
             amount: ingredient.amount,
             unit: ingredient.unit,
             non_metric_amount: ingredient.non_metric_amount,
@@ -568,6 +679,7 @@ function emitCustomData() {
         total_time: localTotalTime.value,
         grams_per_serving: localGramsPerServing.value,
         kcal_per_serving: localKcalPerServing.value,
+        rating: normalizeRating(localRating.value),
         freezable: localFreezable.value,
         pre_cook_servings: localPreCookServings.value,
     });
@@ -581,6 +693,7 @@ watch(
         localTotalTime,
         localGramsPerServing,
         localKcalPerServing,
+        localRating,
         localFreezable,
         localPreCookServings,
     ],
@@ -617,9 +730,36 @@ function importRecipeJson() {
     emit("import:recipes", importJsonText.value);
 }
 
+function formatRatingStars(rating) {
+    const safeRating = normalizeRating(rating);
+    return "★".repeat(safeRating) + "☆".repeat(10 - safeRating);
+}
+
+async function printRecipe() {
+    printError.value = "";
+    printPreview.value = "";
+
+    if (!props.note?.id) return;
+
+    try {
+        const result = await execRecipeAction(
+            props.note.id,
+            "print_recipe",
+            {},
+        );
+        if (result?.preview) {
+            printPreview.value = result.preview;
+            printError.value = result.error || "Printer not available";
+        }
+    } catch (err) {
+        printError.value = err?.message || String(err);
+    }
+}
+
 function addIngredient() {
     localIngredients.value.push({
         name: "",
+        prepare: "",
         amount: "",
         unit: "",
         non_metric_amount: "",
@@ -715,6 +855,49 @@ function removeIngredient(idx) {
     margin-top: 1.25rem !important;
 }
 
+.recipe-actions-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.75rem;
+}
+
+.recipe-print-hint {
+    margin: 0 0 0.5rem;
+    color: var(--font-color-secondary);
+    font-size: 0.85rem;
+}
+
+.recipe-print-error {
+    margin: 0 0 0.75rem;
+    color: var(--heading-color);
+    font-size: 0.9rem;
+}
+
+.recipe-print-preview {
+    margin-bottom: 0.9rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--raised-bg);
+    overflow: hidden;
+}
+
+.recipe-print-preview-title {
+    padding: 0.45rem 0.7rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--font-color-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.recipe-print-preview-box {
+    margin: 0;
+    padding: 0.75rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+}
+
 .ingredient-table {
     width: 100%;
     border-collapse: collapse;
@@ -777,6 +960,10 @@ function removeIngredient(idx) {
     margin-top: 0.2rem;
 }
 
+.detail-row-rating {
+    align-items: flex-start;
+}
+
 .detail-label {
     min-width: 9.5rem;
     font-size: 0.9rem;
@@ -798,6 +985,24 @@ function removeIngredient(idx) {
     width: 1.1rem;
     height: 1.1rem;
     accent-color: var(--accent-teal);
+}
+
+.rating-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    width: 100%;
+    max-width: 20rem;
+}
+
+.rating-range {
+    width: 100%;
+}
+
+.rating-value {
+    font-size: 0.9rem;
+    color: var(--font-color);
+    letter-spacing: 0.02em;
 }
 
 .empty-hint {

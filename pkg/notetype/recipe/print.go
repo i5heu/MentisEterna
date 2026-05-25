@@ -47,6 +47,9 @@ func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Bu
 
 	for _, ing := range payload.Ingredients {
 		name := "  " + ing.Name
+		if strings.TrimSpace(ing.Prepare) != "" {
+			name += " (" + strings.TrimSpace(ing.Prepare) + ")"
+		}
 		right := ""
 		if ing.Amount != "" {
 			right = ing.Amount
@@ -86,6 +89,7 @@ func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Bu
 	detail("Total time", payload.TotalTime)
 	detail("Grams per serving", payload.GramsPerServing)
 	detail("Kcal per serving", payload.KcalPerServing)
+	detail("Rating", fmt.Sprintf("%d/10", payload.Rating))
 	if payload.Freezable {
 		b.Text("  Freezable: yes\n")
 	}
@@ -165,6 +169,9 @@ func RecipeTextPrint(payload Payload, title string, body string) string {
 	}
 	for _, ing := range payload.Ingredients {
 		name := "  " + ing.Name
+		if strings.TrimSpace(ing.Prepare) != "" {
+			name += " (" + strings.TrimSpace(ing.Prepare) + ")"
+		}
 		right := ""
 		if ing.Amount != "" {
 			right = ing.Amount
@@ -199,6 +206,7 @@ func RecipeTextPrint(payload Payload, title string, body string) string {
 	detailText("Total time", payload.TotalTime)
 	detailText("Grams per serving", payload.GramsPerServing)
 	detailText("Kcal per serving", payload.KcalPerServing)
+	detailText("Rating", fmt.Sprintf("%d/10", payload.Rating))
 	if payload.Freezable {
 		sb.WriteString("  Freezable: yes\n")
 	}
