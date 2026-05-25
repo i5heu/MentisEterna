@@ -43,6 +43,22 @@ func FormatRecipeReceiptWithImages(payload Payload, title string, body string, i
 	return formatRecipeReceipt(payload, title, body, imagePrinter)
 }
 
+// printAmountUnit picks the amount/unit pair to display on the printed receipt.
+// If the ingredient has metric data and it's validated (or no non-metric data
+// exists), metric is used. Otherwise non-metric (imperial) is used.
+func printAmountUnit(ing IngredientRow) (string, string) {
+	hasMetric := strings.TrimSpace(ing.Amount) != "" && strings.TrimSpace(ing.Unit) != ""
+	hasNonMetric := strings.TrimSpace(ing.NonMetricAmount) != "" && strings.TrimSpace(ing.NonMetricUnit) != ""
+
+	if hasMetric && (!hasNonMetric || ing.MetricValidated) {
+		return ing.Amount, ing.Unit
+	}
+	if hasNonMetric {
+		return ing.NonMetricAmount, ing.NonMetricUnit
+	}
+	return ing.Amount, ing.Unit
+}
+
 func formatRecipeReceipt(payload Payload, title string, body string, imagePrinter func(*printer.Buf, int64) error) *printer.Buf {
 	b := new(printer.Buf)
 	b.Init()
@@ -71,11 +87,12 @@ func formatRecipeReceipt(payload Payload, title string, body string, imagePrinte
 		if strings.TrimSpace(ing.Prepare) != "" {
 			name += " (" + strings.TrimSpace(ing.Prepare) + ")"
 		}
+		amount, unit := printAmountUnit(ing)
 		right := ""
-		if ing.Amount != "" {
-			right = ing.Amount
-			if ing.Unit != "" {
-				right += " " + ing.Unit
+		if amount != "" {
+			right = amount
+			if unit != "" {
+				right += " " + unit
 			}
 		}
 
@@ -349,11 +366,12 @@ func RecipeTextPrint(payload Payload, title string, body string) string {
 		if strings.TrimSpace(ing.Prepare) != "" {
 			name += " (" + strings.TrimSpace(ing.Prepare) + ")"
 		}
+		amount, unit := printAmountUnit(ing)
 		right := ""
-		if ing.Amount != "" {
-			right = ing.Amount
-			if ing.Unit != "" {
-				right += " " + ing.Unit
+		if amount != "" {
+			right = amount
+			if unit != "" {
+				right += " " + unit
 			}
 		}
 		if right != "" {

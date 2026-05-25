@@ -301,6 +301,16 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
             active?.blur?.();
         } else if (activeIsEditable) {
             hideHintOverlay();
+            // When focus is in an editable element, still allow direct key-combo
+            // shortcuts (like Ctrl+S) that explicitly opt in via allowInInput.
+            // Hint-based shortcuts (hold Ctrl, press key) are blocked in this mode.
+            if (event.ctrlKey || event.metaKey) {
+                const directShortcut = findDirectShortcut(event);
+                if (directShortcut && canRunShortcut(directShortcut)) {
+                    event.preventDefault();
+                    runShortcut(directShortcut, event, "direct");
+                }
+            }
             return;
         }
 

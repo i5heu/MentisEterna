@@ -474,9 +474,21 @@ func splitAmount(s string) (float64, string) {
 	return num, unit
 }
 
-// formatAmount formats a numeric amount with optional unit.
+// formatAmount formats a numeric amount with optional unit (full precision, internal use).
 func formatAmount(num float64, unit string) string {
 	s := strconv.FormatFloat(num, 'f', -1, 64)
+	if unit != "" {
+		s += " " + unit
+	}
+	return s
+}
+
+// formatAmountFinal formats a numeric amount rounded to 2 decimal places for display.
+func formatAmountFinal(num float64, unit string) string {
+	s := strconv.FormatFloat(num, 'f', 2, 64)
+	// Strip trailing zeros after decimal for readability (but keep at least 2 places).
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
 	if unit != "" {
 		s += " " + unit
 	}
@@ -493,6 +505,11 @@ func effectiveGroceryListAmountUnit(metricAmount string, metricUnit string, nonM
 		return canonicalMetricAmount(metricAmount, metricUnit)
 	case hasNonMetric:
 		nonMetricAmount = scaleAmountFloat(nonMetricAmount, factor)
+		// Round non-metric amounts to 2 decimal places for display.
+		num, u := splitAmount(nonMetricAmount)
+		if num >= 0 && u == "" {
+			nonMetricAmount = formatAmountFinal(num, "")
+		}
 		return nonMetricAmount, nonMetricUnit
 	default:
 		return metricAmount, metricUnit
@@ -534,6 +551,7 @@ func canonicalMetricAmount(amount string, unit string) (string, string) {
 // - ml >= 1000 → convert to l
 // - l > 0 and < 1 → convert to ml
 // Otherwise returns the amount and unit as-is.
+// All outputs are rounded to 2 decimal places.
 func normalizeMetricAmount(amount string, unit string) (string, string) {
 	num, u := splitAmount(amount)
 	if num < 0 || u != "" {
@@ -543,32 +561,33 @@ func normalizeMetricAmount(amount string, unit string) (string, string) {
 	switch unit {
 	case "mg":
 		if num >= 1000*1000 {
-			return formatAmount(num/(1000*1000), ""), "kg"
+			return formatAmountFinal(num/(1000*1000), ""), "kg"
 		}
 		if num >= 1000 {
-			return formatAmount(num/1000, ""), "g"
+			return formatAmountFinal(num/1000, ""), "g"
 		}
 	case "g":
 		if num >= 1000 {
-			return formatAmount(num/1000, ""), "kg"
+			return formatAmountFinal(num/1000, ""), "kg"
 		}
 		if num > 0 && num < 1 {
-			return formatAmount(num*1000, ""), "mg"
+			return formatAmountFinal(num*1000, ""), "mg"
 		}
 	case "kg":
 		if num > 0 && num < 1 {
-			return formatAmount(num*1000, ""), "g"
+			return formatAmountFinal(num*1000, ""), "g"
 		}
 	case "ml":
 		if num >= 1000 {
-			return formatAmount(num/1000, ""), "l"
+			return formatAmountFinal(num/1000, ""), "l"
 		}
 	case "l":
 		if num > 0 && num < 1 {
-			return formatAmount(num*1000, ""), "ml"
+			return formatAmountFinal(num*1000, ""), "ml"
 		}
 	}
-	return amount, unit
+	// No conversion needed — still round to 2 decimal places.
+	return formatAmountFinal(num, ""), unit
 }
 
 // scaleAmountFloat multiplies a numeric amount by a float64 factor
