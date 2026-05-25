@@ -179,6 +179,26 @@ func TestSend(t *testing.T) {
 	}
 }
 
+func TestSendUsesThrottledChunks(t *testing.T) {
+	t.Setenv("THERMAL_PRINTER_WRITE_CHUNK_BYTES", "4")
+	t.Setenv("THERMAL_PRINTER_WRITE_DELAY_MS", "0")
+
+	pr := &mockPrinter{}
+	buf := new(Buf)
+	buf.Text("abcdefghij")
+
+	if err := Send(pr, buf); err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if len(pr.writes) != 3 {
+		t.Fatalf("Send wrote %d chunks, want 3", len(pr.writes))
+	}
+	joined := bytes.Join(pr.writes, nil)
+	if !bytes.Equal(joined, buf.Bytes()) {
+		t.Fatalf("joined writes %q, want %q", joined, buf.Bytes())
+	}
+}
+
 func TestSendAndCut(t *testing.T) {
 	pr := &mockPrinter{}
 	buf := new(Buf)
