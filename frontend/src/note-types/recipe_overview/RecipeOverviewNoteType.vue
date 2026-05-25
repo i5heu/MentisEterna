@@ -158,7 +158,6 @@
                         <th>Item</th>
                         <th>Amount</th>
                         <th>Unit</th>
-                        <th>Non-Metric</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -166,7 +165,6 @@
                         <td>{{ item.name }}</td>
                         <td>{{ item.amount }}</td>
                         <td>{{ item.unit }}</td>
-                        <td>{{ item.non_metric || "-" }}</td>
                     </tr>
                 </tbody>
             </table>
@@ -219,7 +217,6 @@
                                 <th>Item</th>
                                 <th>Amount</th>
                                 <th>Unit</th>
-                                <th>Non-Metric</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -227,7 +224,6 @@
                                 <td>{{ item.name }}</td>
                                 <td>{{ item.amount }}</td>
                                 <td>{{ item.unit }}</td>
-                                <td>{{ item.non_metric || "-" }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -256,8 +252,8 @@
                 </p>
                 <ul class="unvalid-list">
                     <li
-                        v-for="item in unvalidIngredients"
-                        :key="`${item.recipe_note_id}-${item.ingredient_id}-${item.issue_type}`"
+                        v-for="item in editableUnvalidIngredients"
+                        :key="`${item.recipe_note_id}-${item.ingredient_id}`"
                         class="unvalid-item"
                     >
                         <div class="unvalid-top-row">
@@ -275,12 +271,73 @@
                             <button
                                 class="btn-ghost btn-sm"
                                 @click="
-                                    $emit('selectNote', item.recipe_note_id)
+                                    viewRecipeFromModal(item.recipe_note_id)
                                 "
                             >
                                 View Recipe
                             </button>
                         </div>
+
+                        <div class="unvalid-edit-grid">
+                            <label class="unvalid-field">
+                                <span>Metric Amount</span>
+                                <input
+                                    v-model="item.amount"
+                                    class="unvalid-input"
+                                />
+                            </label>
+                            <label class="unvalid-field">
+                                <span>Metric Unit</span>
+                                <select
+                                    v-model="item.unit"
+                                    class="unvalid-select"
+                                >
+                                    <option value="">—</option>
+                                    <option value="mg">mg</option>
+                                    <option value="g">g</option>
+                                    <option value="kg">kg</option>
+                                    <option value="ml">ml</option>
+                                    <option value="l">l</option>
+                                    <option value="pcs">pcs</option>
+                                </select>
+                            </label>
+                            <label class="unvalid-field">
+                                <span>Non-Metric Amount</span>
+                                <input
+                                    v-model="item.non_metric_amount"
+                                    class="unvalid-input"
+                                />
+                            </label>
+                            <label class="unvalid-field">
+                                <span>Non-Metric Type</span>
+                                <select
+                                    v-model="item.non_metric_unit"
+                                    class="unvalid-select"
+                                >
+                                    <option value="">—</option>
+                                    <option value="teaspoon">Teaspoon</option>
+                                    <option value="tablespoon">
+                                        Tablespoon
+                                    </option>
+                                    <option value="cup">Cup</option>
+                                </select>
+                            </label>
+                            <label
+                                v-if="
+                                    hasMetricValue(item) &&
+                                    hasNonMetricValue(item)
+                                "
+                                class="unvalid-field unvalid-checkbox-field"
+                            >
+                                <span>Metric Validated</span>
+                                <input
+                                    v-model="item.metric_validated"
+                                    type="checkbox"
+                                    class="recipe-checkbox"
+                                />
+                            </label>
+                        </div>
+
                         <div class="unvalid-values">
                             <span
                                 v-if="
@@ -304,8 +361,18 @@
                                 {{ item.amount || "?" }} {{ item.unit || "?" }}
                             </span>
                         </div>
-                        <div class="unvalid-issue">
-                            {{ formatIssueType(item.issue_type) }}
+                        <div class="unvalid-actions-row">
+                            <div class="unvalid-issue">
+                                {{ formatIssueType(currentIssueType(item)) }}
+                            </div>
+                            <button
+                                v-if="isDraftDirty(item) || isSavingDraft(item)"
+                                class="btn-amber btn-sm"
+                                :disabled="isSavingDraft(item)"
+                                @click="saveUnvalidIngredient(item)"
+                            >
+                                {{ isSavingDraft(item) ? "Saving..." : "Save" }}
+                            </button>
                         </div>
                     </li>
                 </ul>
@@ -316,7 +383,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { pluginActionV2 } from "../../api.js";
+import { fetchNote, pluginActionV2, updateNote } from "../../api.js";
 
 const props = defineProps({
     note: { type: Object, default: null },
@@ -339,6 +406,8 @@ const expandedLists = ref(new Set());
 const deletingListId = ref(null);
 const printingListId = ref(null);
 const showUnvalidModal = ref(false);
+const editableUnvalidIngredients = ref([]);
+const savingIngredientIds = ref(new Set());
 
 const latestList = computed(() => {
     const lists = overviewData.value?.grocery_lists;
@@ -375,6 +444,9 @@ function hydrateFromProp() {
             configPeople.value = latest.num_people || 1;
         }
     }
+    editableUnvalidIngredients.value = unvalidIngredients.value.map(
+        createUnvalidIngredientDraft,
+    );
     showUnvalidModal.value = false;
     hydrating = false;
 }
@@ -506,6 +578,139 @@ function formatIssueType(issueType) {
         default:
             return "Needs review";
     }
+}
+
+function normalizeString(value) {
+    return String(value ?? "").trim();
+}
+
+function createUnvalidIngredientDraft(item) {
+    const draft = {
+        ...item,
+        amount: item.amount || "",
+        unit: item.unit || "",
+        non_metric_amount: item.non_metric_amount || "",
+        non_metric_unit: item.non_metric_unit || "",
+        metric_validated: !!item.metric_validated,
+    };
+    draft._original = serializeUnvalidIngredientDraft(draft);
+    return draft;
+}
+
+function hasMetricValue(draft) {
+    return (
+        normalizeString(draft.amount) !== "" &&
+        normalizeString(draft.unit) !== ""
+    );
+}
+
+function hasNonMetricValue(draft) {
+    return (
+        normalizeString(draft.non_metric_amount) !== "" &&
+        normalizeString(draft.non_metric_unit) !== ""
+    );
+}
+
+function effectiveMetricValidated(draft) {
+    return hasMetricValue(draft) && hasNonMetricValue(draft)
+        ? !!draft.metric_validated
+        : false;
+}
+
+function currentIssueType(draft) {
+    if (!hasMetricValue(draft)) return "missing_metric";
+    if (hasNonMetricValue(draft) && !effectiveMetricValidated(draft)) {
+        return "not_validated";
+    }
+    return "ok";
+}
+
+function serializeUnvalidIngredientDraft(draft) {
+    return JSON.stringify({
+        amount: normalizeString(draft.amount),
+        unit: normalizeString(draft.unit),
+        non_metric_amount: normalizeString(draft.non_metric_amount),
+        non_metric_unit: normalizeString(draft.non_metric_unit),
+        metric_validated: effectiveMetricValidated(draft),
+    });
+}
+
+function isDraftDirty(draft) {
+    return serializeUnvalidIngredientDraft(draft) !== draft._original;
+}
+
+function isSavingDraft(draft) {
+    return savingIngredientIds.value.has(draft.ingredient_id);
+}
+
+async function refreshOverviewData() {
+    const refreshed = await fetchNote(props.token, props.note.id);
+    overviewData.value = {
+        recipes: refreshed.plugin?.view?.recipes || [],
+        grocery_lists: refreshed.plugin?.view?.grocery_lists || [],
+        unvalid_ingredients: refreshed.plugin?.view?.unvalid_ingredients || [],
+    };
+    editableUnvalidIngredients.value = unvalidIngredients.value.map(
+        createUnvalidIngredientDraft,
+    );
+    if (editableUnvalidIngredients.value.length === 0) {
+        showUnvalidModal.value = false;
+    }
+}
+
+async function saveUnvalidIngredient(draft) {
+    const nextSaving = new Set(savingIngredientIds.value);
+    nextSaving.add(draft.ingredient_id);
+    savingIngredientIds.value = nextSaving;
+    try {
+        const recipeNote = await fetchNote(props.token, draft.recipe_note_id);
+        const customData = JSON.parse(
+            JSON.stringify(
+                recipeNote.plugin?.config || recipeNote.custom_data || {},
+            ),
+        );
+        const ingredients = Array.isArray(customData.ingredients)
+            ? customData.ingredients
+            : [];
+        const updatedIngredients = ingredients.map((ingredient) => {
+            if (ingredient.id !== draft.ingredient_id) return ingredient;
+            return {
+                ...ingredient,
+                amount: normalizeString(draft.amount),
+                unit: normalizeString(draft.unit),
+                non_metric_amount: normalizeString(draft.non_metric_amount),
+                non_metric_unit: normalizeString(draft.non_metric_unit),
+                metric_validated: effectiveMetricValidated(draft),
+            };
+        });
+
+        await updateNote(
+            props.token,
+            recipeNote.id,
+            recipeNote.title || "",
+            recipeNote.body || "",
+            recipeNote.parent_id,
+            recipeNote.type || "recipe",
+            {
+                ...customData,
+                ingredients: updatedIngredients,
+            },
+            recipeNote.tags || [],
+        );
+
+        await refreshOverviewData();
+    } catch (e) {
+        console.error("save unvalid ingredient:", e);
+    } finally {
+        const next = new Set(savingIngredientIds.value);
+        next.delete(draft.ingredient_id);
+        savingIngredientIds.value = next;
+    }
+}
+
+function viewRecipeFromModal(recipeNoteId) {
+    showUnvalidModal.value = false;
+    emit("selectNote", recipeNoteId);
 }
 </script>
 
@@ -844,13 +1049,47 @@ function formatIssueType(issueType) {
     font-size: 0.9rem;
 }
 
+.unvalid-edit-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.unvalid-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--font-color-secondary);
+}
+
+.unvalid-checkbox-field {
+    justify-content: end;
+}
+
+.unvalid-input,
+.unvalid-select {
+    width: 100%;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.9rem;
+}
+
 .unvalid-values {
     margin-top: 0.45rem;
     font-size: 0.92rem;
 }
 
+.unvalid-actions-row {
+    margin-top: 0.55rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
 .unvalid-issue {
-    margin-top: 0.35rem;
     color: var(--heading-color);
     font-size: 0.85rem;
 }

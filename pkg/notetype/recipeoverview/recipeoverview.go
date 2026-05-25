@@ -100,10 +100,9 @@ type GroceryList struct {
 }
 
 type GroceryItem struct {
-	Name      string `json:"name"`
-	Amount    string `json:"amount"`
-	Unit      string `json:"unit"`
-	NonMetric string `json:"non_metric,omitempty"`
+	Name   string `json:"name"`
+	Amount string `json:"amount"`
+	Unit   string `json:"unit"`
 }
 
 type UnvalidIngredient struct {
