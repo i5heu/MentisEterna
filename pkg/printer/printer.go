@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"os"
 )
 
@@ -241,8 +242,10 @@ type FilePrinter struct{ f *os.File }
 func NewFilePrinter(devicePath string) (*FilePrinter, error) {
 	f, err := os.OpenFile(devicePath, os.O_WRONLY, 0)
 	if err != nil {
+		log.Printf("printer: open device %s failed: %v", devicePath, err)
 		return nil, fmt.Errorf("printer: open %s: %w", devicePath, err)
 	}
+	log.Printf("printer: opened device %s", devicePath)
 	return &FilePrinter{f: f}, nil
 }
 
@@ -270,9 +273,11 @@ func FindUSBLP() (Printer, error) {
 	}
 	for _, path := range candidates {
 		if _, err := os.Stat(path); err == nil {
+			log.Printf("printer: found device node %s", path)
 			return NewFilePrinter(path)
 		}
 	}
+	log.Printf("printer: no usblp device nodes found at %v", candidates)
 	return nil, fmt.Errorf("printer: no USB printer found at %v", candidates)
 }
 
@@ -282,8 +287,15 @@ func FindUSBLP() (Printer, error) {
 
 // Send writes the contents of buf to the given printer.
 func Send(pr Printer, buf *Buf) error {
-	_, err := pr.Write(buf.Bytes())
-	return err
+	data := buf.Bytes()
+	log.Printf("printer: sending %d bytes to printer", len(data))
+	n, err := pr.Write(data)
+	if err != nil {
+		log.Printf("printer: write failed after %d bytes: %v", n, err)
+		return err
+	}
+	log.Printf("printer: write succeeded (%d bytes)", n)
+	return nil
 }
 
 // SendAndCut writes buf to the printer, appends a partial cut + line feeds,
@@ -291,9 +303,20 @@ func Send(pr Printer, buf *Buf) error {
 func SendAndCut(pr Printer, buf *Buf) error {
 	buf.Feed(4)
 	buf.PartialCut()
-	_, err := pr.Write(buf.Bytes())
-	if closeErr := pr.Close(); closeErr != nil && err == nil {
-		err = closeErr
+	data := buf.Bytes()
+	log.Printf("printer: sending %d bytes to printer (with feed + cut)", len(data))
+	n, err := pr.Write(data)
+	if err != nil {
+		log.Printf("printer: write failed after %d bytes: %v", n, err)
+	}
+	if closeErr := pr.Close(); closeErr != nil {
+		log.Printf("printer: close failed: %v", closeErr)
+		if err == nil {
+			err = closeErr
+		}
+	}
+	if err == nil {
+		log.Printf("printer: send+cut succeeded (%d bytes)", n)
 	}
 	return err
 }

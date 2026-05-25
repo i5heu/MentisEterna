@@ -83,9 +83,11 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
 ## TODO Bugs
 - [x] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
-- [ ] Remove Light Mode, Only Dark Mode is supported.
-- [ ] Font Color of the Task Note Type > .status-badge is not visible in Dark Mode.
+- [x] Remove Light Mode, Only Dark Mode is supported.
+- [ ] Font Color of the Task Note Type > .status-badge is not visible because fontcolor is to dark.
 - [ ] Click on Note Title should open the note in main view.
+- [ ] Printer Needs a connection section in settings.
+- [ ] AI API needs a connection section in settings to test connection and show error messages.
 
 ## TODO Future
 - [x] OCR for images and pdfs
@@ -276,16 +278,14 @@ For printing recipes (and other note types) on a thermal receipt printer, the se
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `THERMAL_PRINTER_VID` | `08a6` | USB vendor ID in hex (e.g. `08a6` for Epson) |
-| `THERMAL_PRINTER_PID` | `003d` | USB product ID in hex (e.g. `003d` for Epson TM-T88III) |
+| `THERMAL_PRINTER_USB_ID` | (none — raw USB disabled) | Combined USB vendor:product ID in hex, e.g. `08a6:003d` for Epson TM-T88III |
 | `THERMAL_PRINTER_DEVICE` | (auto-detect) | Explicit device path, e.g. `/dev/usb/lp0` — bypasses USB ID discovery |
 
 ### Discovery order
 
 1. If `THERMAL_PRINTER_DEVICE` is set, open that device node directly (usblp path).
 2. Else try `/dev/usb/lp*` device nodes (usblp kernel module).
-3. Else scan `/sys/bus/usb/devices/` for a device matching `THERMAL_PRINTER_VID`/`THERMAL_PRINTER_PID` and use raw USB bulk transfers.
-4. As a final fallback, try `04b8:0202` (Epson TM-T88IV).
+3. Else if `THERMAL_PRINTER_USB_ID` is set, scan `/sys/bus/usb/devices/` for a device matching the given vendor:product ID and use raw USB bulk transfers.
 
 ### Common printer IDs
 
