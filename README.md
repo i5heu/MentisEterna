@@ -74,7 +74,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 - [x] Go test bug "no usblp device nodes found at [/dev/usb/lp0 /dev/usb/lp1 /dev/usb/lp2]"
 - [ ] On S3: files that are not in our file list but present in the bucket should be deleted with a button in settings: "Delete Unknown Files"
-- [ ] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
+- [x] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
+- [ ] Grocery List needs to round to 2 decimal places.
 
 ## TODO Future
 - [x] OCR for images and pdfs
