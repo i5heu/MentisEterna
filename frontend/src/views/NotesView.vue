@@ -448,9 +448,12 @@
                         class="chat-message chat-message-child"
                     >
                         <div class="message-meta">
-                            <span class="message-author">{{
-                                child.title || "Untitled"
-                            }}</span>
+                            <span
+                                class="message-author clickable"
+                                @click="selectNote(child)"
+                                title="Open in main view"
+                                >{{ child.title || "Untitled" }}</span
+                            >
                             <span class="message-date">{{
                                 fmtDateFull(child.created_at)
                             }}</span>
@@ -711,9 +714,12 @@
                     class="chat-message chat-message-child"
                 >
                     <div class="message-meta">
-                        <span class="message-author">{{
-                            tc.title || "Untitled"
-                        }}</span>
+                        <span
+                            class="message-author clickable"
+                            @click="selectThreadChild(tc)"
+                            title="Open in thread"
+                            >{{ tc.title || "Untitled" }}</span
+                        >
                         <span class="message-date">{{
                             fmtDateFull(tc.created_at)
                         }}</span>
@@ -3238,6 +3244,14 @@ function onPopstate() {
     font-weight: 600;
     font-size: 0.9rem;
     color: var(--header-title-color);
+}
+
+.message-author.clickable {
+    cursor: pointer;
+}
+
+.message-author.clickable:hover {
+    color: var(--accent-amber);
 }
 
 .message-date {
