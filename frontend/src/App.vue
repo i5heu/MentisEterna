@@ -46,6 +46,8 @@ function onLogout() {
 }
 
 :root {
+    color-scheme: dark;
+
     /* Background Foundations */
     --html-bg: #01101f;
     --body-bg: #051b2e;
@@ -78,6 +80,7 @@ function onLogout() {
 }
 
 html {
+    color-scheme: dark;
     background: var(--html-bg);
 }
 
