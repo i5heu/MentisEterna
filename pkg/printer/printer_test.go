@@ -3,6 +3,8 @@ package printer
 import (
 	"bytes"
 	"errors"
+	"image"
+	"image/color"
 	"os"
 	"testing"
 )
@@ -207,6 +209,26 @@ func TestSendAndCutReturnsCloseError(t *testing.T) {
 	err := SendAndCut(pr, buf)
 	if !errors.Is(err, closeErr) {
 		t.Fatalf("SendAndCut error = %v, want %v", err, closeErr)
+	}
+}
+
+func TestImageBitColumn(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.Black)
+
+	b := new(Buf)
+	if err := b.ImageBitColumnWidth(img, 1); err != nil {
+		t.Fatalf("ImageBitColumnWidth returned error: %v", err)
+	}
+	out := b.Bytes()
+	if len(out) == 0 {
+		t.Fatal("expected image output bytes")
+	}
+	if !bytes.Contains(out, []byte{ESC, '*', 33, 1, 0}) {
+		t.Fatalf("expected ESC * 24-dot image command, got %v", out)
+	}
+	if !bytes.Contains(out, []byte{ESC, '2'}) {
+		t.Fatalf("expected line spacing reset command, got %v", out)
 	}
 }
 

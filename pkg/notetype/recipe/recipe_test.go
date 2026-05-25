@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype/plugintest"
+	"github.com/i5heu/MentisEterna/pkg/printer"
 )
 
 func TestRecipePlugin(t *testing.T) {
@@ -132,6 +133,51 @@ func TestFormatMarkdownForPrintPreservesParagraphsAndCleansImages(t *testing.T) 
 	}
 	if !strings.Contains(joined, "See details") {
 		t.Fatalf("expected markdown links to keep link text, got: %q", joined)
+	}
+}
+
+func TestMarkdownPrintBlocksExtractImageFileID(t *testing.T) {
+	body := "Intro\n\n![Cake slice](/file/12/34)\n\nOutro"
+	blocks := MarkdownPrintBlocks(body, 40)
+
+	var foundImage bool
+	for _, block := range blocks {
+		if block.Kind == MarkdownPrintBlockImage {
+			foundImage = true
+			if block.FileID != 34 {
+				t.Fatalf("expected file id 34, got %d", block.FileID)
+			}
+			if block.Alt != "Cake slice" {
+				t.Fatalf("expected alt text %q, got %q", "Cake slice", block.Alt)
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatal("expected image block to be extracted")
+	}
+}
+
+func TestFormatRecipeReceiptWithImagesUsesImageCallback(t *testing.T) {
+	var payload Payload
+	if err := json.Unmarshal([]byte(`{"ingredients":[{"name":"Sugar","amount":"100","unit":"g"}],"rating":5}`), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var printedFileID int64
+	buf := FormatRecipeReceiptWithImages(payload, "Cookies", "![Cookie](/file/1/22)", func(b *printer.Buf, fileID int64) error {
+		printedFileID = fileID
+		b.Text("[img]")
+		return nil
+	})
+	s := string(buf.Bytes())
+	if printedFileID != 22 {
+		t.Fatalf("expected callback file id 22, got %d", printedFileID)
+	}
+	if !strings.Contains(s, "[img]") {
+		t.Fatal("expected image callback output to be present in receipt buffer")
+	}
+	if strings.Contains(s, "[Image: Cookie]") {
+		t.Fatal("expected placeholder not to be used when image callback succeeds")
 	}
 }
 
