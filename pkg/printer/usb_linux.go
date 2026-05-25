@@ -10,6 +10,7 @@ package printer
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,6 +50,7 @@ type usbDevice struct {
 func findUSBDevices(vendorID, productID uint16) ([]usbDevice, error) {
 	entries, err := os.ReadDir("/sys/bus/usb/devices/")
 	if err != nil {
+		log.Printf("printer: cannot scan /sys/bus/usb/devices: %v", err)
 		return nil, fmt.Errorf("printer: scan /sys/bus/usb/devices: %w", err)
 	}
 
@@ -119,6 +121,7 @@ func findUSBDevices(vendorID, productID uint16) ([]usbDevice, error) {
 		})
 	}
 
+	log.Printf("printer: found %d USB device(s) matching %04x:%04x", len(found), vendorID, productID)
 	return found, nil
 }
 
@@ -181,8 +184,10 @@ type usbDevFSPrinter struct {
 // claims interface 0, and returns a Printer ready for bulk writes.
 func newUSBDevFSPrinter(dev usbDevice) (*usbDevFSPrinter, error) {
 	devPath := fmt.Sprintf("/dev/bus/usb/%03d/%03d", dev.bus, dev.dev)
+	log.Printf("printer: opening USB device %04x:%04x at %s (epOut=0x%02x)", dev.vendor, dev.product, devPath, dev.epOut)
 	f, err := os.OpenFile(devPath, os.O_RDWR, 0)
 	if err != nil {
+		log.Printf("printer: open %s failed: %v", devPath, err)
 		return nil, fmt.Errorf("printer: open %s: %w", devPath, err)
 	}
 
@@ -195,9 +200,11 @@ func newUSBDevFSPrinter(dev usbDevice) (*usbDevFSPrinter, error) {
 		uintptr(unsafe.Pointer(&iface)),
 	); errno != 0 {
 		f.Close()
-		// Try to detach kernel driver first, then retry.
+		log.Printf("printer: claim interface 0 on %s failed: %v (is another driver like usblp holding it?)", devPath, errno)
 		return nil, fmt.Errorf("printer: claim interface 0 on %s: %v (is another driver like usblp holding it?)", devPath, errno)
 	}
+
+	log.Printf("printer: successfully claimed interface 0 on %s", devPath)
 
 	return &usbDevFSPrinter{f: f, epOut: dev.epOut}, nil
 }
@@ -208,6 +215,7 @@ func (p *usbDevFSPrinter) Write(data []byte) (int, error) {
 		return 0, nil
 	}
 
+	log.Printf("printer: sending %d bytes to ep 0x%02x", len(data), p.epOut)
 	bulk := usbdevfsBulkTransfer{
 		ep:      uint32(p.epOut),
 		len:     uint32(len(data)),
@@ -222,9 +230,11 @@ func (p *usbDevFSPrinter) Write(data []byte) (int, error) {
 		uintptr(unsafe.Pointer(&bulk)),
 	)
 	if errno != 0 {
+		log.Printf("printer: bulk write to ep 0x%02x failed after sending %d bytes: %v", p.epOut, len(data), errno)
 		return 0, fmt.Errorf("printer: bulk write to ep 0x%02x: %v", p.epOut, errno)
 	}
 
+	log.Printf("printer: bulk write to ep 0x%02x succeeded (%d bytes)", p.epOut, len(data))
 	return len(data), nil
 }
 
@@ -232,13 +242,19 @@ func (p *usbDevFSPrinter) Write(data []byte) (int, error) {
 func (p *usbDevFSPrinter) Close() error {
 	// Release interface 0.
 	iface := uint32(0)
-	syscall.Syscall(
+	if _, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
 		p.f.Fd(),
 		usbdevfsReleaseInterface,
 		uintptr(unsafe.Pointer(&iface)),
-	)
-	return p.f.Close()
+	); errno != 0 {
+		log.Printf("printer: release interface 0 failed: %v", errno)
+	}
+	if err := p.f.Close(); err != nil {
+		log.Printf("printer: close device failed: %v", err)
+		return err
+	}
+	return nil
 }
 
 // FindUSBByID locates a USB printer by vendor and product ID using raw
@@ -248,11 +264,13 @@ func (p *usbDevFSPrinter) Close() error {
 //
 // Example: FindUSBByID(0x08A6, 0x003D) — Epson TM-T88III.
 func FindUSBByID(vendorID, productID uint16) (Printer, error) {
+	log.Printf("printer: searching for USB device %04x:%04x", vendorID, productID)
 	devs, err := findUSBDevices(vendorID, productID)
 	if err != nil {
 		return nil, err
 	}
 	if len(devs) == 0 {
+		log.Printf("printer: USB device %04x:%04x not found in /sys/bus/usb/devices", vendorID, productID)
 		return nil, fmt.Errorf("printer: USB device %04x:%04x not found", vendorID, productID)
 	}
 
@@ -262,62 +280,71 @@ func FindUSBByID(vendorID, productID uint16) (Printer, error) {
 // FindPrinter tries multiple strategies to locate a thermal receipt printer:
 //  1. THERMAL_PRINTER_DEVICE env var (explicit device path, e.g. /dev/usb/lp0)
 //  2. /dev/usb/lp* (usblp kernel module)
-//  3. Raw USB by vendor/product ID from THERMAL_PRINTER_VID / THERMAL_PRINTER_PID
-//     env vars (default: 08a6:003d — Epson TM-T88III)
-//  4. Raw USB by vendor/product ID 0x04b8:0x0202 (Epson TM-T88IV)
+//  3. Raw USB by vendor/product ID from THERMAL_PRINTER_USB_ID env var
+//     (format: "vid:pid", e.g. "08a6:003d")
 //
 // Returns the first successful connection.
 func FindPrinter() (Printer, error) {
 	// Strategy 1: explicit device path from env var.
 	if dev := os.Getenv("THERMAL_PRINTER_DEVICE"); dev != "" {
+		log.Printf("printer: trying THERMAL_PRINTER_DEVICE=%s", dev)
 		if pr, err := NewFilePrinter(dev); err == nil {
+			log.Printf("printer: connected via THERMAL_PRINTER_DEVICE=%s", dev)
 			return pr, nil
+		} else {
+			log.Printf("printer: THERMAL_PRINTER_DEVICE=%s failed: %v", dev, err)
 		}
 	}
 
 	// Strategy 2: usblp character device auto-detect.
+	log.Printf("printer: trying /dev/usb/lp* auto-detect")
 	if lp, err := FindUSBLP(); err == nil {
+		log.Printf("printer: connected via usblp device node")
 		return lp, nil
+	} else {
+		log.Printf("printer: /dev/usb/lp* auto-detect failed: %v", err)
 	}
 
-	// Strategy 3: raw USB by configured vendor/product ID.
-	vid, pid := PrinterUSBIDs()
-	if pr, err := FindUSBByID(vid, pid); err == nil {
-		return pr, nil
-	}
-
-	// Strategy 4: Epson TM-T88IV (common variant) — only if the user hasn't
-	// configured a custom VID/PID.
-	defaultVID, defaultPID := uint16(0x08A6), uint16(0x003D)
-	if vid == defaultVID && pid == defaultPID {
-		if pr, err := FindUSBByID(0x04b8, 0x0202); err == nil {
+	// Strategy 3: raw USB by THERMAL_PRINTER_USB_ID (format: "vid:pid").
+	if vid, pid, ok := PrinterUSBID(); ok {
+		log.Printf("printer: trying raw USB %04x:%04x from THERMAL_PRINTER_USB_ID", vid, pid)
+		if pr, err := FindUSBByID(vid, pid); err == nil {
 			return pr, nil
+		} else {
+			log.Printf("printer: raw USB %04x:%04x failed: %v", vid, pid, err)
 		}
 	}
 
+	log.Printf("printer: all discovery strategies exhausted — no printer found")
 	return nil, fmt.Errorf(
-		"printer: no thermal printer found (tried THERMAL_PRINTER_DEVICE, /dev/usb/lp*, USB %04x:%04x)",
-		vid, pid,
+		"printer: no thermal printer found (tried THERMAL_PRINTER_DEVICE, /dev/usb/lp*)",
 	)
 }
 
-// PrinterUSBIDs returns the USB vendor and product IDs to use for printer
-// discovery.  Reads from THERMAL_PRINTER_VID and THERMAL_PRINTER_PID
-// environment variables (hex format, e.g. "08a6" and "003d").
-// Defaults to 0x08A6:0x003D (Epson TM-T88III).
-func PrinterUSBIDs() (vid, pid uint16) {
-	vid = 0x08A6
-	pid = 0x003D
+// parseUSBID parses a "vid:pid" string (e.g. "08a6:003d") into two uint16 values.
+func parseUSBID(s string) (vid, pid uint16, ok bool) {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	v, err := strconv.ParseUint(strings.TrimSpace(parts[0]), 16, 16)
+	if err != nil {
+		return 0, 0, false
+	}
+	p, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 16, 16)
+	if err != nil {
+		return 0, 0, false
+	}
+	return uint16(v), uint16(p), true
+}
 
-	if s := os.Getenv("THERMAL_PRINTER_VID"); s != "" {
-		if v, err := strconv.ParseUint(s, 16, 16); err == nil {
-			vid = uint16(v)
-		}
+// PrinterUSBID returns the USB vendor and product IDs from the
+// THERMAL_PRINTER_USB_ID environment variable (format: "vid:pid", e.g. "08a6:003d").
+// Returns (0, 0, false) if the variable is not set or invalid.
+func PrinterUSBID() (vid, pid uint16, ok bool) {
+	s := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_USB_ID"))
+	if s == "" {
+		return 0, 0, false
 	}
-	if s := os.Getenv("THERMAL_PRINTER_PID"); s != "" {
-		if v, err := strconv.ParseUint(s, 16, 16); err == nil {
-			pid = uint16(v)
-		}
-	}
-	return vid, pid
+	return parseUSBID(s)
 }
