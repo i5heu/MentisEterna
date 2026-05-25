@@ -428,6 +428,7 @@
                             :uiSchema="
                                 selected.ui_schema || selected.plugin?.view
                             "
+                            :actionError="saveError"
                             @selectNote="(id) => selectNoteById(id)"
                             @update:customData="
                                 (d) => {
@@ -927,6 +928,7 @@ import {
     searchNotes,
     setNotePin,
     fetchTags,
+    pluginActionV2,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
 import NoteAttachments from "../components/NoteAttachments.vue";
@@ -1569,66 +1571,38 @@ async function save() {
     }
 }
 
-async function importRecipes(recipes) {
-    if (!Array.isArray(recipes) || recipes.length === 0 || !selected.value) {
+async function importRecipes(importJSON) {
+    if (!selected.value || typeof importJSON !== "string") {
         return;
     }
 
     saveError.value = "";
     saving.value = true;
     try {
-        const parentID = selected.value.parent_id ?? null;
-        const tags = Array.isArray(editTags.value) ? [...editTags.value] : [];
-        const [firstRecipe, ...otherRecipes] = recipes;
-
-        let firstImported;
-        if (selected.value.id) {
-            firstImported = await updateNote(
-                props.token,
-                selected.value.id,
-                firstRecipe.title || "",
-                firstRecipe.body || "",
-                parentID,
-                "recipe",
-                firstRecipe.customData || null,
-                tags,
-            );
-        } else {
-            firstImported = await createNote(
-                props.token,
-                firstRecipe.title || "",
-                firstRecipe.body || "",
-                parentID,
-                "recipe",
-                firstRecipe.customData || null,
-                tags,
-            );
-        }
-
-        for (const recipe of otherRecipes) {
-            await createNote(
-                props.token,
-                recipe.title || "",
-                recipe.body || "",
-                parentID,
-                "recipe",
-                recipe.customData || null,
-                tags,
-            );
-        }
-
+        await ensureSelectedNoteSaved();
+        const result = await pluginActionV2(
+            props.token,
+            selected.value.id,
+            "import_recipes_json",
+            { import_json: importJSON },
+        );
         await loadNotes();
-        selected.value = firstImported;
-        editTitle.value = firstImported.title;
-        editBody.value = firstImported.body;
-        noteType.value = firstImported.type || "recipe";
+        const refreshed = await fetchNote(
+            props.token,
+            result?.primary_note_id || selected.value.id,
+        );
+        selected.value = refreshed;
+        editTitle.value = refreshed.title;
+        editBody.value = refreshed.body;
+        noteType.value = refreshed.type || "recipe";
         customData.value =
-            firstImported.plugin?.config || firstImported.custom_data || null;
+            refreshed.plugin?.config || refreshed.custom_data || null;
+        editTags.value = refreshed.tags || [];
         dirty.value = false;
         isEditing.value = false;
-        populateParentSearch(firstImported);
-        loadChildren(firstImported.id);
-        await loadAncestors(firstImported.id);
+        populateParentSearch(refreshed);
+        loadChildren(refreshed.id);
+        await loadAncestors(refreshed.id);
         pushURL();
     } catch (e) {
         saveError.value = e.message;

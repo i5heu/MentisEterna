@@ -601,6 +601,7 @@ function formatDate(iso) {
 .btn-print {
     flex-shrink: 0;
     font-size: 0.95rem;
+    margin: 0 1em;
 }
 
 .btn-delete {

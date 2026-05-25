@@ -190,6 +190,15 @@ func (p *RecipePlugin) Manifest() notetype.Manifest {
 				RefreshStrategy: "none",
 				SuccessMessage:  "Recipe printed",
 			},
+			{
+				ID:              "import_recipes_json",
+				Label:           "Import Recipes JSON",
+				Description:     "Replace this recipe with the first imported recipe and create additional recipe notes for the remaining items",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"import_json":{"type":"string","description":"JSON document containing a top-level recipes array"}},"required":["import_json"],"additionalProperties":false}`),
+				Dangerous:       false,
+				RefreshStrategy: "reload",
+				SuccessMessage:  "Recipes imported",
+			},
 		},
 	}
 }
@@ -279,6 +288,11 @@ func (p *RecipePlugin) HandleAction(ctx context.Context, db *sql.DB, userID int,
 			return nil, fmt.Errorf("no database available")
 		}
 		return p.printRecipe(ctx, db, userID, noteID, params)
+	case "import_recipes_json":
+		if db == nil {
+			return nil, fmt.Errorf("no database available")
+		}
+		return p.importRecipesJSON(ctx, db, userID, noteID, params)
 	default:
 		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
 	}

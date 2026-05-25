@@ -1,6 +1,7 @@
 package recipe
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -91,4 +92,106 @@ func TestFormatRecipeReceipt(t *testing.T) {
 	}
 
 	t.Logf("Buffer length: %d bytes", len(b))
+}
+
+func TestImportRecipesJSONAction(t *testing.T) {
+	d := plugintest.DB(t, &RecipePlugin{})
+	defer d.Close()
+
+	parentRes, err := d.Exec(`INSERT INTO notes (title, type) VALUES ('Meals', 'standard')`)
+	if err != nil {
+		t.Fatalf("insert parent: %v", err)
+	}
+	parentID, _ := parentRes.LastInsertId()
+
+	noteID := plugintest.CreateNote(t, d, "Existing Recipe", &RecipePlugin{})
+	if _, err := d.Exec(`UPDATE notes SET parent_id = ? WHERE id = ?`, parentID, noteID); err != nil {
+		t.Fatalf("set parent: %v", err)
+	}
+	if _, err := d.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, noteID, `Old body`); err != nil {
+		t.Fatalf("insert old body: %v", err)
+	}
+
+	importDoc, err := json.Marshal(map[string]any{
+		"recipes": []map[string]any{
+			{
+				"title": "Imported Chili",
+				"body":  "Simmer slowly.",
+				"ingredients": []map[string]any{
+					{"name": "Beans", "amount": 2, "unit": "pcs"},
+				},
+				"servings": 4,
+			},
+			{
+				"title": "Imported Soup",
+				"body":  "Blend and serve.",
+				"ingredients": []map[string]any{
+					{"name": "Tomatoes", "amount": 500, "unit": "g"},
+				},
+				"total_time": "25m",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal import doc: %v", err)
+	}
+	params, err := json.Marshal(map[string]any{"import_json": string(importDoc)})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	plugin := &RecipePlugin{}
+	result, err := plugin.HandleAction(context.Background(), d.DB, 0, noteID, "import_recipes_json", params)
+	if err != nil {
+		t.Fatalf("HandleAction import_recipes_json: %v", err)
+	}
+	out, ok := result.(importRecipesJSONResult)
+	if !ok {
+		t.Fatalf("expected importRecipesJSONResult, got %T", result)
+	}
+	if out.PrimaryNoteID != noteID {
+		t.Fatalf("expected primary note id %d, got %d", noteID, out.PrimaryNoteID)
+	}
+	if out.ImportedCount != 2 {
+		t.Fatalf("expected imported count 2, got %d", out.ImportedCount)
+	}
+	if len(out.CreatedNoteIDs) != 1 {
+		t.Fatalf("expected 1 created note id, got %d", len(out.CreatedNoteIDs))
+	}
+
+	var title string
+	var latestBody string
+	if err := d.QueryRow(`SELECT title FROM notes WHERE id = ?`, noteID).Scan(&title); err != nil {
+		t.Fatalf("query updated title: %v", err)
+	}
+	if err := d.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&latestBody); err != nil {
+		t.Fatalf("query updated body: %v", err)
+	}
+	if title != "Imported Chili" {
+		t.Fatalf("expected updated title %q, got %q", "Imported Chili", title)
+	}
+	if latestBody != "Simmer slowly." {
+		t.Fatalf("expected updated body %q, got %q", "Simmer slowly.", latestBody)
+	}
+
+	var ingredientCount int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM ct_recipe_ingredients WHERE note_id = ?`, noteID).Scan(&ingredientCount); err != nil {
+		t.Fatalf("query primary ingredient count: %v", err)
+	}
+	if ingredientCount != 1 {
+		t.Fatalf("expected 1 primary ingredient, got %d", ingredientCount)
+	}
+
+	createdID := out.CreatedNoteIDs[0]
+	var createdTitle string
+	var createdParentID int64
+	if err := d.QueryRow(`SELECT title, parent_id FROM notes WHERE id = ?`, createdID).Scan(&createdTitle, &createdParentID); err != nil {
+		t.Fatalf("query created note: %v", err)
+	}
+	if createdTitle != "Imported Soup" {
+		t.Fatalf("expected created title %q, got %q", "Imported Soup", createdTitle)
+	}
+	if createdParentID != parentID {
+		t.Fatalf("expected created parent id %d, got %d", parentID, createdParentID)
+	}
 }

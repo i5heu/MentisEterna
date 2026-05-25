@@ -128,6 +128,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] Recipie Note Type: If Empty show a import Recipe via JSON button - also provide the JSON schema
   - [ ] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
   - [x] Print Grocery List and Recipes with a button via a recipe printer.
+  - [x] API based Recipe Import instead of frontend import.
+  - [ ] Add mg to allowed units.
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
     - [ ] SubTasks (Child Task Notes)

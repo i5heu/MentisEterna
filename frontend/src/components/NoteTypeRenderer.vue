@@ -9,6 +9,7 @@
             :editing="editing"
             :customData="resolvedCustomData"
             :uiSchema="resolvedUiSchema"
+            :actionError="actionError"
             @selectNote="(id) => $emit('selectNote', id)"
             @update:customData="(d) => $emit('update:customData', d)"
             @import:recipes="(recipes) => $emit('import:recipes', recipes)"
@@ -52,6 +53,7 @@ const props = defineProps({
     editing: { type: Boolean, default: false },
     customData: { type: Object, default: null },
     uiSchema: { type: Object, default: null },
+    actionError: { type: String, default: "" },
 });
 
 defineEmits(["selectNote", "update:customData", "import:recipes"]);

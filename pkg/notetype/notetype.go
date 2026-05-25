@@ -126,6 +126,19 @@ type ActionHandler interface {
 // The server translates this to HTTP 404.
 var ErrUnknownAction = errors.New("unknown action")
 
+// BadRequestError indicates that the caller supplied invalid action input.
+// The server translates this to HTTP 400 and returns the message verbatim.
+type BadRequestError struct {
+	Message string
+}
+
+func (e *BadRequestError) Error() string {
+	if e == nil {
+		return "bad request"
+	}
+	return e.Message
+}
+
 // ValidatePlugin checks that a plugin's implementation matches its declared capabilities.
 // Returns nil if the plugin is valid, or an error describing the inconsistency.
 func ValidatePlugin(p Plugin) error {
