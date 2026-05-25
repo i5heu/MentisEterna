@@ -10,11 +10,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
 const pluginID = "recipe_overview"
+
+var firstMarkdownImagePattern = regexp.MustCompile(`!\[[^\]]*\]\(([^)\s]+(?:\s+[^)]*)?)\)`)
 
 type RecipeOverviewPlugin struct{}
 
@@ -81,6 +85,7 @@ type RecipeSummary struct {
 	InRecentList    bool   `json:"in_recent_list"` // true if this recipe appeared in any grocery list in the last 3 weeks
 	Freezable       bool   `json:"freezable"`
 	PreCookServings string `json:"pre_cook_servings"`
+	ThumbnailURL    string `json:"thumbnail_url,omitempty"`
 }
 
 type GroceryList struct {
@@ -97,6 +102,22 @@ type GroceryItem struct {
 	Name   string `json:"name"`
 	Amount string `json:"amount"`
 	Unit   string `json:"unit"`
+}
+
+func extractFirstMarkdownImageURL(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	match := firstMarkdownImagePattern.FindStringSubmatch(body)
+	if len(match) < 2 {
+		return ""
+	}
+	url := strings.TrimSpace(match[1])
+	if idx := strings.IndexAny(url, " \t\n"); idx >= 0 {
+		url = url[:idx]
+	}
+	return strings.Trim(url, "<>")
 }
 
 func (p *RecipeOverviewPlugin) CronJobs() []notetype.CronJob {
@@ -153,7 +174,14 @@ func (p *RecipeOverviewPlugin) Manifest() notetype.Manifest {
 func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID int64) (any, error) {
 	// 1. Find all recipe notes and summarize them, flagging those in recent lists.
 	rows, err := db.Query(`
-		SELECT n.id, n.title, COUNT(ri.id) AS ingredient_count,
+		SELECT
+			n.id,
+			n.title,
+			(
+				SELECT COUNT(*)
+				FROM ct_recipe_ingredients ri
+				WHERE ri.note_id = n.id
+			) AS ingredient_count,
 			EXISTS(
 				SELECT 1 FROM ct_recipe_overview_grocery_list_recipes glr
 				JOIN ct_recipe_overview_grocery_lists gl ON gl.id = glr.grocery_list_id
@@ -161,12 +189,27 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 				AND gl.generated_at >= datetime('now', '-21 days')
 			) AS in_recent_list,
 			COALESCE(rm.freezable, 0) AS freezable,
-			COALESCE(rm.pre_cook_servings, '') AS pre_cook_servings
+			COALESCE(rm.pre_cook_servings, '') AS pre_cook_servings,
+			COALESCE(u.body, '') AS body,
+			COALESCE((
+				SELECT printf('/file/%d/%d', n.id, f.id)
+				FROM files f
+				JOIN files_refs fr ON fr.file_id = f.id
+				WHERE fr.note_id = n.id
+				  AND f.deleted_at IS NULL
+				  AND f.mime_type LIKE 'image/%'
+				ORDER BY
+					CASE fr.ref_kind WHEN 'inline' THEN 0 ELSE 1 END,
+					fr.created_at,
+					f.id
+				LIMIT 1
+			), '') AS fallback_thumbnail_url
 		FROM notes n
-		LEFT JOIN ct_recipe_ingredients ri ON ri.note_id = n.id
 		LEFT JOIN ct_recipe_meta rm ON rm.note_id = n.id
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
 		WHERE n.type = 'recipe'
-		GROUP BY n.id
 		ORDER BY n.title
 	`)
 	if err != nil {
@@ -178,10 +221,16 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 	for rows.Next() {
 		var r RecipeSummary
 		var freezableInt int
-		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList, &freezableInt, &r.PreCookServings); err != nil {
+		var body string
+		var fallbackThumbnailURL string
+		if err := rows.Scan(&r.NoteID, &r.Title, &r.IngredientCount, &r.InRecentList, &freezableInt, &r.PreCookServings, &body, &fallbackThumbnailURL); err != nil {
 			return nil, fmt.Errorf("recipe_overview: scan recipe: %w", err)
 		}
 		r.Freezable = freezableInt != 0
+		r.ThumbnailURL = extractFirstMarkdownImageURL(body)
+		if r.ThumbnailURL == "" {
+			r.ThumbnailURL = fallbackThumbnailURL
+		}
 		recipes = append(recipes, r)
 	}
 	if err := rows.Err(); err != nil {
