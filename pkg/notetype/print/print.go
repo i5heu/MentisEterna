@@ -278,7 +278,7 @@ func formatNote(db *sql.DB, noteType string, noteID int64, title string) (*print
 		// Fetch latest body for generic note types.
 		var body string
 		db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&body)
-		return formatGenericForPrint(title, body)
+		return formatGenericForPrint(db, title, body)
 	}
 }
 
@@ -335,14 +335,16 @@ func formatRecipeForPrint(db *sql.DB, noteID int64, title string) (*printer.Buf,
 	var body string
 	db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&body)
 
-	buf := recipe.FormatRecipeReceipt(payload, title, body)
+	buf := recipe.FormatRecipeReceiptWithImages(payload, title, body, func(b *printer.Buf, fileID int64) error {
+		return recipe.PrintNoteImage(context.Background(), b, db, fileID)
+	})
 	preview := recipe.RecipeTextPrint(payload, title, body)
 	return buf, preview, nil
 }
 
 // formatGenericForPrint formats a simple fallback receipt for note types
 // without dedicated formatters.
-func formatGenericForPrint(title string, body string) (*printer.Buf, string, error) {
+func formatGenericForPrint(db *sql.DB, title string, body string) (*printer.Buf, string, error) {
 	w := 48
 	b := new(printer.Buf)
 	b.Init()
@@ -353,13 +355,9 @@ func formatGenericForPrint(title string, body string) (*printer.Buf, string, err
 	b.AlignLeft()
 	b.HLine(w)
 	if strings.TrimSpace(body) != "" {
-		for _, line := range recipe.FormatMarkdownForPrint(body, w-2) {
-			if line == "" {
-				b.Ln()
-				continue
-			}
-			b.Text("  " + line + "\n")
-		}
+		recipe.WriteMarkdownToReceipt(b, body, w-2, func(buf *printer.Buf, fileID int64) error {
+			return recipe.PrintNoteImage(context.Background(), buf, db, fileID)
+		})
 	} else {
 		b.Text("  (no content)\n")
 	}

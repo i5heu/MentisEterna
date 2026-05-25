@@ -4,10 +4,9 @@ go 1.26.2
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.44
+	golang.org/x/image v0.41.0
 	pgregory.net/rapid v1.3.0
 )
-
-require github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 
 require (
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect

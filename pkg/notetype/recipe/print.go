@@ -34,6 +34,16 @@ var (
 //  3. Write formatted text with b.Text(), b.Textf(), etc.
 //  4. Send to a printer.Printer with printer.SendAndCut()
 func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Buf {
+	return formatRecipeReceipt(payload, title, body, nil)
+}
+
+// FormatRecipeReceiptWithImages formats a recipe and prints markdown images
+// as actual ESC/POS bit images when imagePrinter can resolve them.
+func FormatRecipeReceiptWithImages(payload Payload, title string, body string, imagePrinter func(*printer.Buf, int64) error) *printer.Buf {
+	return formatRecipeReceipt(payload, title, body, imagePrinter)
+}
+
+func formatRecipeReceipt(payload Payload, title string, body string, imagePrinter func(*printer.Buf, int64) error) *printer.Buf {
 	b := new(printer.Buf)
 	b.Init()
 	b.BigSize()
@@ -113,13 +123,7 @@ func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Bu
 		b.HLine(w)
 		b.Text("Notes")
 		b.Ln()
-		for _, line := range FormatMarkdownForPrint(body, w-2) {
-			if line == "" {
-				b.Ln()
-				continue
-			}
-			b.Text("  " + line + "\n")
-		}
+		WriteMarkdownToReceipt(b, body, w-2, imagePrinter)
 	}
 
 	b.HLine(w)
@@ -151,44 +155,7 @@ func WrapLines(text string, maxWidth int) []string {
 // FormatMarkdownForPrint converts markdown into readable plain text while
 // preserving paragraphs and common list structure for receipt printing.
 func FormatMarkdownForPrint(markdown string, maxWidth int) []string {
-	if maxWidth <= 0 {
-		return nil
-	}
-
-	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
-	markdown = strings.ReplaceAll(markdown, "\r", "\n")
-
-	var out []string
-	inCodeFence := false
-	for _, rawLine := range strings.Split(markdown, "\n") {
-		lines, blankAfter := markdownLineToPrint(rawLine, maxWidth, &inCodeFence)
-		if len(lines) == 0 {
-			if len(out) > 0 && out[len(out)-1] != "" {
-				out = append(out, "")
-			}
-			continue
-		}
-		for _, line := range lines {
-			if line == "" {
-				if len(out) > 0 && out[len(out)-1] != "" {
-					out = append(out, "")
-				}
-				continue
-			}
-			out = append(out, wrapMarkdownLine(line, maxWidth)...)
-		}
-		if blankAfter && len(out) > 0 && out[len(out)-1] != "" {
-			out = append(out, "")
-		}
-	}
-
-	for len(out) > 0 && out[0] == "" {
-		out = out[1:]
-	}
-	for len(out) > 0 && out[len(out)-1] == "" {
-		out = out[:len(out)-1]
-	}
-	return out
+	return MarkdownPrintLines(markdown, maxWidth)
 }
 
 func markdownLineToPrint(rawLine string, maxWidth int, inCodeFence *bool) ([]string, bool) {
@@ -248,13 +215,9 @@ func cleanMarkdownInline(line string) string {
 	line = markdownImagePattern.ReplaceAllStringFunc(line, func(match string) string {
 		parts := markdownImagePattern.FindStringSubmatch(match)
 		if len(parts) < 2 {
-			return "[Image]"
+			return markdownImagePlaceholder("")
 		}
-		alt := strings.TrimSpace(parts[1])
-		if alt == "" {
-			return "[Image]"
-		}
-		return "[Image: " + alt + "]"
+		return markdownImagePlaceholder(parts[1])
 	})
 	line = markdownLinkPattern.ReplaceAllStringFunc(line, func(match string) string {
 		parts := markdownLinkPattern.FindStringSubmatch(match)

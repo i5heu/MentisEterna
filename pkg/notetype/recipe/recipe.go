@@ -412,7 +412,9 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 	db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&body)
 
 	// Build the ESC/POS buffer.
-	buf := FormatRecipeReceipt(payload, title, body)
+	buf := FormatRecipeReceiptWithImages(payload, title, body, func(b *printer.Buf, fileID int64) error {
+		return PrintNoteImage(ctx, b, db, fileID)
+	})
 
 	// Connect to the printer.
 	var prDev printer.Printer
