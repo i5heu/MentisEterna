@@ -435,6 +435,7 @@
                                     dirty = true;
                                 }
                             "
+                            @import:recipes="importRecipes"
                         />
                         <NoteAttachments
                             :attachments="selected.attachments"
@@ -1560,6 +1561,74 @@ async function save() {
         populateParentSearch(updated);
         loadChildren(updated.id);
         await loadAncestors(updated.id);
+        pushURL();
+    } catch (e) {
+        saveError.value = e.message;
+    } finally {
+        saving.value = false;
+    }
+}
+
+async function importRecipes(recipes) {
+    if (!Array.isArray(recipes) || recipes.length === 0 || !selected.value) {
+        return;
+    }
+
+    saveError.value = "";
+    saving.value = true;
+    try {
+        const parentID = selected.value.parent_id ?? null;
+        const tags = Array.isArray(editTags.value) ? [...editTags.value] : [];
+        const [firstRecipe, ...otherRecipes] = recipes;
+
+        let firstImported;
+        if (selected.value.id) {
+            firstImported = await updateNote(
+                props.token,
+                selected.value.id,
+                firstRecipe.title || "",
+                firstRecipe.body || "",
+                parentID,
+                "recipe",
+                firstRecipe.customData || null,
+                tags,
+            );
+        } else {
+            firstImported = await createNote(
+                props.token,
+                firstRecipe.title || "",
+                firstRecipe.body || "",
+                parentID,
+                "recipe",
+                firstRecipe.customData || null,
+                tags,
+            );
+        }
+
+        for (const recipe of otherRecipes) {
+            await createNote(
+                props.token,
+                recipe.title || "",
+                recipe.body || "",
+                parentID,
+                "recipe",
+                recipe.customData || null,
+                tags,
+            );
+        }
+
+        await loadNotes();
+        selected.value = firstImported;
+        editTitle.value = firstImported.title;
+        editBody.value = firstImported.body;
+        noteType.value = firstImported.type || "recipe";
+        customData.value =
+            firstImported.plugin?.config || firstImported.custom_data || null;
+        dirty.value = false;
+        isEditing.value = false;
+        populateParentSearch(firstImported);
+        loadChildren(firstImported.id);
+        await loadAncestors(firstImported.id);
         pushURL();
     } catch (e) {
         saveError.value = e.message;
