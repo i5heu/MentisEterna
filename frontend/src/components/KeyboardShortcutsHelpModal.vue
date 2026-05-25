@@ -33,7 +33,8 @@ const props = defineProps({
     title: { type: String, default: "Keyboard Shortcuts" },
     subtitle: {
         type: String,
-        default: "Hold Alt to reveal shortcut badges over relevant controls.",
+        default:
+            "Hold Ctrl and press the shown key. After 2 seconds, normal browser Ctrl shortcuts resume.",
     },
     items: {
         type: Array,

@@ -137,9 +137,7 @@ function normalizeShortcutDefinition(definition, index) {
         group: definition.group || "General",
         keys: keyList,
         parsedKeys: keyList.map(parseShortcutCombo),
-        hintKey: definition.hintKey
-            ? normalizeKeyName(definition.hintKey)
-            : "",
+        hintKey: definition.hintKey ? normalizeKeyName(definition.hintKey) : "",
         includeInHelp: definition.includeInHelp !== false,
         preventDefault: definition.preventDefault !== false,
         allowInInput: Boolean(definition.allowInInput),
@@ -158,7 +156,12 @@ function normalizeShortcutDefinition(definition, index) {
 export function useKeyboardShortcuts(shortcutDefinitions) {
     const showHelp = ref(false);
     const hintOverlayVisible = ref(false);
-    const altHeld = ref(false);
+    const hintModifierDown = ref(false);
+    const hintInterceptionActive = ref(false);
+    const hintModifierKey = "Control";
+    const hintModifierLabel = "Ctrl";
+    const hintInterceptionMs = 2000;
+    let hintInterceptionTimer = null;
 
     const shortcuts = computed(() => {
         const definitions = unref(shortcutDefinitions) || [];
@@ -169,21 +172,33 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
             .filter((definition) => definition.visible);
     });
 
+    function clearHintInterceptionTimer() {
+        if (hintInterceptionTimer) {
+            clearTimeout(hintInterceptionTimer);
+            hintInterceptionTimer = null;
+        }
+    }
+
+    function formatHintCombo(key) {
+        return `${hintModifierLabel}+${formatKeyDisplay(key)}`;
+    }
+
+    function uniqueLabels(labels) {
+        return [...new Set(labels.filter(Boolean))];
+    }
+
     const helpItems = computed(() =>
         shortcuts.value
             .filter((shortcut) => shortcut.includeInHelp)
             .map((shortcut) => {
-                const badges = [];
-                if (shortcut.hintKey) {
-                    badges.push(`Alt+${formatKeyDisplay(shortcut.hintKey)}`);
-                }
-                if (shortcut.keys.length) {
-                    badges.push(
-                        shortcut.parsedKeys
-                            .map((combo) => formatShortcutCombo(combo))
-                            .join(" / "),
-                    );
-                }
+                const badges = uniqueLabels([
+                    shortcut.hintKey ? formatHintCombo(shortcut.hintKey) : "",
+                    shortcut.keys.length
+                        ? shortcut.parsedKeys
+                              .map((combo) => formatShortcutCombo(combo))
+                              .join(" / ")
+                        : "",
+                ]);
                 return {
                     id: shortcut.id,
                     description: shortcut.description,
@@ -210,28 +225,41 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
     function getShortcutLabel(id) {
         const shortcut = findShortcut(id);
         if (!shortcut) return "";
-        const parts = [];
-        if (shortcut.hintKey) {
-            parts.push(`Alt+${formatKeyDisplay(shortcut.hintKey)}`);
-        }
-        if (shortcut.parsedKeys.length) {
-            parts.push(
-                shortcut.parsedKeys
-                    .map((combo) => formatShortcutCombo(combo))
-                    .join(" / "),
-            );
-        }
-        return parts.join(" • ");
+        return uniqueLabels([
+            shortcut.hintKey ? formatHintCombo(shortcut.hintKey) : "",
+            shortcut.parsedKeys.length
+                ? shortcut.parsedKeys
+                      .map((combo) => formatShortcutCombo(combo))
+                      .join(" / ")
+                : "",
+        ]).join(" • ");
     }
 
     function hideHintOverlay() {
-        altHeld.value = false;
+        hintModifierDown.value = false;
+        hintInterceptionActive.value = false;
         hintOverlayVisible.value = false;
+        clearHintInterceptionTimer();
+    }
+
+    function startHintInterception() {
+        hintModifierDown.value = true;
+        hintInterceptionActive.value = true;
+        hintOverlayVisible.value = true;
+        clearHintInterceptionTimer();
+        hintInterceptionTimer = setTimeout(() => {
+            hintInterceptionActive.value = false;
+            hintOverlayVisible.value = false;
+            hintInterceptionTimer = null;
+        }, hintInterceptionMs);
     }
 
     function canRunShortcut(shortcut) {
         if (!shortcut?.enabled) return false;
-        if (!shortcut.allowInInput && isEditableElement(document.activeElement)) {
+        if (
+            !shortcut.allowInInput &&
+            isEditableElement(document.activeElement)
+        ) {
             return false;
         }
         return typeof shortcut.handler === "function";
@@ -246,17 +274,53 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
         return true;
     }
 
+    function findDirectShortcut(event) {
+        return (
+            shortcuts.value.find((shortcut) =>
+                shortcut.parsedKeys.some((combo) =>
+                    matchesParsedShortcut(event, combo),
+                ),
+            ) || null
+        );
+    }
+
     function onKeyDown(event) {
         if (event.defaultPrevented) return;
 
-        if (event.key === "Alt" && !event.ctrlKey && !event.metaKey) {
-            altHeld.value = true;
-            hintOverlayVisible.value = true;
+        const active = document.activeElement;
+        const activeIsEditable = isEditableElement(active);
+
+        if (
+            activeIsEditable &&
+            event.key === "Escape" &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey
+        ) {
             event.preventDefault();
+            active?.blur?.();
+        } else if (activeIsEditable) {
+            hideHintOverlay();
             return;
         }
 
-        if (altHeld.value && !event.ctrlKey && !event.metaKey && event.key !== "Alt") {
+        if (event.key === hintModifierKey && !event.altKey && !event.metaKey) {
+            if (!hintModifierDown.value && !event.repeat) {
+                startHintInterception();
+            }
+            return;
+        }
+
+        if (
+            hintModifierDown.value &&
+            hintInterceptionActive.value &&
+            event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+
             const hintedShortcut = shortcuts.value.find(
                 (shortcut) =>
                     shortcut.hintKey &&
@@ -267,42 +331,50 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
                 if (didRun) {
                     showHelp.value = false;
                 }
-                hideHintOverlay();
                 return;
             }
+
+            const directShortcut = findDirectShortcut(event);
+            if (directShortcut) {
+                runShortcut(directShortcut, event, "direct");
+            }
+            return;
         }
 
-        const directShortcut = shortcuts.value.find((shortcut) =>
-            shortcut.parsedKeys.some((combo) =>
-                matchesParsedShortcut(event, combo),
-            ),
-        );
-
+        const directShortcut = findDirectShortcut(event);
         if (directShortcut) {
             runShortcut(directShortcut, event, "direct");
         }
     }
 
     function onKeyUp(event) {
-        if (event.key === "Alt") {
-            hideHintOverlay();
-        }
+        if (event.key !== hintModifierKey) return;
+        hideHintOverlay();
     }
 
     function onWindowBlur() {
         hideHintOverlay();
     }
 
+    function onPointerDown() {
+        if (hintOverlayVisible.value || hintModifierDown.value) {
+            hideHintOverlay();
+        }
+    }
+
     onMounted(() => {
-        window.addEventListener("keydown", onKeyDown);
-        window.addEventListener("keyup", onKeyUp);
+        window.addEventListener("keydown", onKeyDown, true);
+        window.addEventListener("keyup", onKeyUp, true);
         window.addEventListener("blur", onWindowBlur);
+        window.addEventListener("pointerdown", onPointerDown, true);
     });
 
     onUnmounted(() => {
-        window.removeEventListener("keydown", onKeyDown);
-        window.removeEventListener("keyup", onKeyUp);
+        window.removeEventListener("keydown", onKeyDown, true);
+        window.removeEventListener("keyup", onKeyUp, true);
         window.removeEventListener("blur", onWindowBlur);
+        window.removeEventListener("pointerdown", onPointerDown, true);
+        clearHintInterceptionTimer();
     });
 
     return {
@@ -314,6 +386,7 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
         getShortcutLabel,
         isShortcutEnabled,
         hideHintOverlay,
+        hintModifierLabel,
         isMacPlatform,
     };
 }

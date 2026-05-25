@@ -142,13 +142,27 @@
                 <!-- Header bar -->
                 <div class="editor-header">
                     <div class="editor-header-left">
-                        <input
+                        <div
                             v-if="isEditing"
-                            v-model="editTitle"
-                            class="title-input"
-                            placeholder="Note title (leave blank to auto-generate)"
-                            @input="dirty = true"
-                        />
+                            class="shortcut-anchor title-input-anchor"
+                        >
+                            <input
+                                ref="editTitleInput"
+                                v-model="editTitle"
+                                class="title-input"
+                                :title="getShortcutLabel('focus-note-title')"
+                                placeholder="Note title (leave blank to auto-generate)"
+                                @input="dirty = true"
+                            />
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('focus-note-title')
+                                "
+                                :label="getHintLabel('focus-note-title')"
+                                position="top-left"
+                            />
+                        </div>
                         <h2 v-else class="title-display">
                             {{ selected.title || "Untitled" }}
                         </h2>
@@ -407,6 +421,7 @@
                                     ref="bodyTextarea"
                                     v-model="editBody"
                                     class="body-textarea"
+                                    :title="getShortcutLabel('focus-note-body')"
                                     placeholder="Write your note here… (drag files here)"
                                     @input="onLinkEditorInput('body')"
                                     @click="
@@ -418,6 +433,14 @@
                                     @scroll="onLinkEditorScroll('body')"
                                     @dragover.prevent
                                     @drop.prevent="onBodyDrop"
+                                />
+                                <ShortcutHint
+                                    v-if="
+                                        shortcutHintsVisible &&
+                                        isShortcutEnabled('focus-note-body')
+                                    "
+                                    :label="getHintLabel('focus-note-body')"
+                                    position="top-left"
                                 />
                                 <!-- [[ Link search popup -->
                                 <div
@@ -618,17 +641,30 @@
 
                 <!-- Chat Composer (quick reply) -->
                 <div class="chat-composer">
-                    <input
-                        v-model="newReplyTitle"
-                        class="composer-title"
-                        placeholder="Reply title (optional — auto-generated if blank)"
-                        @keydown.enter.exact="sendReply"
-                    />
-                    <div class="composer-body-row">
+                    <div class="shortcut-anchor composer-title-anchor">
+                        <input
+                            ref="newReplyTitleInput"
+                            v-model="newReplyTitle"
+                            class="composer-title"
+                            :title="getShortcutLabel('focus-reply-title')"
+                            placeholder="Reply title (optional — auto-generated if blank)"
+                            @keydown.enter.exact="sendReply"
+                        />
+                        <ShortcutHint
+                            v-if="
+                                shortcutHintsVisible &&
+                                isShortcutEnabled('focus-reply-title')
+                            "
+                            :label="getHintLabel('focus-reply-title')"
+                            position="top-left"
+                        />
+                    </div>
+                    <div class="composer-body-row shortcut-anchor">
                         <textarea
                             ref="newReplyTextarea"
                             v-model="newReplyBody"
                             class="composer-textarea"
+                            :title="getShortcutLabel('focus-reply-body')"
                             placeholder="Write a reply…"
                             rows="2"
                             @input="onLinkEditorInput('reply')"
@@ -638,10 +674,18 @@
                             @keydown.enter.meta.exact="sendReply"
                             @keydown.enter.ctrl.exact="sendReply"
                         />
+                        <ShortcutHint
+                            v-if="
+                                shortcutHintsVisible &&
+                                isShortcutEnabled('focus-reply-body')
+                            "
+                            :label="getHintLabel('focus-reply-body')"
+                            position="top-left"
+                        />
                         <button
                             class="btn-primary composer-send shortcut-anchor"
                             :title="getShortcutLabel('send-reply')"
-                            :disabled="sendingReply"
+                            :disabled="!canSendReply"
                             @click="sendReply"
                         >
                             {{ sendingReply ? "…" : "Send" }}
@@ -868,16 +912,29 @@
             </div>
             <!-- Thread composer -->
             <div class="thread-composer">
-                <input
-                    v-model="threadReplyTitle"
-                    class="composer-title"
-                    placeholder="Reply title (optional — auto-generated if blank)"
-                />
-                <div class="composer-body-row">
+                <div class="shortcut-anchor composer-title-anchor">
+                    <input
+                        ref="threadReplyTitleInput"
+                        v-model="threadReplyTitle"
+                        class="composer-title"
+                        :title="getShortcutLabel('focus-thread-reply-title')"
+                        placeholder="Reply title (optional — auto-generated if blank)"
+                    />
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('focus-thread-reply-title')
+                        "
+                        :label="getHintLabel('focus-thread-reply-title')"
+                        position="top-left"
+                    />
+                </div>
+                <div class="composer-body-row shortcut-anchor">
                     <textarea
                         ref="threadReplyTextarea"
                         v-model="threadReplyBody"
                         class="composer-textarea"
+                        :title="getShortcutLabel('focus-thread-reply-body')"
                         placeholder="Write a reply…"
                         rows="2"
                         @input="onLinkEditorInput('threadReply')"
@@ -887,10 +944,18 @@
                         @keydown.enter.meta.exact="sendThreadReply"
                         @keydown.enter.ctrl.exact="sendThreadReply"
                     />
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('focus-thread-reply-body')
+                        "
+                        :label="getHintLabel('focus-thread-reply-body')"
+                        position="top-left"
+                    />
                     <button
                         class="btn-primary composer-send shortcut-anchor"
                         :title="getShortcutLabel('send-thread-reply')"
-                        :disabled="threadSendingReply"
+                        :disabled="!canSendThreadReply"
                         @click="sendThreadReply"
                     >
                         {{ threadSendingReply ? "…" : "Send" }}
@@ -992,15 +1057,34 @@
                     >?
                 </p>
                 <div class="modal-actions">
-                    <button class="btn-ghost" @click="showDeleteModal = false">
+                    <button
+                        class="btn-ghost shortcut-anchor"
+                        :title="getShortcutLabel('cancel-delete')"
+                        @click="showDeleteModal = false"
+                    >
                         Cancel
+                        <ShortcutHint
+                            v-if="
+                                shortcutHintsVisible &&
+                                isShortcutEnabled('cancel-delete')
+                            "
+                            :label="getHintLabel('cancel-delete')"
+                        />
                     </button>
                     <button
-                        class="btn-danger"
+                        class="btn-danger shortcut-anchor"
+                        :title="getShortcutLabel('confirm-delete')"
                         :disabled="deleting"
                         @click="doDelete"
                     >
                         {{ deleting ? "Deleting…" : "Delete" }}
+                        <ShortcutHint
+                            v-if="
+                                shortcutHintsVisible &&
+                                isShortcutEnabled('confirm-delete')
+                            "
+                            :label="getHintLabel('confirm-delete')"
+                        />
                     </button>
                 </div>
             </div>
@@ -1062,8 +1146,11 @@ const noteType = ref("standard");
 const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
+const editTitleInput = ref(null);
 const bodyTextarea = ref(null);
+const newReplyTitleInput = ref(null);
 const newReplyTextarea = ref(null);
+const threadReplyTitleInput = ref(null);
 const threadReplyTextarea = ref(null);
 
 // Tags state
@@ -1156,6 +1243,24 @@ const newReplyTitle = ref("");
 const newReplyBody = ref("");
 const sendingReply = ref(false);
 
+function hasReplyDraft(title, body) {
+    return Boolean(String(title || "").trim() || String(body || "").trim());
+}
+
+const canSendReply = computed(
+    () =>
+        Boolean(selected.value?.id) &&
+        !sendingReply.value &&
+        hasReplyDraft(newReplyTitle.value, newReplyBody.value),
+);
+
+const canSendThreadReply = computed(
+    () =>
+        Boolean(threadNote.value?.id) &&
+        !threadSendingReply.value &&
+        hasReplyDraft(threadReplyTitle.value, threadReplyBody.value),
+);
+
 // Parent selector state
 const parentSearch = ref("");
 const parentOptions = ref([]);
@@ -1184,8 +1289,28 @@ function focusSearchInput() {
     if (input) input.focus();
 }
 
+function focusNoteTitle() {
+    editTitleInput.value?.focus();
+}
+
 function focusBodyEditor() {
     document.querySelector(".body-textarea")?.focus();
+}
+
+function focusReplyTitle() {
+    newReplyTitleInput.value?.focus();
+}
+
+function focusReplyBody() {
+    newReplyTextarea.value?.focus();
+}
+
+function focusThreadReplyTitle() {
+    threadReplyTitleInput.value?.focus();
+}
+
+function focusThreadReplyBody() {
+    threadReplyTextarea.value?.focus();
 }
 
 function toggleHotkeysHelp() {
@@ -1228,6 +1353,20 @@ const shortcutDefinitions = computed(() => [
         keys: ["Mod+K"],
         allowInInput: true,
         handler: () => focusSearchInput(),
+    },
+    {
+        id: "focus-note-title",
+        description: "Focus the note title",
+        hintKey: "Q",
+        enabled: () => Boolean(selected.value) && isEditing.value,
+        handler: () => focusNoteTitle(),
+    },
+    {
+        id: "focus-note-body",
+        description: "Focus the note body",
+        hintKey: "W",
+        enabled: () => Boolean(selected.value) && isEditing.value,
+        handler: () => focusBodyEditor(),
     },
     {
         id: "toggle-edit",
@@ -1297,12 +1436,43 @@ const shortcutDefinitions = computed(() => [
         handler: () => confirmDelete(),
     },
     {
+        id: "focus-reply-title",
+        description: "Focus the reply title",
+        hintKey: "I",
+        allowInInput: true,
+        enabled: () => Boolean(selected.value),
+        handler: () => focusReplyTitle(),
+    },
+    {
+        id: "focus-reply-body",
+        description: "Focus the reply body",
+        hintKey: "B",
+        allowInInput: true,
+        enabled: () => Boolean(selected.value),
+        handler: () => focusReplyBody(),
+    },
+    {
         id: "send-reply",
         description: "Send the reply composer",
         hintKey: "R",
+        keys: ["Mod+R"],
         allowInInput: true,
-        enabled: () => Boolean(selected.value?.id) && !sendingReply.value,
+        enabled: () => canSendReply.value,
         handler: () => sendReply(),
+    },
+    {
+        id: "focus-thread-reply-title",
+        description: "Focus the thread reply title",
+        hintKey: "G",
+        enabled: () => Boolean(threadNote.value),
+        handler: () => focusThreadReplyTitle(),
+    },
+    {
+        id: "focus-thread-reply-body",
+        description: "Focus the thread reply body",
+        hintKey: "V",
+        enabled: () => Boolean(threadNote.value),
+        handler: () => focusThreadReplyBody(),
     },
     {
         id: "close-thread",
@@ -1327,9 +1497,28 @@ const shortcutDefinitions = computed(() => [
         description: "Send the thread reply composer",
         hintKey: "T",
         allowInInput: true,
-        enabled: () =>
-            Boolean(threadNote.value?.id) && !threadSendingReply.value,
+        enabled: () => canSendThreadReply.value,
         handler: () => sendThreadReply(),
+    },
+    {
+        id: "cancel-delete",
+        description: "Cancel delete",
+        hintKey: "N",
+        keys: ["Escape"],
+        visible: () => showDeleteModal.value,
+        enabled: () => !deleting.value,
+        handler: () => {
+            showDeleteModal.value = false;
+        },
+    },
+    {
+        id: "confirm-delete",
+        description: "Confirm delete",
+        hintKey: "Y",
+        keys: ["Enter"],
+        visible: () => showDeleteModal.value,
+        enabled: () => !deleting.value,
+        handler: () => doDelete(),
     },
     {
         id: "sidebar-up",
@@ -1732,6 +1921,7 @@ function closeThreadSidebar() {
 async function sendThreadReply() {
     if (threadSendingReply.value) return;
     if (!threadNote.value?.id) return;
+    if (!hasReplyDraft(threadReplyTitle.value, threadReplyBody.value)) return;
     threadSendingReply.value = true;
     try {
         const child = await createNote(
@@ -1959,6 +2149,7 @@ async function removeAttachment(file) {
 // Send a reply (creates a new child note)
 async function sendReply() {
     if (sendingReply.value) return;
+    if (!hasReplyDraft(newReplyTitle.value, newReplyBody.value)) return;
     if (!selected.value?.id) {
         // If the current note is not yet saved, save it first
         if (dirty.value) await save();
