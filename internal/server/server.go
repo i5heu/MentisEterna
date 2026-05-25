@@ -650,7 +650,8 @@ func (s *Server) handlePrinterStatus(w http.ResponseWriter, r *http.Request) {
 			"connected":   false,
 			"device_path": "",
 			"error":       err.Error(),
-			"checked":     []string{"THERMAL_PRINTER_DEVICE", "/dev/usb/lp0-lp2", "THERMAL_PRINTER_USB_ID"},
+			"code_page":   printer.ConfiguredCodePageName(),
+			"checked":     []string{"THERMAL_PRINTER_DEVICE", "/dev/usb/lp0-lp2", "THERMAL_PRINTER_USB_ID", "THERMAL_PRINTER_CODEPAGE"},
 		})
 		return
 	}
@@ -663,6 +664,7 @@ func (s *Server) handlePrinterStatus(w http.ResponseWriter, r *http.Request) {
 		"device_path": "", // raw USB devices don not have a simple path
 		"error":       "",
 		"method":      "Printer detected via FindPrinter()",
+		"code_page":   printer.ConfiguredCodePageName(),
 	})
 }
 

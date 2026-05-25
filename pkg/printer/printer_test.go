@@ -8,12 +8,26 @@ import (
 )
 
 func TestBufInit(t *testing.T) {
+	t.Setenv("THERMAL_PRINTER_CODEPAGE", "")
+	t.Setenv("THERMAL_PRINTER_USB_ID", "")
+
 	b := new(Buf)
 	b.Init()
-	// ESC @ = initialize, ESC t 16 = select Windows-1252 code table.
-	want := []byte{ESC, '@', ESC, 't', escposCodeTableWPC1252}
+	// ESC @ = initialize, ESC t 0 = select PC437 code table.
+	want := []byte{ESC, '@', ESC, 't', escposCodeTablePC437}
 	if !bytes.Equal(b.Bytes(), want) {
 		t.Errorf("Init did not produce init+codepage, got %v want %v", b.Bytes(), want)
+	}
+}
+
+func TestBufInitWindows1252(t *testing.T) {
+	t.Setenv("THERMAL_PRINTER_CODEPAGE", "wpc1252")
+
+	b := new(Buf)
+	b.Init()
+	want := []byte{ESC, '@', ESC, 't', escposCodeTableWPC1252}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Errorf("Init did not produce WPC1252 init+codepage, got %v want %v", b.Bytes(), want)
 	}
 }
 
@@ -57,7 +71,21 @@ func TestBufText(t *testing.T) {
 	}
 }
 
+func TestBufTextEncodesPC437(t *testing.T) {
+	t.Setenv("THERMAL_PRINTER_CODEPAGE", "")
+	t.Setenv("THERMAL_PRINTER_USB_ID", "08a6:003d")
+
+	b := new(Buf)
+	b.Text("Ää Öö Üü ß")
+	want := []byte{0x8E, 0x84, ' ', 0x99, 0x94, ' ', 0x9A, 0x81, ' ', 0xE1}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Fatalf("Text encoded %v, want %v", b.Bytes(), want)
+	}
+}
+
 func TestBufTextEncodesWindows1252(t *testing.T) {
+	t.Setenv("THERMAL_PRINTER_CODEPAGE", "wpc1252")
+
 	b := new(Buf)
 	b.Text("Ää Öö Üü — …")
 	want := []byte{0xC4, 0xE4, ' ', 0xD6, 0xF6, ' ', 0xDC, 0xFC, ' ', 0x97, ' ', 0x85}
