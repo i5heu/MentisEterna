@@ -1170,17 +1170,22 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.db.VSSAvailable() || s.llm == nil {
-		// Fallback: return empty results if VSS is unavailable.
-		writeJSON(w, http.StatusOK, []SearchResult{})
+	if !s.db.VSSAvailable() {
+		log.Printf("semantic search unavailable: sqlite-vec is not loaded")
+		http.Error(w, "semantic search system error", http.StatusInternalServerError)
+		return
+	}
+	if s.llm == nil {
+		log.Printf("semantic search unavailable: embedding client is not configured")
+		http.Error(w, "semantic search system error", http.StatusInternalServerError)
 		return
 	}
 
 	query = llm.TruncateForEmbedding(query)
 	vec, err := s.llm.GenerateEmbedding(query)
 	if err != nil {
-		log.Printf("vss: search embedding: %v", err)
-		http.Error(w, "failed to generate search embedding", http.StatusInternalServerError)
+		log.Printf("semantic search embedding error: %v", err)
+		http.Error(w, "semantic search system error", http.StatusInternalServerError)
 		return
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)

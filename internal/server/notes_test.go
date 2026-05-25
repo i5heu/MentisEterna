@@ -568,9 +568,9 @@ func TestSearchMissingQueryReturns400(t *testing.T) {
 	}
 }
 
-// TestSearchFallbackWhenVSSUnavailable verifies that search returns empty
-// results (not an error) when VSS/LLM is not available.
-func TestSearchFallbackWhenVSSUnavailable(t *testing.T) {
+// TestSearchReturns500WhenEmbeddingUnavailable verifies that search fails
+// loudly when semantic search infrastructure is unavailable.
+func TestSearchReturns500WhenEmbeddingUnavailable(t *testing.T) {
 	s := newTestServer(t) // llm is nil
 
 	n := helperCreateNote(t, s, "Some Note", "some text", nil)
@@ -580,16 +580,11 @@ func TestSearchFallbackWhenVSSUnavailable(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.searchNotes(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200 fallback, got %d", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when semantic search is unavailable, got %d", w.Code)
 	}
-
-	var results []SearchResult
-	if err := json.NewDecoder(w.Body).Decode(&results); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(results) != 0 {
-		t.Errorf("expected empty results when VSS unavailable, got %d", len(results))
+	if !strings.Contains(strings.ToLower(w.Body.String()), "semantic search system error") {
+		t.Errorf("expected semantic search error message, got %q", w.Body.String())
 	}
 }
 
