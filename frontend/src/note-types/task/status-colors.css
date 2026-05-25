@@ -11,15 +11,15 @@
  * Three forms are provided so consumers can apply colors as a background
  * (badges, dots), as a border-left (stat cards), or as a foreground color:
  *
- *   .status-todo             — background: #e8e8e8; color: #1a1a1a
- *   .status-in_progress      — background: #22c55e; color: #fff
- *   .status-done             — background: #3b82f6; color: #fff
+ *   .status-todo             — background: #6b7280; color: #fff
+ *   .status-in_progress      — background: #22c55e; color: #1a1a1a
+ *   .status-done             — background: #3b82f6; color: #1a1a1a
  *
- *   .status-todo-border      — border-left-color: #e8e8e8
+ *   .status-todo-border      — border-left-color: #6b7280
  *   .status-in_progress-border — border-left-color: #22c55e
  *   .status-done-border      — border-left-color: #3b82f6
  *
- *   .status-todo-fg          — color: #e8e8e8
+ *   .status-todo-fg          — color: #6b7280
  *   .status-in_progress-fg   — color: #22c55e
  *   .status-done-fg          — color: #3b82f6
  */
@@ -27,24 +27,24 @@
 /* === Background form (badges, dots) ===================================== */
 
 .status-todo {
-    background: #e8e8e8;
-    color: #1a1a1a;
+    background: #6b7280;
+    color: #fff !important;
 }
 
 .status-in_progress {
     background: #3b82f6;
-    color: #fff;
+    color: #1a1a1a !important;
 }
 
 .status-done {
     background: #22c55e;
-    color: #fff;
+    color: #1a1a1a !important;
 }
 
 /* === Border form (stat cards) =========================================== */
 
 .status-todo-border {
-    border-left-color: #e8e8e8;
+    border-left-color: #6b7280;
 }
 
 .status-in_progress-border {
@@ -58,7 +58,7 @@
 /* === Foreground form (optional, for text-only use) ====================== */
 
 .status-todo-fg {
-    color: #e8e8e8;
+    color: #6b7280;
 }
 
 .status-in_progress-fg {

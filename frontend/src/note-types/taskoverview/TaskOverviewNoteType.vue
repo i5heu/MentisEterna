@@ -502,7 +502,7 @@ onBeforeUnmount(unsubOverview);
 }
 
 .status-todo.status-dot {
-    background: #e8e8e8;
+    background: #6b7280;
 }
 
 .status-in_progress.status-dot {
