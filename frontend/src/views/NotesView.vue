@@ -53,8 +53,11 @@
                             {{ relevancePct(sr.distance) }}</span
                         >
                     </div>
+                    <div v-if="searchError && !searching" class="empty-list">
+                        {{ searchError }}
+                    </div>
                     <div
-                        v-if="searchResults.length === 0 && !searching"
+                        v-else-if="searchResults.length === 0 && !searching"
                         class="empty-list"
                     >
                         No results
@@ -986,6 +989,7 @@ const historyLoading = ref(false);
 // Search state
 const searchQuery = ref("");
 const searchResults = ref([]);
+const searchError = ref("");
 const searching = ref(false);
 const highlightedIndex = ref(-1);
 let searchTimeout = null;
@@ -1689,15 +1693,19 @@ async function doSearch() {
     const q = searchQuery.value.trim();
     if (!q) {
         searchResults.value = [];
+        searchError.value = "";
         highlightedIndex.value = -1;
         return;
     }
     searching.value = true;
+    searchError.value = "";
     try {
         searchResults.value = await searchNotes(props.token, q);
+        searchError.value = "";
         highlightedIndex.value = searchResults.value.length > 0 ? 0 : -1;
     } catch (e) {
         searchResults.value = [];
+        searchError.value = "Semantic Search System Error";
         highlightedIndex.value = -1;
     } finally {
         searching.value = false;
