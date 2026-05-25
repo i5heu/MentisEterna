@@ -2,13 +2,26 @@
     <div class="options-wrap">
         <div class="options-card">
             <div class="options-header">
-                <h1 class="options-title">Options</h1>
+                <h1
+                    class="options-title shortcut-anchor"
+                    :title="getShortcutLabel('show-shortcuts')"
+                >
+                    Options
+                    <ShortcutHint
+                        v-if="shortcutHintsVisible"
+                        :label="getHintLabel('show-shortcuts')"
+                    />
+                </h1>
                 <button
-                    class="btn-ghost back-btn"
-                    title="Back to Notes"
-                    @click="$emit('back')"
+                    class="btn-ghost back-btn shortcut-anchor"
+                    :title="getShortcutLabel('back-to-notes')"
+                    @click="goBack"
                 >
                     ← Back to Notes
+                    <ShortcutHint
+                        v-if="shortcutHintsVisible"
+                        :label="getHintLabel('back-to-notes')"
+                    />
                 </button>
             </div>
 
@@ -36,11 +49,19 @@
                     notes.
                 </p>
                 <button
-                    class="btn-ghost"
+                    class="btn-ghost shortcut-anchor"
+                    :title="getShortcutLabel('check-printer')"
                     :disabled="checkingPrinter"
                     @click="checkPrinter"
                 >
                     {{ checkingPrinter ? "Checking…" : "Check Connection" }}
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('check-printer')
+                        "
+                        :label="getHintLabel('check-printer')"
+                    />
                 </button>
                 <div v-if="printerStatus" class="status-block">
                     <div class="status-row">
@@ -98,11 +119,19 @@
                     OCR, and speech-to-text.
                 </p>
                 <button
-                    class="btn-ghost"
+                    class="btn-ghost shortcut-anchor"
+                    :title="getShortcutLabel('check-ai')"
                     :disabled="checkingAI"
                     @click="checkAI"
                 >
                     {{ checkingAI ? "Testing…" : "Test Connection" }}
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('check-ai')
+                        "
+                        :label="getHintLabel('check-ai')"
+                    />
                 </button>
                 <div v-if="aiStatus" class="status-block">
                     <div class="status-row">
@@ -239,11 +268,19 @@
                     configured S3 endpoints.
                 </p>
                 <button
-                    class="btn-amber"
+                    class="btn-amber shortcut-anchor"
+                    :title="getShortcutLabel('trigger-backup')"
                     :disabled="backingUp"
                     @click="triggerBackup"
                 >
                     {{ backingUp ? "Enqueuing…" : "Create Backup Now" }}
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('trigger-backup')
+                        "
+                        :label="getHintLabel('trigger-backup')"
+                    />
                 </button>
                 <p v-if="backupErr" class="msg-error">{{ backupErr }}</p>
                 <p v-if="backupOk" class="msg-ok">{{ backupOk }}</p>
@@ -257,7 +294,8 @@
                     are device-bound and more secure than passwords alone.
                 </p>
                 <button
-                    class="btn-ghost"
+                    class="btn-ghost shortcut-anchor"
+                    :title="getShortcutLabel('register-passkey')"
                     :disabled="registeringPasskey"
                     @click="registerPasskey"
                 >
@@ -265,6 +303,13 @@
                     {{
                         registeringPasskey ? "Registering…" : "Register Passkey"
                     }}
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('register-passkey')
+                        "
+                        :label="getHintLabel('register-passkey')"
+                    />
                 </button>
                 <p v-if="regPasskeyErr" class="msg-error">
                     {{ regPasskeyErr }}
@@ -295,7 +340,8 @@
                             </div>
                         </div>
                         <button
-                            class="btn-amber btn-sm"
+                            class="btn-amber btn-sm shortcut-anchor"
+                            :title="getShortcutLabel('reindex-notes')"
                             :disabled="reindexingNotes"
                             @click="reindexNotes"
                         >
@@ -304,6 +350,13 @@
                                     ? "Enqueuing…"
                                     : "Re-Index All Notes"
                             }}
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('reindex-notes')
+                                "
+                                :label="getHintLabel('reindex-notes')"
+                            />
                         </button>
                         <p v-if="reindexNotesErr" class="msg-error">
                             {{ reindexNotesErr }}
@@ -326,7 +379,8 @@
                             </div>
                         </div>
                         <button
-                            class="btn-amber btn-sm"
+                            class="btn-amber btn-sm shortcut-anchor"
+                            :title="getShortcutLabel('reindex-ocr')"
                             :disabled="reindexingOCR"
                             @click="reindexOCR"
                         >
@@ -335,6 +389,13 @@
                                     ? "Enqueuing…"
                                     : "Re-Index OCR Files"
                             }}
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('reindex-ocr')
+                                "
+                                :label="getHintLabel('reindex-ocr')"
+                            />
                         </button>
                         <p v-if="reindexOCRErr" class="msg-error">
                             {{ reindexOCRErr }}
@@ -357,7 +418,8 @@
                             </div>
                         </div>
                         <button
-                            class="btn-amber btn-sm"
+                            class="btn-amber btn-sm shortcut-anchor"
+                            :title="getShortcutLabel('reindex-stt')"
                             :disabled="reindexingSTT"
                             @click="reindexSTT"
                         >
@@ -366,6 +428,13 @@
                                     ? "Enqueuing…"
                                     : "Re-Index STT Files"
                             }}
+                            <ShortcutHint
+                                v-if="
+                                    shortcutHintsVisible &&
+                                    isShortcutEnabled('reindex-stt')
+                                "
+                                :label="getHintLabel('reindex-stt')"
+                            />
                         </button>
                         <p v-if="reindexSTTErr" class="msg-error">
                             {{ reindexSTTErr }}
@@ -379,17 +448,32 @@
 
             <!-- Section: Logout -->
             <section class="options-section options-section-logout">
-                <button class="btn-danger logout-btn" @click="doLogout">
+                <button
+                    class="btn-danger logout-btn shortcut-anchor"
+                    :title="getShortcutLabel('logout')"
+                    @click="doLogout"
+                >
                     ⏻ Logout
+                    <ShortcutHint
+                        v-if="shortcutHintsVisible"
+                        :label="getHintLabel('logout')"
+                    />
                 </button>
             </section>
+
+            <KeyboardShortcutsHelpModal
+                v-model="showHotkeys"
+                :items="hotkeys"
+            />
         </div>
     </div>
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import JobQueue from "../components/JobQueue.vue";
+import ShortcutHint from "../components/ShortcutHint.vue";
+import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
 import {
     beginPasskeyRegistration,
     triggerBackup as apiTriggerBackup,
@@ -399,6 +483,7 @@ import {
     fetchPrinterStatus,
     fetchAIStatus,
 } from "../api.js";
+import { useKeyboardShortcuts } from "../composables/useKeyboardShortcuts.js";
 
 const props = defineProps({ token: String });
 const emit = defineEmits(["logout", "back"]);
@@ -435,6 +520,109 @@ const reindexOCROk = ref("");
 const reindexingSTT = ref(false);
 const reindexSTTErr = ref("");
 const reindexSTTOk = ref("");
+
+function goBack() {
+    if (showHotkeys.value) {
+        showHotkeys.value = false;
+        return;
+    }
+    emit("back");
+}
+
+function toggleHotkeysHelp() {
+    showHotkeys.value = !showHotkeys.value;
+}
+
+const shortcutDefinitions = computed(() => [
+    {
+        id: "show-shortcuts",
+        description: "Toggle keyboard shortcuts help",
+        hintKey: "K",
+        keys: ["Shift+?"],
+        allowInInput: true,
+        handler: () => toggleHotkeysHelp(),
+    },
+    {
+        id: "back-to-notes",
+        description: "Back to notes",
+        hintKey: "H",
+        keys: ["Escape", "Mod+,"],
+        allowInInput: true,
+        handler: () => goBack(),
+    },
+    {
+        id: "check-printer",
+        description: "Check printer connection",
+        hintKey: "P",
+        allowInInput: true,
+        enabled: () => !checkingPrinter.value,
+        handler: () => checkPrinter(),
+    },
+    {
+        id: "check-ai",
+        description: "Test AI connection",
+        hintKey: "A",
+        allowInInput: true,
+        enabled: () => !checkingAI.value,
+        handler: () => checkAI(),
+    },
+    {
+        id: "trigger-backup",
+        description: "Create a backup now",
+        hintKey: "B",
+        allowInInput: true,
+        enabled: () => !backingUp.value,
+        handler: () => triggerBackup(),
+    },
+    {
+        id: "register-passkey",
+        description: "Register a passkey",
+        hintKey: "R",
+        allowInInput: true,
+        enabled: () => !registeringPasskey.value,
+        handler: () => registerPasskey(),
+    },
+    {
+        id: "reindex-notes",
+        description: "Re-index all notes",
+        hintKey: "N",
+        allowInInput: true,
+        enabled: () => !reindexingNotes.value,
+        handler: () => reindexNotes(),
+    },
+    {
+        id: "reindex-ocr",
+        description: "Re-index OCR files",
+        hintKey: "O",
+        allowInInput: true,
+        enabled: () => !reindexingOCR.value,
+        handler: () => reindexOCR(),
+    },
+    {
+        id: "reindex-stt",
+        description: "Re-index STT files",
+        hintKey: "T",
+        allowInInput: true,
+        enabled: () => !reindexingSTT.value,
+        handler: () => reindexSTT(),
+    },
+    {
+        id: "logout",
+        description: "Log out",
+        hintKey: "L",
+        allowInInput: true,
+        handler: () => doLogout(),
+    },
+]);
+
+const {
+    showHelp: showHotkeys,
+    hintOverlayVisible: shortcutHintsVisible,
+    helpItems: hotkeys,
+    getHintLabel,
+    getShortcutLabel,
+    isShortcutEnabled,
+} = useKeyboardShortcuts(shortcutDefinitions);
 
 async function registerPasskey() {
     regPasskeyErr.value = "";
@@ -554,6 +742,10 @@ function doLogout() {
 </script>
 
 <style scoped>
+.shortcut-anchor {
+    position: relative;
+}
+
 .options-wrap {
     min-height: 100vh;
     display: flex;
