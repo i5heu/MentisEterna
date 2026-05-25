@@ -66,13 +66,15 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
 - [x] Remove Light Mode, Only Dark Mode is supported.
 - [x] Font Color of the Task Note Type > .status-badge is not visible because fontcolor is to dark.
-- [ ] Click on Note Title should open the note in main view.
+- [x] Click on Note Title should open the note in main view.
 - [ ] Printer Needs a connection section in settings.
+- [ ] If a print via recipe printer fails, the user should get a notification and after the click the button should show spin.
 - [ ] AI API needs a connection section in settings to test connection and show error messages.
 
 ## TODO Current
 - [ ] Recipe System
   - [ ] First image in a recipe should be shown as thumbnail in in the Recipe Overview
+  - [ ] Recipe Import via JSON - also provide the JSON schema
 
 ## TODO MVP
 - [x] Pin notes 
