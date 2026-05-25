@@ -23,8 +23,145 @@ const (
 	ESC = 0x1B
 	GS  = 0x1D
 
+	escposCodeTablePC437   = 0
 	escposCodeTableWPC1252 = 16
 )
+
+type escposCodePage struct {
+	name   string
+	table  byte
+	encode func(string) []byte
+}
+
+var cp437Specials = map[rune]byte{
+	'Ç': 0x80,
+	'ü': 0x81,
+	'é': 0x82,
+	'â': 0x83,
+	'ä': 0x84,
+	'à': 0x85,
+	'å': 0x86,
+	'ç': 0x87,
+	'ê': 0x88,
+	'ë': 0x89,
+	'è': 0x8A,
+	'ï': 0x8B,
+	'î': 0x8C,
+	'ì': 0x8D,
+	'Ä': 0x8E,
+	'Å': 0x8F,
+	'É': 0x90,
+	'æ': 0x91,
+	'Æ': 0x92,
+	'ô': 0x93,
+	'ö': 0x94,
+	'ò': 0x95,
+	'û': 0x96,
+	'ù': 0x97,
+	'ÿ': 0x98,
+	'Ö': 0x99,
+	'Ü': 0x9A,
+	'¢': 0x9B,
+	'£': 0x9C,
+	'¥': 0x9D,
+	'₧': 0x9E,
+	'ƒ': 0x9F,
+	'á': 0xA0,
+	'í': 0xA1,
+	'ó': 0xA2,
+	'ú': 0xA3,
+	'ñ': 0xA4,
+	'Ñ': 0xA5,
+	'ª': 0xA6,
+	'º': 0xA7,
+	'¿': 0xA8,
+	'⌐': 0xA9,
+	'¬': 0xAA,
+	'½': 0xAB,
+	'¼': 0xAC,
+	'¡': 0xAD,
+	'«': 0xAE,
+	'»': 0xAF,
+	'░': 0xB0,
+	'▒': 0xB1,
+	'▓': 0xB2,
+	'│': 0xB3,
+	'┤': 0xB4,
+	'╡': 0xB5,
+	'╢': 0xB6,
+	'╖': 0xB7,
+	'╕': 0xB8,
+	'╣': 0xB9,
+	'║': 0xBA,
+	'╗': 0xBB,
+	'╝': 0xBC,
+	'╜': 0xBD,
+	'╛': 0xBE,
+	'┐': 0xBF,
+	'└': 0xC0,
+	'┴': 0xC1,
+	'┬': 0xC2,
+	'├': 0xC3,
+	'─': 0xC4,
+	'┼': 0xC5,
+	'╞': 0xC6,
+	'╟': 0xC7,
+	'╚': 0xC8,
+	'╔': 0xC9,
+	'╩': 0xCA,
+	'╦': 0xCB,
+	'╠': 0xCC,
+	'═': 0xCD,
+	'╬': 0xCE,
+	'╧': 0xCF,
+	'╨': 0xD0,
+	'╤': 0xD1,
+	'╥': 0xD2,
+	'╙': 0xD3,
+	'╘': 0xD4,
+	'╒': 0xD5,
+	'╓': 0xD6,
+	'╫': 0xD7,
+	'╪': 0xD8,
+	'┘': 0xD9,
+	'┌': 0xDA,
+	'█': 0xDB,
+	'▄': 0xDC,
+	'▌': 0xDD,
+	'▐': 0xDE,
+	'▀': 0xDF,
+	'α': 0xE0,
+	'ß': 0xE1,
+	'Γ': 0xE2,
+	'π': 0xE3,
+	'Σ': 0xE4,
+	'σ': 0xE5,
+	'µ': 0xE6,
+	'τ': 0xE7,
+	'Φ': 0xE8,
+	'Θ': 0xE9,
+	'Ω': 0xEA,
+	'δ': 0xEB,
+	'∞': 0xEC,
+	'φ': 0xED,
+	'ε': 0xEE,
+	'∩': 0xEF,
+	'≡': 0xF0,
+	'±': 0xF1,
+	'≥': 0xF2,
+	'≤': 0xF3,
+	'⌠': 0xF4,
+	'⌡': 0xF5,
+	'÷': 0xF6,
+	'≈': 0xF7,
+	'°': 0xF8,
+	'∙': 0xF9,
+	'·': 0xFA,
+	'√': 0xFB,
+	'ⁿ': 0xFC,
+	'²': 0xFD,
+	'■': 0xFE,
+}
 
 var windows1252Specials = map[rune]byte{
 	'€': 0x80,
@@ -56,20 +193,84 @@ var windows1252Specials = map[rune]byte{
 	'Ÿ': 0x9F,
 }
 
+func configuredCodePage() escposCodePage {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("THERMAL_PRINTER_CODEPAGE"))) {
+	case "", "auto":
+		usbID := strings.ToLower(strings.TrimSpace(os.Getenv("THERMAL_PRINTER_USB_ID")))
+		if usbID == "08a6:003d" {
+			return escposCodePage{name: "pc437", table: escposCodeTablePC437, encode: encodePC437}
+		}
+		return escposCodePage{name: "pc437", table: escposCodeTablePC437, encode: encodePC437}
+	case "0", "pc437", "cp437", "tm-t88iii":
+		return escposCodePage{name: "pc437", table: escposCodeTablePC437, encode: encodePC437}
+	case "16", "wpc1252", "cp1252", "windows1252", "windows-1252":
+		return escposCodePage{name: "wpc1252", table: escposCodeTableWPC1252, encode: encodeWindows1252}
+	default:
+		log.Printf("printer: unknown THERMAL_PRINTER_CODEPAGE=%q, falling back to pc437", os.Getenv("THERMAL_PRINTER_CODEPAGE"))
+		return escposCodePage{name: "pc437", table: escposCodeTablePC437, encode: encodePC437}
+	}
+}
+
+func ConfiguredCodePageName() string {
+	return configuredCodePage().name
+}
+
+func normalizeCommonRune(r rune) ([]byte, bool) {
+	switch r {
+	case 0:
+		return nil, true
+	case '\t':
+		return []byte{' ', ' ', ' ', ' '}, true
+	case '\n', '\r':
+		return []byte{byte(r)}, true
+	case '\u00A0':
+		return []byte{' '}, true
+	case '\u2212':
+		return []byte{'-'}, true
+	default:
+		return nil, false
+	}
+}
+
+func encodePC437(s string) []byte {
+	out := make([]byte, 0, len(s))
+	for _, r := range s {
+		if normalized, ok := normalizeCommonRune(r); ok {
+			out = append(out, normalized...)
+			continue
+		}
+		switch {
+		case r == '\u2010', r == '\u2011', r == '\u2012', r == '\u2013', r == '\u2014', r == '\u2015':
+			out = append(out, '-')
+		case r == '\u2018', r == '\u2019', r == '\u2032':
+			out = append(out, '\'')
+		case r == '\u201C', r == '\u201D', r == '\u2033':
+			out = append(out, '"')
+		case r == '\u2022':
+			out = append(out, '*')
+		case r == '\u2026':
+			out = append(out, '.')
+		case r >= 0x20 && r <= 0x7E:
+			out = append(out, byte(r))
+		default:
+			if b, ok := cp437Specials[r]; ok {
+				out = append(out, b)
+			} else {
+				out = append(out, '?')
+			}
+		}
+	}
+	return out
+}
+
 func encodeWindows1252(s string) []byte {
 	out := make([]byte, 0, len(s))
 	for _, r := range s {
-		switch {
-		case r == 0:
+		if normalized, ok := normalizeCommonRune(r); ok {
+			out = append(out, normalized...)
 			continue
-		case r == '\t':
-			out = append(out, ' ', ' ', ' ', ' ')
-		case r == '\n' || r == '\r':
-			out = append(out, byte(r))
-		case r == '\u00A0':
-			out = append(out, ' ')
-		case r == '\u2212':
-			out = append(out, '-')
+		}
+		switch {
 		case r >= 0x20 && r <= 0x7E:
 			out = append(out, byte(r))
 		case r >= 0xA0 && r <= 0xFF:
@@ -94,12 +295,14 @@ func encodeWindows1252(s string) []byte {
 type Buf struct {
 	b            bytes.Buffer
 	codeTableSet bool
+	codePage     escposCodePage
 }
 
 // Init resets the printer to its default state.
 func (p *Buf) Init() *Buf {
+	p.codePage = configuredCodePage()
 	p.b.Write([]byte{ESC, '@'})
-	p.b.Write([]byte{ESC, 't', escposCodeTableWPC1252})
+	p.b.Write([]byte{ESC, 't', p.codePage.table})
 	p.codeTableSet = true
 	return p
 }
@@ -215,11 +418,14 @@ func (p *Buf) DoubleHLine(width int) *Buf {
 
 // Text writes plain text.
 func (p *Buf) Text(s string) *Buf {
+	if p.codePage.encode == nil {
+		p.codePage = configuredCodePage()
+	}
 	if !p.codeTableSet {
 		// When callers skip Init(), still encode text consistently.
 		p.codeTableSet = true
 	}
-	p.b.Write(encodeWindows1252(s))
+	p.b.Write(p.codePage.encode(s))
 	return p
 }
 
@@ -261,6 +467,8 @@ func (p *Buf) Bytes() []byte {
 // Reset clears the buffer.
 func (p *Buf) Reset() {
 	p.b.Reset()
+	p.codeTableSet = false
+	p.codePage = escposCodePage{}
 }
 
 // TextWidth returns the printable width of s in runes.

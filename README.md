@@ -298,7 +298,7 @@ export MEDIA_S3_ENDPOINTS='[
 
 For printing recipes (and other note types) on a thermal receipt printer, the server uses raw USB bulk transfers via Linux usbdevfs (`/dev/bus/usb/BBB/DDD`). This is the same path as Python's `escpos.printer.Usb(vendor, product)` — **no usblp kernel module required**.
 
-Text is emitted as ESC/POS code table `WPC1252` (`ESC t 16`), so German umlauts like `Ä Ö Ü ä ö ü` print correctly on Epson/TM-T88-class printers.
+Text is emitted as ESC/POS code table `PC437` (`ESC t 0`) by default, which matches TM-T88III-compatible printers and works for German umlauts like `Ä Ö Ü ä ö ü`. Override this with `THERMAL_PRINTER_CODEPAGE` if your printer expects another table (for example `wpc1252`).
 
 ### Environment Variables
 
@@ -306,6 +306,7 @@ Text is emitted as ESC/POS code table `WPC1252` (`ESC t 16`), so German umlauts 
 |---|---|---|
 | `THERMAL_PRINTER_USB_ID` | (none — raw USB disabled) | Combined USB vendor:product ID in hex, e.g. `08a6:003d` for Epson TM-T88III |
 | `THERMAL_PRINTER_DEVICE` | (auto-detect) | Explicit device path, e.g. `/dev/usb/lp0` — bypasses USB ID discovery |
+| `THERMAL_PRINTER_CODEPAGE` | `pc437` | ESC/POS text code page override. Supported values: `pc437`, `tm-t88iii`, `wpc1252` |
 
 ### Discovery order
 
