@@ -130,7 +130,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [ ] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
   - [x] Print Grocery List and Recipes with a button via a recipe printer.
   - [x] API based Recipe Import instead of frontend import.
-  - [ ] Add mg to allowed units.
+  - [x] Add mg to allowed units.
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
     - [ ] SubTasks (Child Task Notes)
@@ -297,6 +297,8 @@ export MEDIA_S3_ENDPOINTS='[
 ## Thermal Receipt Printer
 
 For printing recipes (and other note types) on a thermal receipt printer, the server uses raw USB bulk transfers via Linux usbdevfs (`/dev/bus/usb/BBB/DDD`). This is the same path as Python's `escpos.printer.Usb(vendor, product)` — **no usblp kernel module required**.
+
+Text is emitted as ESC/POS code table `WPC1252` (`ESC t 16`), so German umlauts like `Ä Ö Ü ä ö ü` print correctly on Epson/TM-T88-class printers.
 
 ### Environment Variables
 

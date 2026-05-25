@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,7 +22,68 @@ import (
 const (
 	ESC = 0x1B
 	GS  = 0x1D
+
+	escposCodeTableWPC1252 = 16
 )
+
+var windows1252Specials = map[rune]byte{
+	'€': 0x80,
+	'‚': 0x82,
+	'ƒ': 0x83,
+	'„': 0x84,
+	'…': 0x85,
+	'†': 0x86,
+	'‡': 0x87,
+	'ˆ': 0x88,
+	'‰': 0x89,
+	'Š': 0x8A,
+	'‹': 0x8B,
+	'Œ': 0x8C,
+	'Ž': 0x8E,
+	'‘': 0x91,
+	'’': 0x92,
+	'“': 0x93,
+	'”': 0x94,
+	'•': 0x95,
+	'–': 0x96,
+	'—': 0x97,
+	'˜': 0x98,
+	'™': 0x99,
+	'š': 0x9A,
+	'›': 0x9B,
+	'œ': 0x9C,
+	'ž': 0x9E,
+	'Ÿ': 0x9F,
+}
+
+func encodeWindows1252(s string) []byte {
+	out := make([]byte, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r == 0:
+			continue
+		case r == '\t':
+			out = append(out, ' ', ' ', ' ', ' ')
+		case r == '\n' || r == '\r':
+			out = append(out, byte(r))
+		case r == '\u00A0':
+			out = append(out, ' ')
+		case r == '\u2212':
+			out = append(out, '-')
+		case r >= 0x20 && r <= 0x7E:
+			out = append(out, byte(r))
+		case r >= 0xA0 && r <= 0xFF:
+			out = append(out, byte(r))
+		default:
+			if b, ok := windows1252Specials[r]; ok {
+				out = append(out, b)
+			} else {
+				out = append(out, '?')
+			}
+		}
+	}
+	return out
+}
 
 // ---------------------------------------------------------------------------
 // Command builder
@@ -29,12 +92,15 @@ const (
 // Buf is a byte buffer that accumulates ESC/POS commands and text.
 // Zero value is ready to use.
 type Buf struct {
-	b bytes.Buffer
+	b            bytes.Buffer
+	codeTableSet bool
 }
 
 // Init resets the printer to its default state.
 func (p *Buf) Init() *Buf {
 	p.b.Write([]byte{ESC, '@'})
+	p.b.Write([]byte{ESC, 't', escposCodeTableWPC1252})
+	p.codeTableSet = true
 	return p
 }
 
@@ -149,14 +215,17 @@ func (p *Buf) DoubleHLine(width int) *Buf {
 
 // Text writes plain text.
 func (p *Buf) Text(s string) *Buf {
-	p.b.WriteString(s)
+	if !p.codeTableSet {
+		// When callers skip Init(), still encode text consistently.
+		p.codeTableSet = true
+	}
+	p.b.Write(encodeWindows1252(s))
 	return p
 }
 
 // Textf writes formatted text (like fmt.Sprintf).
 func (p *Buf) Textf(format string, args ...any) *Buf {
-	p.b.WriteString(fmt.Sprintf(format, args...))
-	return p
+	return p.Text(fmt.Sprintf(format, args...))
 }
 
 // Ln writes a line feed.
@@ -194,35 +263,59 @@ func (p *Buf) Reset() {
 	p.b.Reset()
 }
 
-// PadRight returns s padded with spaces to the given total width.
-func PadRight(s string, width int) string {
-	if len(s) >= width {
+// TextWidth returns the printable width of s in runes.
+func TextWidth(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
+// TruncateWidth truncates s to at most width runes.
+func TruncateWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if TextWidth(s) <= width {
 		return s
 	}
-	b := make([]byte, width)
-	copy(b, s)
-	for i := len(s); i < width; i++ {
-		b[i] = ' '
+	r := []rune(s)
+	if len(r) <= width {
+		return s
 	}
-	return string(b)
+	return string(r[:width])
+}
+
+// TruncateWithEllipsis truncates s and appends an ellipsis when needed.
+func TruncateWithEllipsis(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if TextWidth(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	return TruncateWidth(s, width-1) + "…"
+}
+
+// PadRight returns s padded with spaces to the given total width.
+func PadRight(s string, width int) string {
+	sw := TextWidth(s)
+	if sw >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-sw)
 }
 
 // PadCenter pads s with spaces on both sides to center it within width.
 func PadCenter(s string, width int) string {
-	if len(s) >= width {
+	sw := TextWidth(s)
+	if sw >= width {
 		return s
 	}
-	totalPad := width - len(s)
+	totalPad := width - sw
 	left := totalPad / 2
-	b := make([]byte, width)
-	for i := 0; i < left; i++ {
-		b[i] = ' '
-	}
-	copy(b[left:], s)
-	for i := left + len(s); i < width; i++ {
-		b[i] = ' '
-	}
-	return string(b)
+	right := totalPad - left
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
 }
 
 // ---------------------------------------------------------------------------
