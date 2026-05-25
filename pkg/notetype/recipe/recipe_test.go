@@ -16,6 +16,14 @@ func TestRecipePlugin(t *testing.T) {
 	})
 }
 
+func TestValidateConfigAllowsMilligrams(t *testing.T) {
+	plugin := &RecipePlugin{}
+	err := plugin.ValidateConfig(json.RawMessage(`{"ingredients":[{"name":"Salt","amount":"500","unit":"mg"}]}`))
+	if err != nil {
+		t.Fatalf("expected mg unit to be valid, got: %v", err)
+	}
+}
+
 func TestRecipeTextPrint(t *testing.T) {
 	var payload Payload
 	if err := json.Unmarshal([]byte(`{"ingredients":[{"name":"Flour","amount":"2","unit":"g"},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","freezable":true,"pre_cook_servings":"8"}`), &payload); err != nil {
