@@ -77,6 +77,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
 - [ ] Grocery List needs to round to 2 decimal places.
 - [ ] Printed Recipes need to use non-metric if metric is not validated
+- [ ] If cursur in editor or input, ctrl+s should save the note even in edit mode, other hotkeys should be disabled.
 
 ## TODO Future
 - [x] OCR for images and pdfs
