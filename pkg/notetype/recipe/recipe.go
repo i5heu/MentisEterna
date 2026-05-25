@@ -25,12 +25,21 @@ var validUnits = map[string]bool{
 	"pcs": true,
 }
 
+var validNonMetricUnits = map[string]bool{
+	"teaspoon":   true,
+	"tablespoon": true,
+	"cup":        true,
+}
+
 // IngredientRow represents a single ingredient in a recipe.
 type IngredientRow struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Amount string `json:"amount"` // stored as string to support "1-2", "to taste", etc.
-	Unit   string `json:"unit"`
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	Amount          string `json:"amount"` // stored as string to support "1-2", "to taste", etc.
+	Unit            string `json:"unit"`
+	NonMetricAmount string `json:"non_metric_amount"`
+	NonMetricUnit   string `json:"non_metric_unit"`
+	MetricValidated bool   `json:"metric_validated"`
 }
 
 // Payload is the JSON structure the frontend sends for a recipe note.
@@ -57,12 +66,15 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	var err error
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_recipe_ingredients (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			note_id    INTEGER NOT NULL,
-			name       TEXT    NOT NULL,
-			amount     TEXT    NOT NULL DEFAULT '',
-			unit       TEXT    NOT NULL DEFAULT '',
-			sort_order INTEGER NOT NULL DEFAULT 0,
+			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+			note_id             INTEGER NOT NULL,
+			name                TEXT    NOT NULL,
+			amount              TEXT    NOT NULL DEFAULT '',
+			unit                TEXT    NOT NULL DEFAULT '',
+			non_metric_amount   TEXT    NOT NULL DEFAULT '',
+			non_metric_unit     TEXT    NOT NULL DEFAULT '',
+			metric_validated    INTEGER NOT NULL DEFAULT 0,
+			sort_order          INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
 		CREATE INDEX IF NOT EXISTS idx_ct_recipe_ingredients_note
@@ -89,8 +101,11 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	// Migration: add pre_cook_servings column to databases created before it existed.
+	// Migrations for databases created before newer columns existed.
 	db.Exec(`ALTER TABLE ct_recipe_meta ADD COLUMN pre_cook_servings TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN non_metric_amount TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN non_metric_unit TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN metric_validated INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -130,6 +145,21 @@ func (p *RecipePlugin) Manifest() notetype.Manifest {
 				"$formkit": "text",
 				"name": "unit",
 				"label": "Unit"
+			},
+			{
+				"$formkit": "text",
+				"name": "non_metric_amount",
+				"label": "Non-Metric Amount"
+			},
+			{
+				"$formkit": "text",
+				"name": "non_metric_unit",
+				"label": "Non-Metric Unit"
+			},
+			{
+				"$formkit": "checkbox",
+				"name": "metric_validated",
+				"label": "Metric Validated"
 			}
 		]
 	},
@@ -216,12 +246,24 @@ func (p *RecipePlugin) ValidateConfig(payload json.RawMessage) error {
 		if strings.TrimSpace(ing.Name) == "" {
 			return fmt.Errorf("recipe: ingredient %d: name is required", i+1)
 		}
+
+		amount := strings.TrimSpace(ing.Amount)
 		unit := strings.TrimSpace(ing.Unit)
-		if !validUnits[unit] {
-			return fmt.Errorf("recipe: ingredient %d: unit %q is not a valid metric unit (use mg, g, kg, ml, l, pcs)", i+1, unit)
+		if amount != "" || unit != "" {
+			if !validUnits[unit] {
+				return fmt.Errorf("recipe: ingredient %d: unit %q is not a valid metric unit (use mg, g, kg, ml, l, pcs)", i+1, unit)
+			}
+			if strings.Contains(amount, ",") {
+				return fmt.Errorf("recipe: ingredient %d: amount must use dot as decimal separator, not comma", i+1)
+			}
 		}
-		if strings.Contains(ing.Amount, ",") {
-			return fmt.Errorf("recipe: ingredient %d: amount must use dot as decimal separator, not comma", i+1)
+
+		nonMetricAmount := strings.TrimSpace(ing.NonMetricAmount)
+		nonMetricUnit := strings.TrimSpace(ing.NonMetricUnit)
+		if nonMetricAmount != "" || nonMetricUnit != "" {
+			if !validNonMetricUnits[nonMetricUnit] {
+				return fmt.Errorf("recipe: ingredient %d: non-metric unit %q is not valid (use teaspoon, tablespoon, cup)", i+1, nonMetricUnit)
+			}
 		}
 	}
 	return nil
@@ -242,9 +284,20 @@ func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, n
 	}
 
 	for i, ing := range payload.Ingredients {
+		metricValidated := 0
+		if ing.MetricValidated {
+			metricValidated = 1
+		}
 		if _, err := tx.Exec(
-			`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, ?, ?, ?, ?)`,
-			noteID, strings.TrimSpace(ing.Name), strings.TrimSpace(ing.Amount), strings.TrimSpace(ing.Unit), i,
+			`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			noteID,
+			strings.TrimSpace(ing.Name),
+			strings.TrimSpace(ing.Amount),
+			strings.TrimSpace(ing.Unit),
+			strings.TrimSpace(ing.NonMetricAmount),
+			strings.TrimSpace(ing.NonMetricUnit),
+			metricValidated,
+			i,
 		); err != nil {
 			return fmt.Errorf("recipe: insert ingredient %d: %w", i, err)
 		}
@@ -368,7 +421,7 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
 	// Load ingredients.
 	rows, err := db.Query(
-		`SELECT id, name, amount, unit FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
+		`SELECT id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
 		noteID,
 	)
 	if err != nil {
@@ -379,9 +432,11 @@ func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, n
 	ingredients := []IngredientRow{}
 	for rows.Next() {
 		var ing IngredientRow
-		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Amount, &ing.Unit); err != nil {
+		var metricValidatedInt int
+		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Amount, &ing.Unit, &ing.NonMetricAmount, &ing.NonMetricUnit, &metricValidatedInt); err != nil {
 			return nil, fmt.Errorf("recipe: scan ingredient: %w", err)
 		}
+		ing.MetricValidated = metricValidatedInt != 0
 		ingredients = append(ingredients, ing)
 	}
 	if err := rows.Err(); err != nil {

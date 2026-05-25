@@ -11,7 +11,7 @@ import (
 
 func TestRecipePlugin(t *testing.T) {
 	plugintest.Run(t, &RecipePlugin{}, plugintest.TestData{
-		ValidPayload:   `{"ingredients":[{"name":"Flour","amount":"2","unit":"g"},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","freezable":true,"pre_cook_servings":"8"}`,
+		ValidPayload:   `{"ingredients":[{"name":"Flour","amount":"2","unit":"g","non_metric_amount":"1","non_metric_unit":"cup","metric_validated":true},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","freezable":true,"pre_cook_servings":"8"}`,
 		InvalidPayload: `{"ingredients":[{"name":"","amount":"2","unit":"g"}]}`,
 	})
 }
@@ -21,6 +21,14 @@ func TestValidateConfigAllowsMilligrams(t *testing.T) {
 	err := plugin.ValidateConfig(json.RawMessage(`{"ingredients":[{"name":"Salt","amount":"500","unit":"mg"}]}`))
 	if err != nil {
 		t.Fatalf("expected mg unit to be valid, got: %v", err)
+	}
+}
+
+func TestValidateConfigAllowsNonMetricFields(t *testing.T) {
+	plugin := &RecipePlugin{}
+	err := plugin.ValidateConfig(json.RawMessage(`{"ingredients":[{"name":"Sugar","amount":"200","unit":"g","non_metric_amount":"1","non_metric_unit":"cup","metric_validated":true}]}`))
+	if err != nil {
+		t.Fatalf("expected non-metric fields to be valid, got: %v", err)
 	}
 }
 
@@ -126,7 +134,7 @@ func TestImportRecipesJSONAction(t *testing.T) {
 				"title": "Imported Chili",
 				"body":  "Simmer slowly.",
 				"ingredients": []map[string]any{
-					{"name": "Beans", "amount": 2, "unit": "pcs"},
+					{"name": "Beans", "amount": 2, "unit": "pcs", "non_metric_amount": 1, "non_metric_unit": "cup", "metric_validated": true},
 				},
 				"servings": 4,
 			},
@@ -188,6 +196,15 @@ func TestImportRecipesJSONAction(t *testing.T) {
 	}
 	if ingredientCount != 1 {
 		t.Fatalf("expected 1 primary ingredient, got %d", ingredientCount)
+	}
+
+	var nonMetricAmount, nonMetricUnit string
+	var metricValidated int
+	if err := d.QueryRow(`SELECT non_metric_amount, non_metric_unit, metric_validated FROM ct_recipe_ingredients WHERE note_id = ? LIMIT 1`, noteID).Scan(&nonMetricAmount, &nonMetricUnit, &metricValidated); err != nil {
+		t.Fatalf("query primary ingredient extended fields: %v", err)
+	}
+	if nonMetricAmount != "1" || nonMetricUnit != "cup" || metricValidated != 1 {
+		t.Fatalf("expected imported non-metric fields to persist, got amount=%q unit=%q validated=%d", nonMetricAmount, nonMetricUnit, metricValidated)
 	}
 
 	createdID := out.CreatedNoteIDs[0]

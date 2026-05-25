@@ -73,6 +73,9 @@ const registry = [
                     name: i.name || "",
                     amount: i.amount || "",
                     unit: i.unit || "",
+                    non_metric_amount: i.non_metric_amount || "",
+                    non_metric_unit: i.non_metric_unit || "",
+                    metric_validated: !!i.metric_validated,
                 })),
                 servings: raw.servings || "",
                 attention_time: raw.attention_time || "",
@@ -96,15 +99,23 @@ const registry = [
         emptyCustomData: () => ({
             recipes: [],
             grocery_lists: [],
+            unvalid_ingredients: [],
         }),
         normalizeCustomData(raw, _note) {
             if (!raw || typeof raw !== "object") {
-                return { recipes: [], grocery_lists: [] };
+                return {
+                    recipes: [],
+                    grocery_lists: [],
+                    unvalid_ingredients: [],
+                };
             }
             return {
                 recipes: Array.isArray(raw.recipes) ? raw.recipes : [],
                 grocery_lists: Array.isArray(raw.grocery_lists)
                     ? raw.grocery_lists
+                    : [],
+                unvalid_ingredients: Array.isArray(raw.unvalid_ingredients)
+                    ? raw.unvalid_ingredients
                     : [],
             };
         },

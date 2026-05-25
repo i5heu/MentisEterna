@@ -117,7 +117,7 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT ri.note_id, ri.name, ri.amount, ri.unit
+		SELECT ri.note_id, ri.name, ri.amount, ri.unit, COALESCE(ri.non_metric_amount, ''), COALESCE(ri.non_metric_unit, '')
 		FROM ct_recipe_ingredients ri
 		JOIN notes n ON n.id = ri.note_id
 		WHERE n.type = 'recipe' AND n.id IN (%s)
@@ -133,15 +133,16 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	// Aggregate: group by name+unit, scaling each ingredient by
 	// (num_people / recipe_servings) before merging.
 	type item struct {
-		Name   string `json:"name"`
-		Amount string `json:"amount"`
-		Unit   string `json:"unit"`
+		Name      string `json:"name"`
+		Amount    string `json:"amount"`
+		Unit      string `json:"unit"`
+		NonMetric string `json:"non_metric,omitempty"`
 	}
 	aggregated := map[string]item{}
 	for rows.Next() {
 		var rid int64
-		var name, amount, unit string
-		if err := rows.Scan(&rid, &name, &amount, &unit); err != nil {
+		var name, amount, unit, nonMetricAmount, nonMetricUnit string
+		if err := rows.Scan(&rid, &name, &amount, &unit, &nonMetricAmount, &nonMetricUnit); err != nil {
 			return nil, fmt.Errorf("scan ingredient: %w", err)
 		}
 
@@ -155,13 +156,16 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 		}
 		amount = scaleAmountFloat(amount, factor)
 		amount, unit = canonicalMetricAmount(amount, unit)
+		nonMetricAmount = scaleAmountFloat(nonMetricAmount, factor)
+		nonMetric := formatOptionalAmount(nonMetricAmount, nonMetricUnit)
 
 		key := name + "|" + unit
 		if existing, ok := aggregated[key]; ok {
 			existing.Amount = mergeAmounts(existing.Amount, amount)
+			existing.NonMetric = mergeAmounts(existing.NonMetric, nonMetric)
 			aggregated[key] = existing
 		} else {
-			aggregated[key] = item{Name: name, Amount: amount, Unit: unit}
+			aggregated[key] = item{Name: name, Amount: amount, Unit: unit, NonMetric: nonMetric}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -220,7 +224,7 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	// Convert to GroceryItem slice.
 	groceryItems := make([]GroceryItem, len(scaled))
 	for i, it := range scaled {
-		groceryItems[i] = GroceryItem{Name: it.Name, Amount: it.Amount, Unit: it.Unit}
+		groceryItems[i] = GroceryItem{Name: it.Name, Amount: it.Amount, Unit: it.Unit, NonMetric: it.NonMetric}
 	}
 
 	// Return the full grocery list object so the frontend can display it.
@@ -364,6 +368,21 @@ func formatAmount(num float64, unit string) string {
 		s += " " + unit
 	}
 	return s
+}
+
+func formatOptionalAmount(amount string, unit string) string {
+	amount = strings.TrimSpace(amount)
+	unit = strings.TrimSpace(unit)
+	if amount == "" && unit == "" {
+		return ""
+	}
+	if amount == "" {
+		return unit
+	}
+	if unit == "" {
+		return amount
+	}
+	return amount + " " + unit
 }
 
 // canonicalMetricAmount converts compatible metric units to a shared base unit
