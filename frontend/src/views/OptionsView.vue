@@ -111,23 +111,76 @@
                             aiStatus.base_url
                         }}</code>
                     </div>
+                    <!-- VSS (Vector Search) -->
                     <div class="status-row">
                         <span class="status-label">VSS (Vector Search)</span>
                         <span
                             class="status-badge"
                             :class="
-                                aiStatus.vss_available
+                                aiStatus.vss && aiStatus.vss.available
                                     ? 'status-ok'
                                     : 'status-err'
                             "
                         >
                             {{
-                                aiStatus.vss_available
+                                aiStatus.vss && aiStatus.vss.available
                                     ? "Available"
                                     : "Unavailable"
                             }}
                         </span>
                     </div>
+                    <div
+                        v-if="
+                            aiStatus.vss &&
+                            aiStatus.vss.available &&
+                            aiStatus.vss.notes_count !== undefined &&
+                            aiStatus.vss.notes_count >= 0
+                        "
+                        class="status-row"
+                    >
+                        <span class="status-label">Note Embeddings</span>
+                        <code class="status-value">{{
+                            aiStatus.vss.notes_count
+                        }}</code>
+                    </div>
+                    <div
+                        v-if="
+                            aiStatus.vss &&
+                            aiStatus.vss.available &&
+                            aiStatus.vss.ocr_files_count !== undefined &&
+                            aiStatus.vss.ocr_files_count >= 0
+                        "
+                        class="status-row"
+                    >
+                        <span class="status-label">OCR Embeddings</span>
+                        <code class="status-value">{{
+                            aiStatus.vss.ocr_files_count
+                        }}</code>
+                    </div>
+                    <div
+                        v-if="
+                            aiStatus.vss &&
+                            aiStatus.vss.available &&
+                            aiStatus.vss.stt_files_count !== undefined &&
+                            aiStatus.vss.stt_files_count >= 0
+                        "
+                        class="status-row"
+                    >
+                        <span class="status-label">STT Embeddings</span>
+                        <code class="status-value">{{
+                            aiStatus.vss.stt_files_count
+                        }}</code>
+                    </div>
+                    <div
+                        v-if="aiStatus.vss && aiStatus.vss.error"
+                        class="status-row"
+                    >
+                        <span class="status-label">VSS Error</span>
+                        <span class="status-msg status-err-msg">{{
+                            aiStatus.vss.error
+                        }}</span>
+                    </div>
+                    <!-- Per-service status -->
                     <div
                         v-for="svc in ['embedding', 'chat', 'ocr', 'stt']"
                         :key="svc"
