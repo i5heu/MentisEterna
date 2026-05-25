@@ -10,9 +10,10 @@ import (
 func TestBufInit(t *testing.T) {
 	b := new(Buf)
 	b.Init()
-	// ESC @ = initialize
-	if len(b.Bytes()) != 2 || b.Bytes()[0] != ESC || b.Bytes()[1] != '@' {
-		t.Errorf("Init did not produce ESC @, got %v", b.Bytes())
+	// ESC @ = initialize, ESC t 16 = select Windows-1252 code table.
+	want := []byte{ESC, '@', ESC, 't', escposCodeTableWPC1252}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Errorf("Init did not produce init+codepage, got %v want %v", b.Bytes(), want)
 	}
 }
 
@@ -53,6 +54,15 @@ func TestBufText(t *testing.T) {
 	s := string(b.Bytes())
 	if s != "hello" {
 		t.Errorf("Text: expected 'hello', got %q", s)
+	}
+}
+
+func TestBufTextEncodesWindows1252(t *testing.T) {
+	b := new(Buf)
+	b.Text("Ää Öö Üü — …")
+	want := []byte{0xC4, 0xE4, ' ', 0xD6, 0xF6, ' ', 0xDC, 0xFC, ' ', 0x97, ' ', 0x85}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Fatalf("Text encoded %v, want %v", b.Bytes(), want)
 	}
 }
 
@@ -215,6 +225,21 @@ func TestPadCenter(t *testing.T) {
 		if got != tt.expect {
 			t.Errorf("PadCenter(%q, %d) = %q, want %q", tt.s, tt.w, got, tt.expect)
 		}
+	}
+}
+
+func TestWidthHelpersHandleUnicode(t *testing.T) {
+	if got := TextWidth("Äpfel"); got != 5 {
+		t.Fatalf("TextWidth returned %d, want 5", got)
+	}
+	if got := TruncateWidth("Käsekuchen", 5); got != "Käsek" {
+		t.Fatalf("TruncateWidth returned %q", got)
+	}
+	if got := TruncateWithEllipsis("Käsekuchen", 5); got != "Käse…" {
+		t.Fatalf("TruncateWithEllipsis returned %q", got)
+	}
+	if got := PadRight("Äpfel", 7); got != "Äpfel  " {
+		t.Fatalf("PadRight returned %q", got)
 	}
 }
 

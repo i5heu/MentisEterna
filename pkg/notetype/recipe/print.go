@@ -30,9 +30,7 @@ func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Bu
 
 	// Header — centered.
 	b.AlignCenter()
-	if len(title) > w {
-		title = title[:w]
-	}
+	title = printer.TruncateWidth(title, w)
 	b.Text(title)
 	b.Ln()
 
@@ -59,15 +57,12 @@ func FormatRecipeReceipt(payload Payload, title string, body string) *printer.Bu
 
 		if right != "" {
 			// Pad name to fill width minus right side.
-			maxName := w - len(right) - 1 // -1 for the gap
-			if len(name) > maxName {
-				if maxName > 5 {
-					name = name[:maxName-1] + "\u2026"
-				} else {
-					name = name[:maxName]
-				}
+			rightWidth := printer.TextWidth(right)
+			maxName := w - rightWidth - 1 // -1 for the gap
+			if printer.TextWidth(name) > maxName {
+				name = printer.TruncateWithEllipsis(name, maxName)
 			}
-			line := printer.PadRight(name, w-len(right))
+			line := printer.PadRight(name, w-rightWidth)
 			b.Text(line + right + "\n")
 		} else {
 			b.Text(name + "\n")
@@ -127,14 +122,20 @@ func WrapLines(text string, maxWidth int) []string {
 	var out []string
 	for _, paragraph := range strings.Split(text, "\n") {
 		paragraph = strings.TrimSpace(paragraph)
-		for len(paragraph) > maxWidth {
-			// Find last space within limit.
+		for printer.TextWidth(paragraph) > maxWidth {
+			runes := []rune(paragraph)
 			cut := maxWidth
-			if idx := strings.LastIndexByte(paragraph[:maxWidth], ' '); idx > maxWidth/2 {
-				cut = idx
+			if cut > len(runes) {
+				cut = len(runes)
 			}
-			out = append(out, strings.TrimSpace(paragraph[:cut]))
-			paragraph = strings.TrimSpace(paragraph[cut:])
+			for i := cut; i > maxWidth/2; i-- {
+				if runes[i-1] == ' ' {
+					cut = i - 1
+					break
+				}
+			}
+			out = append(out, strings.TrimSpace(string(runes[:cut])))
+			paragraph = strings.TrimSpace(string(runes[cut:]))
 		}
 		if paragraph != "" {
 			out = append(out, paragraph)
@@ -172,15 +173,12 @@ func RecipeTextPrint(payload Payload, title string, body string) string {
 			}
 		}
 		if right != "" {
-			maxName := w - len(right) - 1
-			if len(name) > maxName {
-				if maxName > 5 {
-					name = name[:maxName-1] + "\u2026"
-				} else {
-					name = name[:maxName]
-				}
+			rightWidth := printer.TextWidth(right)
+			maxName := w - rightWidth - 1
+			if printer.TextWidth(name) > maxName {
+				name = printer.TruncateWithEllipsis(name, maxName)
 			}
-			line := printer.PadRight(name, w-len(right))
+			line := printer.PadRight(name, w-rightWidth)
 			sb.WriteString(line + right + "\n")
 		} else {
 			sb.WriteString(name + "\n")
@@ -227,9 +225,5 @@ func RecipeTextPrint(payload Payload, title string, body string) string {
 // CenterPad centers s in a field of width w.
 // Exported for use by the print plugin.
 func CenterPad(s string, w int) string {
-	if len(s) >= w {
-		return s[:w]
-	}
-	left := (w - len(s)) / 2
-	return strings.Repeat(" ", left) + s
+	return printer.PadCenter(printer.TruncateWidth(s, w), w)
 }

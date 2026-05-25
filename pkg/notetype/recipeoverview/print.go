@@ -19,10 +19,7 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 
 	// Header.
 	b.AlignCenter()
-	title := "Grocery List"
-	if len(title) > w {
-		title = title[:w]
-	}
+	title := printer.TruncateWidth("Grocery List", w)
 	b.Text(title)
 	b.Ln()
 
@@ -42,10 +39,7 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 		b.Text("  Recipes:")
 		b.Ln()
 		for _, name := range gl.RecipeNames {
-			line := "    - " + name
-			if len(line) > w-2 {
-				line = line[:w-3] + "\u2026"
-			}
+			line := printer.TruncateWithEllipsis("    - "+name, w-2)
 			b.Text(line)
 			b.Ln()
 		}
@@ -74,15 +68,12 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 		name := "  " + it.Name
 
 		if right != "" && strings.TrimSpace(right) != "" {
-			maxName := w - len(right) - 1
-			if len(name) > maxName {
-				if maxName > 5 {
-					name = name[:maxName-1] + "\u2026"
-				} else {
-					name = name[:maxName]
-				}
+			rightWidth := printer.TextWidth(right)
+			maxName := w - rightWidth - 1
+			if printer.TextWidth(name) > maxName {
+				name = printer.TruncateWithEllipsis(name, maxName)
 			}
-			line := printer.PadRight(name, w-len(right))
+			line := printer.PadRight(name, w-rightWidth)
 			b.Text(line + right + "\n")
 		} else {
 			b.Text(name + "\n")
@@ -116,10 +107,7 @@ func FormatGroceryListText(gl GroceryList) string {
 	if len(gl.RecipeNames) > 0 {
 		sb.WriteString("  Recipes:\n")
 		for _, name := range gl.RecipeNames {
-			line := "    - " + name
-			if len(line) > w-2 {
-				line = line[:w-3] + "\u2026"
-			}
+			line := printer.TruncateWithEllipsis("    - "+name, w-2)
 			sb.WriteString(line + "\n")
 		}
 		sb.WriteByte('\n')
@@ -145,15 +133,12 @@ func FormatGroceryListText(gl GroceryList) string {
 		name := "  " + it.Name
 
 		if right != "" && strings.TrimSpace(right) != "" {
-			maxName := w - len(right) - 1
-			if len(name) > maxName {
-				if maxName > 5 {
-					name = name[:maxName-1] + "\u2026"
-				} else {
-					name = name[:maxName]
-				}
+			rightWidth := printer.TextWidth(right)
+			maxName := w - rightWidth - 1
+			if printer.TextWidth(name) > maxName {
+				name = printer.TruncateWithEllipsis(name, maxName)
 			}
-			line := printer.PadRight(name, w-len(right))
+			line := printer.PadRight(name, w-rightWidth)
 			sb.WriteString(line + right + "\n")
 		} else {
 			sb.WriteString(name + "\n")
