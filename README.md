@@ -62,6 +62,17 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 `hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M`  
 `hf.co/ggml-org/GLM-OCR-GGUF:Q8_0`
 
+## TODO Bugs
+- [x] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
+- [x] Remove Light Mode, Only Dark Mode is supported.
+- [x] Font Color of the Task Note Type > .status-badge is not visible because fontcolor is to dark.
+- [ ] Click on Note Title should open the note in main view.
+- [ ] Printer Needs a connection section in settings.
+- [ ] AI API needs a connection section in settings to test connection and show error messages.
+
+## TODO Current
+- [ ] Recipe System
+  - [ ] First image in a recipe should be shown as thumbnail in in the Recipe Overview
 
 ## TODO MVP
 - [x] Pin notes 
@@ -80,14 +91,6 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] LocalAI URL configurable via env var
 - [x] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
 - [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
-
-## TODO Bugs
-- [x] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
-- [x] Remove Light Mode, Only Dark Mode is supported.
-- [ ] Font Color of the Task Note Type > .status-badge is not visible because fontcolor is to dark.
-- [ ] Click on Note Title should open the note in main view.
-- [ ] Printer Needs a connection section in settings.
-- [ ] AI API needs a connection section in settings to test connection and show error messages.
 
 ## TODO Future
 - [x] OCR for images and pdfs
