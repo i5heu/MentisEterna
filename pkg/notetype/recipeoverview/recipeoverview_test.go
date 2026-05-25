@@ -149,10 +149,10 @@ func TestGenerateGroceryListMergesMilligramsAndGrams(t *testing.T) {
 
 	note1 := plugintest.CreateNote(t, d, "Vitamin Mix A", recipePlugin)
 	note2 := plugintest.CreateNote(t, d, "Vitamin Mix B", recipePlugin)
-	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, 'Vitamin C', '500', 'mg', 0)`, note1); err != nil {
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, sort_order) VALUES (?, 'Vitamin C', '500', 'mg', '1', 'teaspoon', 0)`, note1); err != nil {
 		t.Fatalf("insert ingredient 1: %v", err)
 	}
-	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, sort_order) VALUES (?, 'Vitamin C', '0.5', 'g', 0)`, note2); err != nil {
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, sort_order) VALUES (?, 'Vitamin C', '0.5', 'g', '0.5', 'teaspoon', 0)`, note2); err != nil {
 		t.Fatalf("insert ingredient 2: %v", err)
 	}
 	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_meta (note_id, servings) VALUES (?, '1'), (?, '1')`, note1, note2); err != nil {
@@ -187,5 +187,53 @@ func TestGenerateGroceryListMergesMilligramsAndGrams(t *testing.T) {
 	}
 	if gl.Items[0].Name != "Vitamin C" || gl.Items[0].Amount != "1" || gl.Items[0].Unit != "g" {
 		t.Fatalf("expected merged Vitamin C amount 1 g, got %+v", gl.Items[0])
+	}
+	if gl.Items[0].NonMetric != "1.5 teaspoon" {
+		t.Fatalf("expected merged Vitamin C non-metric amount '1.5 teaspoon', got %+v", gl.Items[0])
+	}
+}
+
+func TestBuildView_IncludesUnvalidIngredientsAcrossRecipes(t *testing.T) {
+	d := plugintest.DB(t, &RecipeOverviewPlugin{})
+	defer d.Close()
+
+	recipePlugin := &recipe.RecipePlugin{}
+	if err := recipePlugin.InitSchema(d.DB); err != nil {
+		t.Fatalf("recipe InitSchema: %v", err)
+	}
+
+	note1 := plugintest.CreateNote(t, d, "Spices", recipePlugin)
+	note2 := plugintest.CreateNote(t, d, "Baking", recipePlugin)
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, 'Paprika', '5', 'g', '1', 'tablespoon', 0, 0)`, note1); err != nil {
+		t.Fatalf("insert unvalidated ingredient: %v", err)
+	}
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, 'Flour', '', '', '1', 'cup', 0, 0)`, note2); err != nil {
+		t.Fatalf("insert missing metric ingredient: %v", err)
+	}
+
+	overviewNote := plugintest.CreateNote(t, d, "Weekly Overview", &RecipeOverviewPlugin{})
+	plugin := &RecipeOverviewPlugin{}
+	result, err := plugin.BuildView(context.Background(), d.DB, 0, overviewNote)
+	if err != nil {
+		t.Fatalf("BuildView: %v", err)
+	}
+
+	data, ok := result.(*OverviewData)
+	if !ok {
+		t.Fatalf("expected *OverviewData, got %T", result)
+	}
+	if len(data.UnvalidIngredients) != 2 {
+		t.Fatalf("expected 2 unvalid ingredients, got %d", len(data.UnvalidIngredients))
+	}
+
+	issues := map[string]string{}
+	for _, item := range data.UnvalidIngredients {
+		issues[item.IngredientName] = item.IssueType
+	}
+	if issues["Paprika"] != "not_validated" {
+		t.Fatalf("expected Paprika to be not_validated, got %q", issues["Paprika"])
+	}
+	if issues["Flour"] != "missing_metric" {
+		t.Fatalf("expected Flour to be missing_metric, got %q", issues["Flour"])
 	}
 }

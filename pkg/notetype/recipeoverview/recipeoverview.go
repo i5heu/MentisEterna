@@ -74,8 +74,9 @@ func (p *RecipeOverviewPlugin) InitSchema(db *sql.DB) error {
 
 // OverviewData is what the frontend receives when loading this note type.
 type OverviewData struct {
-	Recipes      []RecipeSummary `json:"recipes"`
-	GroceryLists []GroceryList   `json:"grocery_lists"`
+	Recipes            []RecipeSummary     `json:"recipes"`
+	GroceryLists       []GroceryList       `json:"grocery_lists"`
+	UnvalidIngredients []UnvalidIngredient `json:"unvalid_ingredients"`
 }
 
 type RecipeSummary struct {
@@ -99,9 +100,23 @@ type GroceryList struct {
 }
 
 type GroceryItem struct {
-	Name   string `json:"name"`
-	Amount string `json:"amount"`
-	Unit   string `json:"unit"`
+	Name      string `json:"name"`
+	Amount    string `json:"amount"`
+	Unit      string `json:"unit"`
+	NonMetric string `json:"non_metric,omitempty"`
+}
+
+type UnvalidIngredient struct {
+	RecipeNoteID    int64  `json:"recipe_note_id"`
+	RecipeTitle     string `json:"recipe_title"`
+	IngredientID    int64  `json:"ingredient_id"`
+	IngredientName  string `json:"ingredient_name"`
+	Amount          string `json:"amount"`
+	Unit            string `json:"unit"`
+	NonMetricAmount string `json:"non_metric_amount"`
+	NonMetricUnit   string `json:"non_metric_unit"`
+	MetricValidated bool   `json:"metric_validated"`
+	IssueType       string `json:"issue_type"`
 }
 
 func extractFirstMarkdownImageURL(body string) string {
@@ -237,7 +252,47 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 		return nil, err
 	}
 
-	// 2. Load all past grocery lists for this overview note (newest first).
+	// 2. Load ingredients that still need validation work across all recipes.
+	ingredientRows, err := db.Query(`
+		SELECT n.id, n.title, ri.id, ri.name, ri.amount, ri.unit,
+			COALESCE(ri.non_metric_amount, ''),
+			COALESCE(ri.non_metric_unit, ''),
+			COALESCE(ri.metric_validated, 0)
+		FROM notes n
+		JOIN ct_recipe_ingredients ri ON ri.note_id = n.id
+		WHERE n.type = 'recipe'
+		ORDER BY n.title, ri.sort_order, ri.id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("recipe_overview: load unvalid ingredients: %w", err)
+	}
+	defer ingredientRows.Close()
+
+	unvalidIngredients := []UnvalidIngredient{}
+	for ingredientRows.Next() {
+		var item UnvalidIngredient
+		var metricValidatedInt int
+		if err := ingredientRows.Scan(&item.RecipeNoteID, &item.RecipeTitle, &item.IngredientID, &item.IngredientName, &item.Amount, &item.Unit, &item.NonMetricAmount, &item.NonMetricUnit, &metricValidatedInt); err != nil {
+			return nil, fmt.Errorf("recipe_overview: scan unvalid ingredient: %w", err)
+		}
+		item.MetricValidated = metricValidatedInt != 0
+
+		hasMetric := strings.TrimSpace(item.Amount) != "" && strings.TrimSpace(item.Unit) != ""
+		hasNonMetric := strings.TrimSpace(item.NonMetricAmount) != "" && strings.TrimSpace(item.NonMetricUnit) != ""
+		switch {
+		case !hasMetric:
+			item.IssueType = "missing_metric"
+			unvalidIngredients = append(unvalidIngredients, item)
+		case hasNonMetric && !item.MetricValidated:
+			item.IssueType = "not_validated"
+			unvalidIngredients = append(unvalidIngredients, item)
+		}
+	}
+	if err := ingredientRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 3. Load all past grocery lists for this overview note (newest first).
 	listRows, err := db.Query(`
 		SELECT id, generated_at, num_days, num_people, items_json
 		FROM ct_recipe_overview_grocery_lists
@@ -294,8 +349,9 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 	}
 
 	return &OverviewData{
-		Recipes:      recipes,
-		GroceryLists: lists,
+		Recipes:            recipes,
+		GroceryLists:       lists,
+		UnvalidIngredients: unvalidIngredients,
 	}, nil
 }
 

@@ -56,12 +56,16 @@
         </div>
 
         <h3>Ingredients</h3>
+
         <table class="ingredient-table">
             <thead>
                 <tr>
                     <th>Name</th>
-                    <th>Amount</th>
-                    <th>Unit</th>
+                    <th>Metric Amount</th>
+                    <th>Metric Unit</th>
+                    <th>Non-Metric Amount</th>
+                    <th>Non-Metric Type</th>
+                    <th>Metric Validated</th>
                     <th v-if="editing"></th>
                 </tr>
             </thead>
@@ -74,6 +78,7 @@
                         />
                     </td>
                     <td v-else>{{ ing.name || "-" }}</td>
+
                     <td v-if="editing">
                         <input
                             v-model="ing.amount"
@@ -82,8 +87,10 @@
                         />
                     </td>
                     <td v-else>{{ ing.amount || "-" }}</td>
+
                     <td v-if="editing">
                         <select v-model="ing.unit" class="unit-select">
+                            <option value="">—</option>
                             <option value="mg">mg</option>
                             <option value="g">g</option>
                             <option value="kg">kg</option>
@@ -93,6 +100,46 @@
                         </select>
                     </td>
                     <td v-else>{{ ing.unit || "-" }}</td>
+
+                    <td v-if="editing">
+                        <input
+                            v-model="ing.non_metric_amount"
+                            placeholder="e.g. 1"
+                            class="amount-input"
+                        />
+                    </td>
+                    <td v-else>{{ ing.non_metric_amount || "-" }}</td>
+
+                    <td v-if="editing">
+                        <select
+                            v-model="ing.non_metric_unit"
+                            class="unit-select non-metric-unit-select"
+                        >
+                            <option value="">—</option>
+                            <option value="teaspoon">Teaspoon</option>
+                            <option value="tablespoon">Tablespoon</option>
+                            <option value="cup">Cup</option>
+                        </select>
+                    </td>
+                    <td v-else>
+                        {{ formatNonMetricUnit(ing.non_metric_unit) }}
+                    </td>
+
+                    <td>
+                        <template v-if="shouldShowMetricValidatedField(ing)">
+                            <input
+                                v-if="editing"
+                                type="checkbox"
+                                v-model="ing.metric_validated"
+                                class="detail-checkbox"
+                            />
+                            <span v-else>
+                                {{ ing.metric_validated ? "Yes" : "No" }}
+                            </span>
+                        </template>
+                        <span v-else class="muted-dash">—</span>
+                    </td>
+
                     <td v-if="editing">
                         <button
                             class="btn-ghost btn-sm"
@@ -209,7 +256,7 @@ const RECIPE_IMPORT_SCHEMA = {
                         items: {
                             type: "object",
                             additionalProperties: false,
-                            required: ["name", "unit"],
+                            required: ["name"],
                             properties: {
                                 name: { type: "string", minLength: 1 },
                                 amount: {
@@ -222,6 +269,17 @@ const RECIPE_IMPORT_SCHEMA = {
                                     type: "string",
                                     enum: ["mg", "g", "kg", "ml", "l", "pcs"],
                                 },
+                                non_metric_amount: {
+                                    oneOf: [
+                                        { type: "string" },
+                                        { type: "number" },
+                                    ],
+                                },
+                                non_metric_unit: {
+                                    type: "string",
+                                    enum: ["teaspoon", "tablespoon", "cup"],
+                                },
+                                metric_validated: { type: "boolean" },
                             },
                         },
                     },
@@ -254,7 +312,14 @@ const RECIPE_IMPORT_EXAMPLE = {
             ingredients: [
                 { name: "Rice", amount: 250, unit: "g" },
                 { name: "Coconut milk", amount: 400, unit: "ml" },
-                { name: "Chili flakes", amount: 500, unit: "mg" },
+                {
+                    name: "Chili flakes",
+                    amount: 500,
+                    unit: "mg",
+                    non_metric_amount: 1,
+                    non_metric_unit: "teaspoon",
+                    metric_validated: false,
+                },
                 { name: "Carrot", amount: 2, unit: "pcs" },
             ],
             servings: 4,
@@ -269,9 +334,14 @@ const RECIPE_IMPORT_EXAMPLE = {
             title: "Quick Tomato Pasta",
             body: "Boil pasta. Simmer the tomato sauce. Toss and serve.",
             ingredients: [
-                { name: "Pasta", amount: 300, unit: "g" },
-                { name: "Tomato sauce", amount: 500, unit: "ml" },
-                { name: "Parmesan", amount: 80, unit: "g" },
+                {
+                    name: "Parmesan",
+                    amount: 80,
+                    unit: "g",
+                    non_metric_amount: 1,
+                    non_metric_unit: "cup",
+                    metric_validated: true,
+                },
             ],
             servings: 3,
             attention_time: "15m",
@@ -296,7 +366,6 @@ const props = defineProps({
 
 const emit = defineEmits(["selectNote", "update:customData", "import:recipes"]);
 
-// Local reactive copies
 const localIngredients = ref([]);
 const localServings = ref("");
 const localAttentionTime = ref("");
@@ -323,10 +392,6 @@ const displayImportError = computed(() => {
     return importError.value || props.actionError || "";
 });
 
-// Guard to break the echo-back loop:
-// local change => emit => parent sets customData prop => hydrate watcher
-// Without this guard, the hydration overwrites local state, triggering
-// the deep watcher again, creating an infinite cycle that crashes the tab.
 let hydrating = false;
 
 function hasText(value) {
@@ -339,11 +404,18 @@ function normalizeString(value) {
 }
 
 function normalizeIngredient(raw) {
-    return {
+    const normalized = {
         name: normalizeString(raw?.name),
         amount: normalizeString(raw?.amount),
         unit: normalizeString(raw?.unit),
+        non_metric_amount: normalizeString(raw?.non_metric_amount),
+        non_metric_unit: normalizeString(raw?.non_metric_unit),
+        metric_validated: !!raw?.metric_validated,
     };
+    if (!shouldShowMetricValidatedField(normalized)) {
+        normalized.metric_validated = false;
+    }
+    return normalized;
 }
 
 function buildRecipeCustomData(raw) {
@@ -362,10 +434,31 @@ function buildRecipeCustomData(raw) {
     };
 }
 
+function shouldShowMetricValidatedField(ingredient) {
+    return (
+        hasText(ingredient?.amount) &&
+        hasText(ingredient?.unit) &&
+        hasText(ingredient?.non_metric_amount) &&
+        hasText(ingredient?.non_metric_unit)
+    );
+}
+
+function formatNonMetricUnit(unit) {
+    switch (unit) {
+        case "teaspoon":
+            return "Teaspoon";
+        case "tablespoon":
+            return "Tablespoon";
+        case "cup":
+            return "Cup";
+        default:
+            return "-";
+    }
+}
+
 function setLocalRecipeState(raw, { emitAfter = false } = {}) {
     hydrating = true;
-    const safe = raw && typeof raw === "object" ? raw : {};
-    const data = buildRecipeCustomData(safe);
+    const data = buildRecipeCustomData(raw);
 
     localIngredients.value = data.ingredients;
     localServings.value = data.servings;
@@ -394,10 +487,8 @@ function hydrateFromProp() {
     resetImportPanel();
 }
 
-// Hydrate when the note identity changes (user opens a different note).
 watch(() => props.note?.id, hydrateFromProp, { immediate: true });
 
-// Also hydrate if customData arrives asynchronously after the note id.
 watch(
     () => props.customData,
     (cd) => {
@@ -409,14 +500,18 @@ watch(
     },
 );
 
-// Emit custom data on any local change.
 function emitCustomData() {
     if (hydrating) return;
     emit("update:customData", {
-        ingredients: localIngredients.value.map(({ name, amount, unit }) => ({
-            name,
-            amount,
-            unit,
+        ingredients: localIngredients.value.map((ingredient) => ({
+            name: ingredient.name,
+            amount: ingredient.amount,
+            unit: ingredient.unit,
+            non_metric_amount: ingredient.non_metric_amount,
+            non_metric_unit: ingredient.non_metric_unit,
+            metric_validated: shouldShowMetricValidatedField(ingredient)
+                ? !!ingredient.metric_validated
+                : false,
         })),
         servings: localServings.value,
         attention_time: localAttentionTime.value,
@@ -473,7 +568,14 @@ function importRecipeJson() {
 }
 
 function addIngredient() {
-    localIngredients.value.push({ name: "", amount: "", unit: "" });
+    localIngredients.value.push({
+        name: "",
+        amount: "",
+        unit: "",
+        non_metric_amount: "",
+        non_metric_unit: "",
+        metric_validated: false,
+    });
 }
 
 function removeIngredient(idx) {
@@ -573,6 +675,7 @@ function removeIngredient(idx) {
     padding: 0.35rem 0.5rem;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
 }
 
 .ingredient-table th {
@@ -590,13 +693,21 @@ function removeIngredient(idx) {
 }
 
 .amount-input {
-    width: 5rem !important;
+    width: 5.5rem !important;
 }
 
 .unit-select {
-    width: 5.5rem;
+    width: 7rem;
     padding: 0.3rem 0.4rem;
     font-size: 0.9rem;
+}
+
+.non-metric-unit-select {
+    width: 9rem;
+}
+
+.muted-dash {
+    color: var(--font-color-secondary);
 }
 
 .recipe-details {

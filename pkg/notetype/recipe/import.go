@@ -202,12 +202,19 @@ func payloadFromImportedRecipeMap(recipeMap map[string]any, index int) (Payload,
 		if strings.TrimSpace(name) == "" {
 			return Payload{}, nil, badImportRequest("Recipe %d: ingredient %d is missing a name.", index, j+1)
 		}
-		unit := stringFromAny(ingMap["unit"])
-		if strings.TrimSpace(unit) == "" {
-			return Payload{}, nil, badImportRequest("Recipe %d: ingredient %d is missing a unit.", index, j+1)
-		}
 		amount := stringFromAny(ingMap["amount"])
-		rows = append(rows, IngredientRow{Name: name, Amount: amount, Unit: unit})
+		unit := stringFromAny(ingMap["unit"])
+		nonMetricAmount := stringFromAny(ingMap["non_metric_amount"])
+		nonMetricUnit := stringFromAny(ingMap["non_metric_unit"])
+		metricValidated := boolFromAny(ingMap["metric_validated"])
+		rows = append(rows, IngredientRow{
+			Name:            name,
+			Amount:          amount,
+			Unit:            unit,
+			NonMetricAmount: nonMetricAmount,
+			NonMetricUnit:   nonMetricUnit,
+			MetricValidated: metricValidated,
+		})
 		imported = append(imported, importedIngredient{Name: name, Amount: amount, Unit: unit})
 	}
 
@@ -224,16 +231,28 @@ func payloadFromImportedRecipeMap(recipeMap map[string]any, index int) (Payload,
 }
 
 func importedRecipeHasContent(recipe importedRecipe) bool {
-	return strings.TrimSpace(recipe.Title) != "" ||
-		strings.TrimSpace(recipe.Body) != "" ||
-		len(recipe.Payload.Ingredients) > 0 ||
+	if strings.TrimSpace(recipe.Title) != "" || strings.TrimSpace(recipe.Body) != "" ||
 		strings.TrimSpace(recipe.Payload.Servings) != "" ||
 		strings.TrimSpace(recipe.Payload.AttentionTime) != "" ||
 		strings.TrimSpace(recipe.Payload.TotalTime) != "" ||
 		strings.TrimSpace(recipe.Payload.GramsPerServing) != "" ||
 		strings.TrimSpace(recipe.Payload.KcalPerServing) != "" ||
 		recipe.Payload.Freezable ||
-		strings.TrimSpace(recipe.Payload.PreCookServings) != ""
+		strings.TrimSpace(recipe.Payload.PreCookServings) != "" {
+		return true
+	}
+
+	for _, ing := range recipe.Payload.Ingredients {
+		if strings.TrimSpace(ing.Name) != "" ||
+			strings.TrimSpace(ing.Amount) != "" ||
+			strings.TrimSpace(ing.Unit) != "" ||
+			strings.TrimSpace(ing.NonMetricAmount) != "" ||
+			strings.TrimSpace(ing.NonMetricUnit) != "" ||
+			ing.MetricValidated {
+			return true
+		}
+	}
+	return false
 }
 
 func stringFromAny(v any) string {

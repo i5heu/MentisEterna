@@ -2,6 +2,16 @@
     <div class="overview-dashboard">
         <h3>Recipe Overview</h3>
 
+        <div class="overview-actions-row">
+            <button
+                v-if="unvalidIngredients.length > 0"
+                class="btn-ghost btn-sm"
+                @click="showUnvalidModal = true"
+            >
+                Unvalid Ingredients ({{ unvalidIngredients.length }})
+            </button>
+        </div>
+
         <!-- Recipe selection list -->
         <div class="recipe-selection-section">
             <h4>Select Recipes</h4>
@@ -148,6 +158,7 @@
                         <th>Item</th>
                         <th>Amount</th>
                         <th>Unit</th>
+                        <th>Non-Metric</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -155,6 +166,7 @@
                         <td>{{ item.name }}</td>
                         <td>{{ item.amount }}</td>
                         <td>{{ item.unit }}</td>
+                        <td>{{ item.non_metric || "-" }}</td>
                     </tr>
                 </tbody>
             </table>
@@ -207,6 +219,7 @@
                                 <th>Item</th>
                                 <th>Amount</th>
                                 <th>Unit</th>
+                                <th>Non-Metric</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -214,10 +227,88 @@
                                 <td>{{ item.name }}</td>
                                 <td>{{ item.amount }}</td>
                                 <td>{{ item.unit }}</td>
+                                <td>{{ item.non_metric || "-" }}</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+
+        <div
+            v-if="showUnvalidModal"
+            class="recipe-modal-overlay"
+            @click.self="showUnvalidModal = false"
+        >
+            <div class="recipe-modal">
+                <div class="recipe-modal-header">
+                    <h4>Unvalid Ingredients</h4>
+                    <button
+                        class="btn-ghost btn-sm"
+                        @click="showUnvalidModal = false"
+                    >
+                        ✕
+                    </button>
+                </div>
+                <p class="recipe-modal-hint">
+                    This list contains ingredients from all recipes that are not
+                    validated yet or do not have metric ingredients.
+                </p>
+                <ul class="unvalid-list">
+                    <li
+                        v-for="item in unvalidIngredients"
+                        :key="`${item.recipe_note_id}-${item.ingredient_id}-${item.issue_type}`"
+                        class="unvalid-item"
+                    >
+                        <div class="unvalid-top-row">
+                            <div>
+                                <div class="unvalid-recipe-title">
+                                    {{ item.recipe_title }}
+                                </div>
+                                <div class="unvalid-ingredient-name">
+                                    {{
+                                        item.ingredient_name ||
+                                        "Unnamed ingredient"
+                                    }}
+                                </div>
+                            </div>
+                            <button
+                                class="btn-ghost btn-sm"
+                                @click="
+                                    $emit('selectNote', item.recipe_note_id)
+                                "
+                            >
+                                View Recipe
+                            </button>
+                        </div>
+                        <div class="unvalid-values">
+                            <span
+                                v-if="
+                                    item.non_metric_amount ||
+                                    item.non_metric_unit
+                                "
+                            >
+                                {{ item.non_metric_amount || "?" }}
+                                {{ formatNonMetricUnit(item.non_metric_unit) }}
+                            </span>
+                            <span
+                                v-if="
+                                    (item.non_metric_amount ||
+                                        item.non_metric_unit) &&
+                                    (item.amount || item.unit)
+                                "
+                            >
+                                →
+                            </span>
+                            <span>
+                                {{ item.amount || "?" }} {{ item.unit || "?" }}
+                            </span>
+                        </div>
+                        <div class="unvalid-issue">
+                            {{ formatIssueType(item.issue_type) }}
+                        </div>
+                    </li>
+                </ul>
             </div>
         </div>
     </div>
@@ -247,6 +338,7 @@ const configPeople = ref(1);
 const expandedLists = ref(new Set());
 const deletingListId = ref(null);
 const printingListId = ref(null);
+const showUnvalidModal = ref(false);
 
 const latestList = computed(() => {
     const lists = overviewData.value?.grocery_lists;
@@ -258,13 +350,21 @@ const pastLists = computed(() => {
     return lists && lists.length > 1 ? lists.slice(1) : [];
 });
 
-// Guard to break echo-back loop.
+const unvalidIngredients = computed(() => {
+    const items = overviewData.value?.unvalid_ingredients;
+    return Array.isArray(items) ? items : [];
+});
+
 let hydrating = false;
 
 function hydrateFromProp() {
     hydrating = true;
     const cd = props.customData;
-    overviewData.value = cd || { recipes: [], grocery_lists: [] };
+    overviewData.value = cd || {
+        recipes: [],
+        grocery_lists: [],
+        unvalid_ingredients: [],
+    };
 
     const lists = overviewData.value.grocery_lists || [];
     if (lists.length > 0 && selectedRecipeIds.value.length === 0) {
@@ -275,13 +375,12 @@ function hydrateFromProp() {
             configPeople.value = latest.num_people || 1;
         }
     }
+    showUnvalidModal.value = false;
     hydrating = false;
 }
 
-// Hydrate when the note identity changes.
 watch(() => props.note?.id, hydrateFromProp, { immediate: true });
 
-// Also catch async customData arrival.
 watch(
     () => props.customData,
     (cd) => {
@@ -384,6 +483,30 @@ function formatDate(iso) {
         return iso;
     }
 }
+
+function formatNonMetricUnit(unit) {
+    switch (unit) {
+        case "teaspoon":
+            return "Teaspoon";
+        case "tablespoon":
+            return "Tablespoon";
+        case "cup":
+            return "Cup";
+        default:
+            return "";
+    }
+}
+
+function formatIssueType(issueType) {
+    switch (issueType) {
+        case "missing_metric":
+            return "Missing metric ingredient values";
+        case "not_validated":
+            return "Metric conversion not validated";
+        default:
+            return "Needs review";
+    }
+}
 </script>
 
 <style scoped>
@@ -397,6 +520,11 @@ function formatDate(iso) {
     font-size: 1.1rem;
     margin: 0.5rem 0 0.5rem;
     color: var(--font-color-secondary);
+}
+
+.overview-actions-row {
+    display: flex;
+    justify-content: flex-end;
 }
 
 .recipe-selection-section {
@@ -642,5 +770,88 @@ function formatDate(iso) {
 .config-hint {
     font-size: 0.8rem;
     color: var(--font-color-secondary);
+}
+
+.recipe-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(1, 16, 31, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.recipe-modal {
+    width: min(42rem, 92vw);
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--raised-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+}
+
+.recipe-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.recipe-modal-header h4 {
+    margin: 0;
+    color: var(--header-title-color);
+}
+
+.recipe-modal-hint {
+    margin: 0 0 1rem;
+    color: var(--font-color-secondary);
+    font-size: 0.9rem;
+}
+
+.unvalid-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.unvalid-item {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.7rem 0.8rem;
+    background: var(--html-bg);
+}
+
+.unvalid-top-row {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.unvalid-recipe-title {
+    font-weight: 600;
+    margin-bottom: 0.15rem;
+}
+
+.unvalid-ingredient-name {
+    color: var(--font-color-secondary);
+    font-size: 0.9rem;
+}
+
+.unvalid-values {
+    margin-top: 0.45rem;
+    font-size: 0.92rem;
+}
+
+.unvalid-issue {
+    margin-top: 0.35rem;
+    color: var(--heading-color);
+    font-size: 0.85rem;
 }
 </style>
