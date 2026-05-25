@@ -1,5 +1,27 @@
 package db
 
+/*
+#cgo linux LDFLAGS: -ldl
+#include <dlfcn.h>
+
+static const char* mentis_load_global_libm(void) {
+#if defined(__linux__)
+	dlerror();
+	if (dlopen("libm.so.6", RTLD_NOW | RTLD_GLOBAL) != NULL) {
+		return NULL;
+	}
+	dlerror();
+	if (dlopen("libm.so", RTLD_NOW | RTLD_GLOBAL) != NULL) {
+		return NULL;
+	}
+	return dlerror();
+#else
+	return NULL;
+#endif
+}
+*/
+import "C"
+
 import (
 	"database/sql"
 	"errors"
@@ -8,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	gosqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -24,12 +47,27 @@ func init() {
 
 	sql.Register("sqlite3-vec", &gosqlite3.SQLiteDriver{
 		ConnectHook: func(conn *gosqlite3.SQLiteConn) error {
+			if err := ensureVecRuntimeDeps(); err != nil {
+				return err
+			}
 			if err := conn.LoadExtension(vecLib, "sqlite3_vec_init"); err != nil {
 				return fmt.Errorf("load vec0: %w", err)
 			}
 			return nil
 		},
 	})
+}
+
+var vecRuntimeDepsOnce sync.Once
+var vecRuntimeDepsErr error
+
+func ensureVecRuntimeDeps() error {
+	vecRuntimeDepsOnce.Do(func() {
+		if msg := C.mentis_load_global_libm(); msg != nil {
+			vecRuntimeDepsErr = fmt.Errorf("load libm for vec0: %s", C.GoString(msg))
+		}
+	})
+	return vecRuntimeDepsErr
 }
 
 // findExtPath locates the directory containing vec0.
@@ -464,8 +502,9 @@ func (d *DB) ensureVecTable(tableName, columnName string, expectedDim int) error
 	}
 
 	testRowID := int64(-1)
+	_, _ = d.Exec(`DELETE FROM `+tableName+` WHERE rowid = ?`, testRowID)
 	if _, err := d.Exec(
-		`INSERT OR REPLACE INTO `+tableName+`(rowid, `+columnName+`) VALUES (?, ?)`,
+		`INSERT INTO `+tableName+`(rowid, `+columnName+`) VALUES (?, ?)`,
 		testRowID,
 		zeroVectorJSON(expectedDim),
 	); err != nil {

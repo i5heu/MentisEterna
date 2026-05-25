@@ -271,9 +271,10 @@ npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 
 **Vector extension loading**: `db.Open()` loads the `sqlite-vec` loadable extension (`vec0`) when available and gracefully falls back to standard SQLite otherwise. Tests that require vector search auto-skip with `t.Skip(...)` when the extension is unavailable — this is intentional, not a bug.
 
-**sqlite-vec upserts**: `vec0` supports `INSERT OR REPLACE`, which the app uses for embedding refreshes:
+**sqlite-vec embedding refreshes**: in this app, vector rows are refreshed conservatively with `DELETE` then `INSERT`:
 ```sql
-INSERT OR REPLACE INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
+DELETE FROM vss_notes WHERE rowid = ?;
+INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
 ```
 
 **WebAuthn**: RPID is hardcoded to `localhost`, origins locked to `http://localhost:8080` and `https://localhost:8080`. Changing the host/port requires updating `internal/server/server.go`.

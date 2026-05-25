@@ -855,11 +855,14 @@ func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
 		return "", fmt.Errorf("generate embedding: %w", err)
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
+	if _, err := db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.NoteID); err != nil {
+		return "", fmt.Errorf("delete old embedding: %w", err)
+	}
 	if _, err := db.Exec(
-		`INSERT OR REPLACE INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
+		`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
 		p.NoteID, vecJSON,
 	); err != nil {
-		return "", fmt.Errorf("upsert embedding: %w", err)
+		return "", fmt.Errorf("insert embedding: %w", err)
 	}
 	return fmt.Sprintf("Indexed note %d (%d chars)", p.NoteID, len(p.Body)), nil
 }
@@ -1002,11 +1005,14 @@ func (s *Server) syncOCREmbeddingTask(db *sql.DB, payload []byte) (string, error
 		return "", fmt.Errorf("generate OCR embedding: %w", err)
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
+	if _, err := db.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, p.FileID); err != nil {
+		return "", fmt.Errorf("delete old OCR embedding: %w", err)
+	}
 	if _, err := db.Exec(
-		`INSERT OR REPLACE INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`,
+		`INSERT INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`,
 		p.FileID, vecJSON,
 	); err != nil {
-		return "", fmt.Errorf("upsert OCR embedding: %w", err)
+		return "", fmt.Errorf("insert OCR embedding: %w", err)
 	}
 	return fmt.Sprintf("Indexed OCR for file %d (%d chars)", p.FileID, len(p.OCRText)), nil
 }
@@ -1084,11 +1090,14 @@ func (s *Server) syncSTTEmbeddingTask(db *sql.DB, payload []byte) (string, error
 		return "", fmt.Errorf("generate STT embedding: %w", err)
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
+	if _, err := db.Exec(`DELETE FROM vss_files_stt WHERE rowid = ?`, p.FileID); err != nil {
+		return "", fmt.Errorf("delete old STT embedding: %w", err)
+	}
 	if _, err := db.Exec(
-		`INSERT OR REPLACE INTO vss_files_stt(rowid, stt_embedding) VALUES (?, ?)`,
+		`INSERT INTO vss_files_stt(rowid, stt_embedding) VALUES (?, ?)`,
 		p.FileID, vecJSON,
 	); err != nil {
-		return "", fmt.Errorf("upsert STT embedding: %w", err)
+		return "", fmt.Errorf("insert STT embedding: %w", err)
 	}
 	return fmt.Sprintf("Indexed STT for file %d (%d chars)", p.FileID, len(p.STTText)), nil
 }
