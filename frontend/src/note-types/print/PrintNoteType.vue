@@ -66,8 +66,11 @@ const props = defineProps({
 
 const emit = defineEmits(["selectNote", "update:customData"]);
 
-const { loading: printing, error: actionError, execute } =
-    usePluginAction(() => props.token);
+const {
+    loading: printing,
+    error: actionError,
+    execute,
+} = usePluginAction(() => props.token);
 
 // --- State ---
 const selectedNoteId = ref(0);
@@ -192,11 +195,11 @@ async function doPrint() {
 .result-error {
     margin-top: 0.5rem;
     padding: 0.4rem 0.6rem;
-    background: #fff3cd;
-    border: 1px solid #ffc107;
+    background: var(--raised-bg);
+    border: 1px solid var(--heading-color);
     border-radius: 4px;
     font-size: 0.85rem;
-    color: #856404;
+    color: var(--heading-color);
 }
 
 .preview-section {
@@ -209,8 +212,8 @@ async function doPrint() {
 }
 
 .preview-box {
-    background: #f5f5f5;
-    border: 1px solid #ddd;
+    background: var(--raised-bg);
+    border: 1px solid var(--border-color);
     padding: 0.5rem;
     font-size: 0.8rem;
     line-height: 1.3;
@@ -219,6 +222,7 @@ async function doPrint() {
     max-height: 300px;
     overflow-y: auto;
     border-radius: 4px;
+    color: var(--pre-text-color);
 }
 
 .empty-hint {
