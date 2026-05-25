@@ -768,7 +768,7 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 			vssError = "VSS extension loaded but no vss tables exist (migration may have failed)"
 		}
 	} else {
-		vssError = "VSS extension (vector0.so / vss0.so) not loaded — vector search is unavailable"
+		vssError = "sqlite-vec extension (vec0) not loaded — vector search is unavailable"
 	}
 
 	allOK := embeddingOK && chatOK && ocrOK && sttOK

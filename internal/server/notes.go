@@ -836,7 +836,7 @@ func noteIDAndAction(w http.ResponseWriter, r *http.Request) (int64, string, boo
 	return id, parts[1], true
 }
 
-// syncEmbeddingTask is the job task handler for VSS embedding generation.
+// syncEmbeddingTask is the job task handler for vector embedding generation.
 // It accepts a JSON payload with "note_id", "title", and "body" fields.
 func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
 	var p struct {
@@ -855,16 +855,11 @@ func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
 		return "", fmt.Errorf("generate embedding: %w", err)
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
-	// vss0 virtual tables don't support UPDATE/INSERT OR REPLACE.
-	// Must DELETE then INSERT.
-	if _, err := db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.NoteID); err != nil {
-		return "", fmt.Errorf("delete old embedding: %w", err)
-	}
 	if _, err := db.Exec(
-		`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
+		`INSERT OR REPLACE INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
 		p.NoteID, vecJSON,
 	); err != nil {
-		return "", fmt.Errorf("insert embedding: %w", err)
+		return "", fmt.Errorf("upsert embedding: %w", err)
 	}
 	return fmt.Sprintf("Indexed note %d (%d chars)", p.NoteID, len(p.Body)), nil
 }
@@ -984,7 +979,7 @@ func (s *Server) enqueueOCR(fileID int64) {
 	s.mediaService.EnqueueOCR(fileID)
 }
 
-// syncOCREmbeddingTask generates a VSS embedding for OCR text and stores it
+// syncOCREmbeddingTask generates a vector embedding for OCR text and stores it
 // in vss_files_ocr (rowid = file_id). The payload is {"file_id": N, "ocr_text": "..."}.
 func (s *Server) syncOCREmbeddingTask(db *sql.DB, payload []byte) (string, error) {
 	if s.llm == nil {
@@ -1007,16 +1002,11 @@ func (s *Server) syncOCREmbeddingTask(db *sql.DB, payload []byte) (string, error
 		return "", fmt.Errorf("generate OCR embedding: %w", err)
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
-
-	// vss0 virtual tables don't support UPDATE/INSERT OR REPLACE.
-	if _, err := db.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, p.FileID); err != nil {
-		return "", fmt.Errorf("delete old OCR embedding: %w", err)
-	}
 	if _, err := db.Exec(
-		`INSERT INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`,
+		`INSERT OR REPLACE INTO vss_files_ocr(rowid, ocr_embedding) VALUES (?, ?)`,
 		p.FileID, vecJSON,
 	); err != nil {
-		return "", fmt.Errorf("insert OCR embedding: %w", err)
+		return "", fmt.Errorf("upsert OCR embedding: %w", err)
 	}
 	return fmt.Sprintf("Indexed OCR for file %d (%d chars)", p.FileID, len(p.OCRText)), nil
 }
@@ -1071,7 +1061,7 @@ func (s *Server) enqueueSTT(fileID int64) {
 	s.mediaService.EnqueueSTT(fileID)
 }
 
-// syncSTTEmbeddingTask generates a VSS embedding for STT text and stores it
+// syncSTTEmbeddingTask generates a vector embedding for STT text and stores it
 // in vss_files_stt (rowid = file_id). The payload is {"file_id": N, "stt_text": "..."}.
 func (s *Server) syncSTTEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
 	if s.llm == nil {
@@ -1094,16 +1084,11 @@ func (s *Server) syncSTTEmbeddingTask(db *sql.DB, payload []byte) (string, error
 		return "", fmt.Errorf("generate STT embedding: %w", err)
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
-
-	// vss0 virtual tables don't support UPDATE/INSERT OR REPLACE.
-	if _, err := db.Exec(`DELETE FROM vss_files_stt WHERE rowid = ?`, p.FileID); err != nil {
-		return "", fmt.Errorf("delete old STT embedding: %w", err)
-	}
 	if _, err := db.Exec(
-		`INSERT INTO vss_files_stt(rowid, stt_embedding) VALUES (?, ?)`,
+		`INSERT OR REPLACE INTO vss_files_stt(rowid, stt_embedding) VALUES (?, ?)`,
 		p.FileID, vecJSON,
 	); err != nil {
-		return "", fmt.Errorf("insert STT embedding: %w", err)
+		return "", fmt.Errorf("upsert STT embedding: %w", err)
 	}
 	return fmt.Sprintf("Indexed STT for file %d (%d chars)", p.FileID, len(p.STTText)), nil
 }
@@ -1167,7 +1152,7 @@ type SearchResult struct {
 	Distance float64 `json:"distance"`
 }
 
-// searchNotes performs a semantic search over notes using sqlite-vss.
+// searchNotes performs a semantic search over notes using sqlite-vec.
 // GET /notes/search?q=your+query
 func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -1191,7 +1176,7 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	vecJSON := llm.EmbeddingToJSON(vec)
 
-	// Guard: if vss_notes is empty, vss_search crashes faiss with "k > 0".
+	// Fast path: skip the notes vector query if there are no indexed note embeddings.
 	var vssCount int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_notes`).Scan(&vssCount); err != nil {
 		writeErr(w, err)
@@ -1206,9 +1191,8 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		vssRows, err := s.db.Query(`
 			SELECT rowid, distance
 			FROM vss_notes
-			WHERE vss_search(body_embedding, ?)
+			WHERE body_embedding MATCH ? AND k = 10
 			ORDER BY distance ASC
-			LIMIT 10
 		`, vecJSON)
 		if err != nil {
 			writeErr(w, err)
@@ -1238,9 +1222,8 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 			ocrRows, err := s.db.Query(`
 				SELECT rowid, distance
 				FROM vss_files_ocr
-				WHERE vss_search(ocr_embedding, ?)
+				WHERE ocr_embedding MATCH ? AND k = 20
 				ORDER BY distance ASC
-				LIMIT 20
 			`, vecJSON)
 			if err == nil {
 				// Collect file IDs from OCR hits.
@@ -1309,9 +1292,8 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 			sttRows, err := s.db.Query(`
 				SELECT rowid, distance
 				FROM vss_files_stt
-				WHERE vss_search(stt_embedding, ?)
+				WHERE stt_embedding MATCH ? AND k = 20
 				ORDER BY distance ASC
-				LIMIT 20
 			`, vecJSON)
 			if err == nil {
 				// Collect file IDs from STT hits.

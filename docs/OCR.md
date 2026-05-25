@@ -46,15 +46,15 @@ CREATE TABLE files_ocr (
 
 ### `vss_files_ocr` — Semantic search vectors
 
-Virtual table using `sqlite-vss`. One row per OCR'd file, `rowid = files.id`.
+Virtual table using `sqlite-vec`. One row per OCR'd file, `rowid = files.id`.
 
 ```sql
-CREATE VIRTUAL TABLE vss_files_ocr USING vss0(
-    ocr_embedding(2560)
+CREATE VIRTUAL TABLE vss_files_ocr USING vec0(
+    ocr_embedding float[2560] distance_metric=cosine
 );
 ```
 
-VSS vectors are 2560-dimensional (same as `vss_notes`). The `rowid` directly references `files.id`, so resolving a search hit to a note requires a join through `files_refs`.
+Vectors are 2560-dimensional (same as `vss_notes`). The `rowid` directly references `files.id`, so resolving a search hit to a note requires a join through `files_refs`.
 
 ## HTTP Endpoint
 

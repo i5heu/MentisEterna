@@ -7,6 +7,8 @@ require (
 	pgregory.net/rapid v1.3.0
 )
 
+require github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
+
 require (
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect

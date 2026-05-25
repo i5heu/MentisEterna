@@ -175,6 +175,22 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
 - LocalAI: [Installation Guide](https://localai.io/basics/getting_started/)
 - An embedding model (e.g. `text-embedding-ada-002`) and a chat model (e.g. `gpt-3.5-turbo`) loaded in LocalAI
+- The `sqlite-vec` loadable extension (`vec0`) installed in the project's `lib/` directory
+
+### Installing the `sqlite-vec` extension in `lib/`
+
+MentisEterna uses the `sqlite-vec` loadable SQLite extension for semantic search.
+Please follow the official install instructions for pre-compiled extensions:
+
+- <https://alexgarcia.xyz/sqlite-vec/installation.html#pre-compiled-extensions>
+
+After downloading and extracting the correct pre-compiled extension for your platform, place the extracted `vec0` library into this project's `lib/` directory:
+
+- Linux: `lib/vec0.so`
+- macOS: `lib/vec0.dylib`
+- Windows: `lib/vec0.dll`
+
+The server loads `vec0` automatically from `lib/`. If you want to keep the extension somewhere else, set `VEC_EXT_PATH` to the directory containing the file. `VSS_EXT_PATH` is also accepted as a legacy alias.
 
 ## S3 Media Storage
 

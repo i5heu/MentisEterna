@@ -16,10 +16,10 @@ pkg/notetype/    — Note type plugin interface, registry, test harness, and bui
 frontend/        — Vue 3 + Vite app (dev proxy → :8080)
 frontend/src/note-types/ — Vue components per note type + shared registry
 FrontEndDist/    — Vite build output (served by Go server at runtime)
-lib/             — Pre-built SQLite extensions: vector0.so, vss0.so (do NOT regenerate)
+lib/             — Pre-built SQLite extension: vec0.so (do NOT regenerate)
 ```
 
-Notes store content history in `updates` table (body was migrated out of `notes`). VSS table `vss_notes` holds 2560-dim embeddings indexed by `rowid = notes.id`.
+Notes store content history in `updates` table (body was migrated out of `notes`). Vector table `vss_notes` holds 2560-dim embeddings indexed by `rowid = notes.id`.
 
 ## Creating Custom Note Types
 
@@ -261,19 +261,19 @@ npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 | `LOCALAI_CHAT_MODEL` | `gpt-3.5-turbo` | Chat/generation model (title generation) |
 | `LOCALAI_OCR_MODEL` | `gpt-4o-mini` | Multimodal vision model for OCR |
 | `LOCALAI_STT_MODEL` | `nemo-parakeet-tdt-0.6b` | Whisper-compatible model for speech-to-text transcription |
-| `VSS_EXT_PATH` | auto-detected | Directory containing `vector0.so` and `vss0.so` |
+| `VEC_EXT_PATH` | auto-detected | Directory containing `vec0.so` |
+| `VSS_EXT_PATH` | legacy alias | Backward-compatible alias for `VEC_EXT_PATH` |
 | `BACKUP_ENCRYPTION_KEY` | none (backups disabled) | hex-encoded 64-char AES-256 key for encrypted backups |
 | `MEDIA_CACHE_DIR` | required for media | Directory for local file cache (also required for backups) |
 | `MEDIA_S3_ENDPOINTS` | required for media | JSON array of S3 endpoint configs (also used for backups) |
 
 ## Key Quirks
 
-**VSS extension loading**: `db.Open()` gracefully falls back to standard SQLite if `.so` files aren't loadable. Tests that require VSS auto-skip with `t.Skip(...)` when VSS is unavailable — this is intentional, not a bug.
+**Vector extension loading**: `db.Open()` loads the `sqlite-vec` loadable extension (`vec0`) when available and gracefully falls back to standard SQLite otherwise. Tests that require vector search auto-skip with `t.Skip(...)` when the extension is unavailable — this is intentional, not a bug.
 
-**VSS upserts**: `vss0` does NOT support `UPDATE` or `INSERT OR REPLACE`. Always `DELETE` then `INSERT`:
+**sqlite-vec upserts**: `vec0` supports `INSERT OR REPLACE`, which the app uses for embedding refreshes:
 ```sql
-DELETE FROM vss_notes WHERE rowid = ?;
-INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
+INSERT OR REPLACE INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
 ```
 
 **WebAuthn**: RPID is hardcoded to `localhost`, origins locked to `http://localhost:8080` and `https://localhost:8080`. Changing the host/port requires updating `internal/server/server.go`.

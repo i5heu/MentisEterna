@@ -76,9 +76,9 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { d.Close() })
 
-	// If VSS is unavailable, we can't test search.
+	// If vector search is unavailable, we can't test search.
 	if !d.VSSAvailable() {
-		t.Skip("VSS extensions not available (vector0.so / vss0.so missing)")
+		t.Skip("sqlite-vec extension not available (vec0 missing)")
 	}
 
 	m := newMockEmbedder()
