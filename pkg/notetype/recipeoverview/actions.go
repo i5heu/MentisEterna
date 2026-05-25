@@ -242,6 +242,122 @@ type deleteGroceryListParams struct {
 	ListID int64 `json:"list_id"`
 }
 
+type updateGroceryListParams struct {
+	ListID int64         `json:"list_id"`
+	Items  []GroceryItem `json:"items"`
+}
+
+func normalizeGroceryItems(items []GroceryItem) ([]GroceryItem, error) {
+	normalized := make([]GroceryItem, 0, len(items))
+	for i, item := range items {
+		name := strings.TrimSpace(item.Name)
+		amount := strings.TrimSpace(item.Amount)
+		unit := strings.TrimSpace(item.Unit)
+		if name == "" {
+			if amount == "" && unit == "" {
+				continue
+			}
+			return nil, fmt.Errorf("item %d: name is required", i+1)
+		}
+		normalized = append(normalized, GroceryItem{
+			Name:   name,
+			Amount: amount,
+			Unit:   unit,
+		})
+	}
+	return normalized, nil
+}
+
+func loadGroceryListByID(db *sql.DB, noteID int64, listID int64) (GroceryList, error) {
+	var gl GroceryList
+	var itemsJSON string
+
+	query := `
+		SELECT id, generated_at, num_days, num_people, items_json
+		FROM ct_recipe_overview_grocery_lists
+		WHERE id = ?
+	`
+	args := []any{listID}
+	if noteID > 0 {
+		query += ` AND note_id = ?`
+		args = append(args, noteID)
+	}
+
+	err := db.QueryRow(query, args...).Scan(&gl.ID, &gl.GeneratedAt, &gl.NumDays, &gl.NumPeople, &itemsJSON)
+	if err != nil {
+		return gl, err
+	}
+	if itemsJSON != "" {
+		if err := json.Unmarshal([]byte(itemsJSON), &gl.Items); err != nil {
+			return gl, fmt.Errorf("unmarshal items: %w", err)
+		}
+	}
+
+	rows, err := db.Query(`
+		SELECT glr.recipe_note_id, n.title
+		FROM ct_recipe_overview_grocery_list_recipes glr
+		JOIN notes n ON n.id = glr.recipe_note_id
+		WHERE glr.grocery_list_id = ?
+		ORDER BY glr.recipe_note_id
+	`, listID)
+	if err != nil {
+		return gl, fmt.Errorf("load list recipes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var rid int64
+		var title string
+		if err := rows.Scan(&rid, &title); err != nil {
+			return gl, fmt.Errorf("scan list recipe: %w", err)
+		}
+		gl.RecipeIDs = append(gl.RecipeIDs, rid)
+		gl.RecipeNames = append(gl.RecipeNames, title)
+	}
+	if err := rows.Err(); err != nil {
+		return gl, err
+	}
+
+	return gl, nil
+}
+
+func updateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
+	var p updateGroceryListParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if p.ListID <= 0 {
+		return nil, fmt.Errorf("list_id is required")
+	}
+
+	normalized, err := normalizeGroceryItems(p.Items)
+	if err != nil {
+		return nil, err
+	}
+	itemsJSON, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("marshal items: %w", err)
+	}
+
+	result, err := db.Exec(`
+		UPDATE ct_recipe_overview_grocery_lists
+		SET items_json = ?
+		WHERE id = ? AND note_id = ?
+	`, string(itemsJSON), p.ListID, noteID)
+	if err != nil {
+		return nil, fmt.Errorf("update grocery list: %w", err)
+	}
+	if rowsAffected, _ := result.RowsAffected(); rowsAffected == 0 {
+		return nil, fmt.Errorf("grocery list %d not found", p.ListID)
+	}
+
+	gl, err := loadGroceryListByID(db, noteID, p.ListID)
+	if err != nil {
+		return nil, fmt.Errorf("load updated grocery list: %w", err)
+	}
+	return map[string]any{"grocery_list": gl}, nil
+}
+
 // deleteGroceryList deletes a grocery list and its recipe associations.
 func deleteGroceryList(db *sql.DB, params json.RawMessage) (any, error) {
 	var p deleteGroceryListParams
@@ -483,45 +599,9 @@ func printGroceryListAction(db *sql.DB, params json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("list_id is required")
 	}
 
-	// Load the grocery list.
-	var gl GroceryList
-	var itemsJSON string
-	err := db.QueryRow(`
-		SELECT id, generated_at, num_days, num_people, items_json
-		FROM ct_recipe_overview_grocery_lists WHERE id = ?`, p.ListID,
-	).Scan(&gl.ID, &gl.GeneratedAt, &gl.NumDays, &gl.NumPeople, &itemsJSON)
+	gl, err := loadGroceryListByID(db, 0, p.ListID)
 	if err != nil {
 		return nil, fmt.Errorf("grocery list %d: %w", p.ListID, err)
-	}
-
-	if itemsJSON != "" {
-		if err := json.Unmarshal([]byte(itemsJSON), &gl.Items); err != nil {
-			return nil, fmt.Errorf("unmarshal items: %w", err)
-		}
-	}
-
-	// Load recipe names.
-	recipeRows, err := db.Query(`
-		SELECT n.title
-		FROM ct_recipe_overview_grocery_list_recipes glr
-		JOIN notes n ON n.id = glr.recipe_note_id
-		WHERE glr.grocery_list_id = ?
-		ORDER BY glr.recipe_note_id`, p.ListID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("load recipes: %w", err)
-	}
-	defer recipeRows.Close()
-	for recipeRows.Next() {
-		var title string
-		if err := recipeRows.Scan(&title); err != nil {
-			return nil, fmt.Errorf("scan recipe name: %w", err)
-		}
-		gl.RecipeNames = append(gl.RecipeNames, title)
-		gl.RecipeIDs = append(gl.RecipeIDs, 0) // placeholder
-	}
-	if err := recipeRows.Err(); err != nil {
-		return nil, err
 	}
 
 	// Format.

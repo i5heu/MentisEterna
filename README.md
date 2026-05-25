@@ -76,6 +76,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [ ] On S3: files that are not in our file list but present in the bucket should be deleted with a button in settings: "Delete Unknown Files"
 - [x] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
 - [ ] Grocery List needs to round to 2 decimal places.
+- [ ] Printed Recipes need to use non-metric if metric is not validated
 
 ## TODO Future
 - [x] OCR for images and pdfs
