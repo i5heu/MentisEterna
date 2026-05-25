@@ -1,9 +1,9 @@
 <template>
     <div class="recipe-editor">
-        <div v-if="editing && isRecipeEmpty" class="recipe-import-empty-state">
+        <div v-if="isRecipeEmpty" class="recipe-import-empty-state">
             <p class="empty-hint recipe-import-empty-hint">
                 This recipe is empty. You can either add ingredients manually or
-                import a recipe payload as JSON.
+                import one or more recipes via JSON.
             </p>
             <button
                 class="btn-ghost btn-sm"
@@ -18,7 +18,8 @@
 
             <div v-if="showImportPanel" class="recipe-import-panel">
                 <p class="recipe-import-help">
-                    Paste a JSON object that matches the schema below.
+                    Paste a JSON object that matches the schema below. Each item
+                    in <code>recipes</code> becomes its own recipe note.
                 </p>
                 <textarea
                     v-model="importJsonText"
@@ -193,55 +194,92 @@ const VALID_UNITS = new Set(["g", "kg", "ml", "l", "pcs"]);
 const RECIPE_IMPORT_SCHEMA = {
     type: "object",
     additionalProperties: false,
-    required: ["ingredients"],
+    required: ["recipes"],
     properties: {
-        ingredients: {
+        recipes: {
             type: "array",
+            minItems: 1,
             items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["name", "unit"],
                 properties: {
-                    name: { type: "string", minLength: 1 },
-                    amount: {
+                    title: { type: "string" },
+                    body: { type: "string" },
+                    ingredients: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            additionalProperties: false,
+                            required: ["name", "unit"],
+                            properties: {
+                                name: { type: "string", minLength: 1 },
+                                amount: {
+                                    oneOf: [
+                                        { type: "string" },
+                                        { type: "number" },
+                                    ],
+                                },
+                                unit: {
+                                    type: "string",
+                                    enum: ["g", "kg", "ml", "l", "pcs"],
+                                },
+                            },
+                        },
+                    },
+                    servings: {
                         oneOf: [{ type: "string" }, { type: "number" }],
                     },
-                    unit: {
-                        type: "string",
-                        enum: ["g", "kg", "ml", "l", "pcs"],
+                    attention_time: { type: "string" },
+                    total_time: { type: "string" },
+                    grams_per_serving: {
+                        oneOf: [{ type: "string" }, { type: "number" }],
+                    },
+                    kcal_per_serving: {
+                        oneOf: [{ type: "string" }, { type: "number" }],
+                    },
+                    freezable: { type: "boolean" },
+                    pre_cook_servings: {
+                        oneOf: [{ type: "string" }, { type: "number" }],
                     },
                 },
             },
-        },
-        servings: { oneOf: [{ type: "string" }, { type: "number" }] },
-        attention_time: { type: "string" },
-        total_time: { type: "string" },
-        grams_per_serving: {
-            oneOf: [{ type: "string" }, { type: "number" }],
-        },
-        kcal_per_serving: {
-            oneOf: [{ type: "string" }, { type: "number" }],
-        },
-        freezable: { type: "boolean" },
-        pre_cook_servings: {
-            oneOf: [{ type: "string" }, { type: "number" }],
         },
     },
 };
 
 const RECIPE_IMPORT_EXAMPLE = {
-    ingredients: [
-        { name: "Rice", amount: 250, unit: "g" },
-        { name: "Coconut milk", amount: 400, unit: "ml" },
-        { name: "Carrot", amount: 2, unit: "pcs" },
+    recipes: [
+        {
+            title: "Coconut Rice Bowl",
+            body: "Steam the rice. Saute the vegetables. Mix everything together and serve warm.",
+            ingredients: [
+                { name: "Rice", amount: 250, unit: "g" },
+                { name: "Coconut milk", amount: 400, unit: "ml" },
+                { name: "Carrot", amount: 2, unit: "pcs" },
+            ],
+            servings: 4,
+            attention_time: "20m",
+            total_time: "35m",
+            grams_per_serving: 480,
+            kcal_per_serving: 620,
+            freezable: true,
+            pre_cook_servings: 8,
+        },
+        {
+            title: "Quick Tomato Pasta",
+            body: "Boil pasta. Simmer the tomato sauce. Toss and serve.",
+            ingredients: [
+                { name: "Pasta", amount: 300, unit: "g" },
+                { name: "Tomato sauce", amount: 500, unit: "ml" },
+                { name: "Parmesan", amount: 80, unit: "g" },
+            ],
+            servings: 3,
+            attention_time: "15m",
+            total_time: "25m",
+            kcal_per_serving: 540,
+            freezable: false,
+        },
     ],
-    servings: 4,
-    attention_time: "20m",
-    total_time: "35m",
-    grams_per_serving: 480,
-    kcal_per_serving: 620,
-    freezable: true,
-    pre_cook_servings: 8,
 };
 
 const recipeImportSchemaText = JSON.stringify(RECIPE_IMPORT_SCHEMA, null, 2);
@@ -255,7 +293,7 @@ const props = defineProps({
     uiSchema: { type: Object, default: null },
 });
 
-const emit = defineEmits(["selectNote", "update:customData"]);
+const emit = defineEmits(["selectNote", "update:customData", "import:recipes"]);
 
 // Local reactive copies
 const localIngredients = ref([]);
@@ -272,16 +310,12 @@ const importError = ref("");
 const copyingSchema = ref(false);
 
 const isRecipeEmpty = computed(() => {
-    return (
-        localIngredients.value.length === 0 &&
-        !hasText(localServings.value) &&
-        !hasText(localAttentionTime.value) &&
-        !hasText(localTotalTime.value) &&
-        !hasText(localGramsPerServing.value) &&
-        !hasText(localKcalPerServing.value) &&
-        !localFreezable.value &&
-        !hasText(localPreCookServings.value)
-    );
+    const hasIngredients = localIngredients.value.length > 0;
+    const hasBody = hasText(props.note?.body);
+    const hasAttachments = Array.isArray(props.note?.attachments)
+        ? props.note.attachments.length > 0
+        : false;
+    return !hasIngredients && !hasBody && !hasAttachments;
 });
 
 // Guard to break the echo-back loop:
@@ -307,21 +341,59 @@ function normalizeIngredient(raw) {
     };
 }
 
+function buildRecipeCustomData(raw) {
+    const safe = raw && typeof raw === "object" ? raw : {};
+    return {
+        ingredients: Array.isArray(safe.ingredients)
+            ? safe.ingredients.map(normalizeIngredient)
+            : [],
+        servings: normalizeString(safe.servings),
+        attention_time: normalizeString(safe.attention_time),
+        total_time: normalizeString(safe.total_time),
+        grams_per_serving: normalizeString(safe.grams_per_serving),
+        kcal_per_serving: normalizeString(safe.kcal_per_serving),
+        freezable: !!safe.freezable,
+        pre_cook_servings: normalizeString(safe.pre_cook_servings),
+    };
+}
+
+function hasImportedRecipeContent(recipe) {
+    const data = recipe?.customData || {};
+    return (
+        hasText(recipe?.title) ||
+        hasText(recipe?.body) ||
+        (Array.isArray(data.ingredients) && data.ingredients.length > 0) ||
+        hasText(data.servings) ||
+        hasText(data.attention_time) ||
+        hasText(data.total_time) ||
+        hasText(data.grams_per_serving) ||
+        hasText(data.kcal_per_serving) ||
+        data.freezable ||
+        hasText(data.pre_cook_servings)
+    );
+}
+
+function normalizeImportedRecipe(raw) {
+    return {
+        title: normalizeString(raw?.title),
+        body: normalizeString(raw?.body),
+        customData: buildRecipeCustomData(raw),
+    };
+}
+
 function setLocalRecipeState(raw, { emitAfter = false } = {}) {
     hydrating = true;
     const safe = raw && typeof raw === "object" ? raw : {};
-    const ingredients = Array.isArray(safe.ingredients)
-        ? safe.ingredients.map(normalizeIngredient)
-        : [];
+    const data = buildRecipeCustomData(safe);
 
-    localIngredients.value = ingredients;
-    localServings.value = normalizeString(safe.servings);
-    localAttentionTime.value = normalizeString(safe.attention_time);
-    localTotalTime.value = normalizeString(safe.total_time);
-    localGramsPerServing.value = normalizeString(safe.grams_per_serving);
-    localKcalPerServing.value = normalizeString(safe.kcal_per_serving);
-    localFreezable.value = !!safe.freezable;
-    localPreCookServings.value = normalizeString(safe.pre_cook_servings);
+    localIngredients.value = data.ingredients;
+    localServings.value = data.servings;
+    localAttentionTime.value = data.attention_time;
+    localTotalTime.value = data.total_time;
+    localGramsPerServing.value = data.grams_per_serving;
+    localKcalPerServing.value = data.kcal_per_serving;
+    localFreezable.value = data.freezable;
+    localPreCookServings.value = data.pre_cook_servings;
     hydrating = false;
 
     if (emitAfter) {
@@ -424,40 +496,49 @@ function importRecipeJson() {
         return;
     }
 
-    if (!Array.isArray(parsed.ingredients)) {
-        importError.value = "Recipe import must include an ingredients array.";
+    if (!Array.isArray(parsed.recipes) || parsed.recipes.length === 0) {
+        importError.value =
+            "Recipe import must include a non-empty recipes array.";
         return;
     }
 
-    const ingredients = parsed.ingredients.map(normalizeIngredient);
-    const emptyNameIndex = ingredients.findIndex((ing) => !ing.name);
-    if (emptyNameIndex >= 0) {
-        importError.value = `Ingredient ${emptyNameIndex + 1} is missing a name.`;
-        return;
+    const importedRecipes = [];
+    for (let i = 0; i < parsed.recipes.length; i += 1) {
+        const rawRecipe = parsed.recipes[i];
+        if (
+            !rawRecipe ||
+            typeof rawRecipe !== "object" ||
+            Array.isArray(rawRecipe)
+        ) {
+            importError.value = `Recipe ${i + 1} must be a JSON object.`;
+            return;
+        }
+
+        const recipe = normalizeImportedRecipe(rawRecipe);
+        const ingredients = recipe.customData.ingredients;
+        const emptyNameIndex = ingredients.findIndex((ing) => !ing.name);
+        if (emptyNameIndex >= 0) {
+            importError.value = `Recipe ${i + 1}, ingredient ${emptyNameIndex + 1} is missing a name.`;
+            return;
+        }
+
+        const invalidUnitIndex = ingredients.findIndex(
+            (ing) => !VALID_UNITS.has(ing.unit),
+        );
+        if (invalidUnitIndex >= 0) {
+            importError.value = `Recipe ${i + 1}, ingredient ${invalidUnitIndex + 1} has an invalid unit. Use one of: g, kg, ml, l, pcs.`;
+            return;
+        }
+
+        if (!hasImportedRecipeContent(recipe)) {
+            importError.value = `Recipe ${i + 1} is empty. Provide at least a title, body, ingredients, or recipe details.`;
+            return;
+        }
+
+        importedRecipes.push(recipe);
     }
 
-    const invalidUnitIndex = ingredients.findIndex(
-        (ing) => !VALID_UNITS.has(ing.unit),
-    );
-    if (invalidUnitIndex >= 0) {
-        importError.value = `Ingredient ${invalidUnitIndex + 1} has an invalid unit. Use one of: g, kg, ml, l, pcs.`;
-        return;
-    }
-
-    setLocalRecipeState(
-        {
-            ingredients,
-            servings: normalizeString(parsed.servings),
-            attention_time: normalizeString(parsed.attention_time),
-            total_time: normalizeString(parsed.total_time),
-            grams_per_serving: normalizeString(parsed.grams_per_serving),
-            kcal_per_serving: normalizeString(parsed.kcal_per_serving),
-            freezable: !!parsed.freezable,
-            pre_cook_servings: normalizeString(parsed.pre_cook_servings),
-        },
-        { emitAfter: true },
-    );
-
+    emit("import:recipes", importedRecipes);
     resetImportPanel();
 }
 

@@ -11,6 +11,7 @@
             :uiSchema="resolvedUiSchema"
             @selectNote="(id) => $emit('selectNote', id)"
             @update:customData="(d) => $emit('update:customData', d)"
+            @import:recipes="(recipes) => $emit('import:recipes', recipes)"
         />
 
         <!-- Schema fallback for types without a custom component -->
@@ -53,7 +54,7 @@ const props = defineProps({
     uiSchema: { type: Object, default: null },
 });
 
-defineEmits(["selectNote", "update:customData"]);
+defineEmits(["selectNote", "update:customData", "import:recipes"]);
 
 const typeDef = computed(() => {
     if (!props.note) return null;
