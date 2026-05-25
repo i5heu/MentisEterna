@@ -3,10 +3,46 @@ package printer
 import (
 	"fmt"
 	"image"
+	"log"
 	"math"
+	"os"
+	"strconv"
+	"strings"
 )
 
-const DefaultImageMaxWidth = 512
+const (
+	DefaultImageMaxWidth        = 512
+	defaultImageLineSpacingDots = 16
+	// Slightly darker defaults now that image writes are throttled more gently.
+	defaultImageThreshold     = 120.0
+	defaultImageDarknessScale = 0.96
+)
+
+func configuredImageThreshold() float64 {
+	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_IMAGE_THRESHOLD"))
+	if raw == "" {
+		return defaultImageThreshold
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v < 0 || v > 255 {
+		log.Printf("printer: invalid THERMAL_PRINTER_IMAGE_THRESHOLD=%q, using default %.2f", raw, defaultImageThreshold)
+		return defaultImageThreshold
+	}
+	return v
+}
+
+func configuredImageDarknessScale() float64 {
+	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_IMAGE_DARKNESS_SCALE"))
+	if raw == "" {
+		return defaultImageDarknessScale
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v <= 0 {
+		log.Printf("printer: invalid THERMAL_PRINTER_IMAGE_DARKNESS_SCALE=%q, using default %.2f", raw, defaultImageDarknessScale)
+		return defaultImageDarknessScale
+	}
+	return v
+}
 
 type monoRaster struct {
 	width  int
@@ -32,7 +68,11 @@ func (p *Buf) ImageBitColumnWidth(img image.Image, maxWidth int) error {
 		return nil
 	}
 
-	p.LineSpacing(24)
+	// Match the legacy python-escpos bitImageColumn path more closely.
+	// A slightly tighter line spacing is known to work better on TM-T88III-class
+	// printers, and we keep image width at 512 while reducing thermal load via
+	// rasterization rather than shrinking the image.
+	p.LineSpacing(defaultImageLineSpacingDots)
 	defer p.ResetLineSpacing()
 
 	for y0 := 0; y0 < raster.height; y0 += 24 {
@@ -81,6 +121,9 @@ func rasterizeMono(img image.Image, maxWidth int) (monoRaster, error) {
 		dstH = 1
 	}
 
+	threshold := configuredImageThreshold()
+	darknessScale := configuredImageDarknessScale()
+
 	gray := make([]float64, dstW*dstH)
 	for y := 0; y < dstH; y++ {
 		srcY := bounds.Min.Y + (y * srcH / dstH)
@@ -91,7 +134,11 @@ func rasterizeMono(img image.Image, maxWidth int) (monoRaster, error) {
 			rf := (1-alpha)*255.0 + alpha*float64(r)/257.0
 			gf := (1-alpha)*255.0 + alpha*float64(g)/257.0
 			bf := (1-alpha)*255.0 + alpha*float64(b)/257.0
-			gray[y*dstW+x] = 0.299*rf + 0.587*gf + 0.114*bf
+			grayVal := 0.299*rf + 0.587*gf + 0.114*bf
+			// Slightly lift dark tones before dithering so large photos do not
+			// drive the thermal head as hard. Keep width unchanged. This is
+			// configurable so you can trade darker blacks against thermal load.
+			gray[y*dstW+x] = 255.0 - (255.0-grayVal)*darknessScale
 		}
 	}
 
@@ -103,7 +150,7 @@ func rasterizeMono(img image.Image, maxWidth int) (monoRaster, error) {
 			old := work[idx]
 			newVal := 255.0
 			isBlack := false
-			if old < 128 {
+			if old < threshold {
 				newVal = 0
 				isBlack = true
 			}

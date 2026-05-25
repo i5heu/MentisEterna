@@ -9,9 +9,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -526,6 +529,73 @@ func PadCenter(s string, width int) string {
 	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
 }
 
+const (
+	// Conservative defaults for image-heavy receipts. Small text-only receipts
+	// are still effectively fast, while large photo receipts are sent much more
+	// gently to the printer.
+	defaultWriteChunkBytes = 512
+	defaultWriteDelayMS    = 50
+)
+
+func configuredWriteChunkBytes() int {
+	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_WRITE_CHUNK_BYTES"))
+	if raw == "" {
+		return defaultWriteChunkBytes
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("printer: invalid THERMAL_PRINTER_WRITE_CHUNK_BYTES=%q, using default %d", raw, defaultWriteChunkBytes)
+		return defaultWriteChunkBytes
+	}
+	return n
+}
+
+func configuredWriteDelay() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_WRITE_DELAY_MS"))
+	if raw == "" {
+		return time.Duration(defaultWriteDelayMS) * time.Millisecond
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		log.Printf("printer: invalid THERMAL_PRINTER_WRITE_DELAY_MS=%q, using default %dms", raw, defaultWriteDelayMS)
+		return time.Duration(defaultWriteDelayMS) * time.Millisecond
+	}
+	return time.Duration(n) * time.Millisecond
+}
+
+func writeThrottled(pr Printer, data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	chunkSize := configuredWriteChunkBytes()
+	delay := configuredWriteDelay()
+	if len(data) <= chunkSize {
+		return pr.Write(data)
+	}
+
+	log.Printf("printer: throttled write enabled (%d bytes/chunk, %s delay)", chunkSize, delay)
+	total := 0
+	for total < len(data) {
+		start := total
+		end := start + chunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		n, err := pr.Write(data[start:end])
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n != end-start {
+			return total, io.ErrShortWrite
+		}
+		if total < len(data) && delay > 0 {
+			time.Sleep(delay)
+		}
+	}
+	return total, nil
+}
+
 // ---------------------------------------------------------------------------
 // Printer interface
 // ---------------------------------------------------------------------------
@@ -590,7 +660,7 @@ func FindUSBLP() (Printer, error) {
 func Send(pr Printer, buf *Buf) error {
 	data := buf.Bytes()
 	log.Printf("printer: sending %d bytes to printer", len(data))
-	n, err := pr.Write(data)
+	n, err := writeThrottled(pr, data)
 	if err != nil {
 		log.Printf("printer: write failed after %d bytes: %v", n, err)
 		return err
@@ -606,7 +676,7 @@ func SendAndCut(pr Printer, buf *Buf) error {
 	buf.PartialCut()
 	data := buf.Bytes()
 	log.Printf("printer: sending %d bytes to printer (with feed + cut)", len(data))
-	n, err := pr.Write(data)
+	n, err := writeThrottled(pr, data)
 	if err != nil {
 		log.Printf("printer: write failed after %d bytes: %v", n, err)
 	}
