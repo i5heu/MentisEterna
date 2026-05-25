@@ -1,6 +1,8 @@
 package printer
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"testing"
 )
@@ -84,13 +86,89 @@ func TestBufHLine(t *testing.T) {
 func TestBufCut(t *testing.T) {
 	b := new(Buf)
 	b.FullCut()
-	if len(b.Bytes()) != 3 || b.Bytes()[0] != GS || b.Bytes()[1] != 'V' || b.Bytes()[2] != 0 {
-		t.Errorf("FullCut failed, got %v", b.Bytes())
+	fullWant := []byte{'\n', GS, 'V', 0}
+	if !bytes.Equal(b.Bytes(), fullWant) {
+		t.Errorf("FullCut failed, got %v want %v", b.Bytes(), fullWant)
 	}
+
 	b.Reset()
 	b.PartialCut()
-	if b.Bytes()[2] != 1 {
-		t.Errorf("PartialCut failed")
+	partialWant := []byte{'\n', GS, 'V', 1}
+	if !bytes.Equal(b.Bytes(), partialWant) {
+		t.Errorf("PartialCut failed, got %v want %v", b.Bytes(), partialWant)
+	}
+}
+
+type mockPrinter struct {
+	writes   [][]byte
+	writeErr error
+	closed   bool
+	closeErr error
+}
+
+func (m *mockPrinter) Write(data []byte) (int, error) {
+	copied := append([]byte(nil), data...)
+	m.writes = append(m.writes, copied)
+	if m.writeErr != nil {
+		return 0, m.writeErr
+	}
+	return len(data), nil
+}
+
+func (m *mockPrinter) Close() error {
+	m.closed = true
+	return m.closeErr
+}
+
+func TestSend(t *testing.T) {
+	pr := &mockPrinter{}
+	buf := new(Buf)
+	buf.Text("hello").Ln().Text("world")
+
+	if err := Send(pr, buf); err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if pr.closed {
+		t.Fatal("Send should not close the printer")
+	}
+	if len(pr.writes) != 1 {
+		t.Fatalf("Send wrote %d chunks, want 1", len(pr.writes))
+	}
+	if !bytes.Equal(pr.writes[0], buf.Bytes()) {
+		t.Fatalf("Send wrote %v, want %v", pr.writes[0], buf.Bytes())
+	}
+}
+
+func TestSendAndCut(t *testing.T) {
+	pr := &mockPrinter{}
+	buf := new(Buf)
+	buf.Text("hello")
+
+	if err := SendAndCut(pr, buf); err != nil {
+		t.Fatalf("SendAndCut returned error: %v", err)
+	}
+	if !pr.closed {
+		t.Fatal("SendAndCut should close the printer")
+	}
+	if len(pr.writes) != 1 {
+		t.Fatalf("SendAndCut wrote %d chunks, want 1", len(pr.writes))
+	}
+
+	want := []byte{'h', 'e', 'l', 'l', 'o', ESC, 'd', 4, '\n', GS, 'V', 1}
+	if !bytes.Equal(pr.writes[0], want) {
+		t.Fatalf("SendAndCut wrote %v, want %v", pr.writes[0], want)
+	}
+}
+
+func TestSendAndCutReturnsCloseError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	pr := &mockPrinter{closeErr: closeErr}
+	buf := new(Buf)
+	buf.Text("hello")
+
+	err := SendAndCut(pr, buf)
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("SendAndCut error = %v, want %v", err, closeErr)
 	}
 }
 
