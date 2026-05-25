@@ -239,48 +239,93 @@ import { computed, ref, watch } from "vue";
 
 const RECIPE_IMPORT_SCHEMA = {
     type: "object",
+    description:
+        "Recipe import document. Each entry in recipes becomes one recipe note.",
     additionalProperties: false,
     required: ["recipes"],
     properties: {
         recipes: {
             type: "array",
             minItems: 1,
+            description: "Recipes to import.",
             items: {
                 type: "object",
                 additionalProperties: false,
                 properties: {
-                    title: { type: "string" },
-                    body: { type: "string" },
+                    title: {
+                        type: "string",
+                        description: "Recipe note title.",
+                    },
+                    body: {
+                        type: "string",
+                        description:
+                            "Recipe note body / instructions in markdown.",
+                    },
                     ingredients: {
                         type: "array",
+                        description: "Recipe ingredients.",
                         items: {
                             type: "object",
                             additionalProperties: false,
                             required: ["name"],
                             properties: {
-                                name: { type: "string", minLength: 1 },
+                                name: {
+                                    type: "string",
+                                    minLength: 1,
+                                    description: "Ingredient name.",
+                                },
                                 amount: {
                                     oneOf: [
                                         { type: "string" },
                                         { type: "number" },
                                     ],
+                                    description:
+                                        "Metric or pcs amount. Use together with unit.",
                                 },
                                 unit: {
                                     type: "string",
                                     enum: ["mg", "g", "kg", "ml", "l", "pcs"],
+                                    description:
+                                        "Metric or pcs unit for amount.",
                                 },
                                 non_metric_amount: {
                                     oneOf: [
                                         { type: "string" },
                                         { type: "number" },
                                     ],
+                                    description:
+                                        "Non-metric amount. Use together with non_metric_unit.",
                                 },
                                 non_metric_unit: {
                                     type: "string",
                                     enum: ["teaspoon", "tablespoon", "cup"],
+                                    description:
+                                        "Non-metric unit for non_metric_amount.",
                                 },
-                                metric_validated: { type: "boolean" },
+                                metric_validated: {
+                                    type: "boolean",
+                                    description:
+                                        "Only meaningful when both metric and non-metric values are present. If true, grocery lists use metric values. If false, grocery lists use non-metric values. If only non-metric values are present, grocery lists use those directly.",
+                                },
                             },
+                            allOf: [
+                                {
+                                    if: { required: ["amount"] },
+                                    then: { required: ["unit"] },
+                                },
+                                {
+                                    if: { required: ["unit"] },
+                                    then: { required: ["amount"] },
+                                },
+                                {
+                                    if: { required: ["non_metric_amount"] },
+                                    then: { required: ["non_metric_unit"] },
+                                },
+                                {
+                                    if: { required: ["non_metric_unit"] },
+                                    then: { required: ["non_metric_amount"] },
+                                },
+                            ],
                         },
                     },
                     servings: {
@@ -341,6 +386,11 @@ const RECIPE_IMPORT_EXAMPLE = {
                     non_metric_amount: 1,
                     non_metric_unit: "cup",
                     metric_validated: true,
+                },
+                {
+                    name: "Soy Sauce",
+                    non_metric_amount: 2,
+                    non_metric_unit: "tablespoon",
                 },
             ],
             servings: 3,

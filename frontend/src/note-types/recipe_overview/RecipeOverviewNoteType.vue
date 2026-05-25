@@ -988,7 +988,7 @@ function viewRecipeFromModal(recipeNoteId) {
 }
 
 .recipe-modal {
-    width: min(42rem, 92vw);
+    width: min(55rem, 92vw);
     max-height: 80vh;
     overflow-y: auto;
     background: var(--raised-bg);
