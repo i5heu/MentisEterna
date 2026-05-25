@@ -74,29 +74,6 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 - [x] Go test bug "no usblp device nodes found at [/dev/usb/lp0 /dev/usb/lp1 /dev/usb/lp2]"
 
-## TODO Current
-- [ ] Recipe System
-  - [ ] First image in a recipe should be shown as thumbnail in in the Recipe Overview
-  - [ ] Recipe Import via JSON - also provide the JSON schema
-
-## TODO MVP
-- [x] Pin notes 
-- [x] Chat like UI
-- [x] Note Types
-- [x] Pseudo-Plugins
-  - [x] Test harness
-- [x] Job system with persistent queue, retry, and frontend panel
-  - [x] Job Queue Indicator in sidebar
-  - [x] Semantic indexing via job queue
-- [x] S3 Media Storage (Encrypted)
-- [x] Note linking and backlinking
-- [x] tags
-  - [x] index note type
-- [x] Auto Title Generator
-  - [x] LocalAI URL configurable via env var
-- [x] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
-- [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
-
 ## TODO Future
 - [x] OCR for images and pdfs
 - [x] speech to text notes
@@ -147,8 +124,10 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] If a recipe has can be pre-cocked, there should be a checkbox in the Recipe Overview to pre-cook the recipe. If true the people ammount is ignored and the pre-cook serving size is used for this recipe when generating the grocery list. 
   - [x] Recipe ingredients must use metric units or pieces with dropdown. Decimal punctuation must be a dot. 
   - [x] Grocery List must recalculate the amounts to best metric unit (e.g. 1500g -> 1.5kg, 0.5l -> 500ml, etc.)
+  - [x] Recipie overview Note type: First image in a recipe should be shown as thumbnail in in the Recipe Overview
+  - [x] Recipie Note Type: If Empty show a import Recipe via JSON button - also provide the JSON schema
   - [ ] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
-  - [ ] Print Grocery List and Recipes with a button via a recipe printer.
+  - [x] Print Grocery List and Recipes with a button via a recipe printer.
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
     - [ ] SubTasks (Child Task Notes)
@@ -171,6 +150,24 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [ ] Wants and wishes note type - has button to add "Today i wanted this", has fields: Acquisition Cost, Operating Expenses per month, Disposal Costs, potential profit per month, Durability in years, Space Requirements in m³
   - [ ] wants and wishes overview dashboard, with Total Cost of Ownership, Total Potential Profit and space requirements.
 - [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note
+
+## TODO MVP
+- [x] Pin notes 
+- [x] Chat like UI
+- [x] Note Types
+- [x] Pseudo-Plugins
+  - [x] Test harness
+- [x] Job system with persistent queue, retry, and frontend panel
+  - [x] Job Queue Indicator in sidebar
+  - [x] Semantic indexing via job queue
+- [x] S3 Media Storage (Encrypted)
+- [x] Note linking and backlinking
+- [x] tags
+  - [x] index note type
+- [x] Auto Title Generator
+  - [x] LocalAI URL configurable via env var
+- [x] Security Review and Auth hardening (single user focus and auth focus, evrything else not a priority)
+- [x] Encrypted Backup (AES-256-GCM, automated retention — see [docs/Backups.md](docs/Backups.md))
 
 ## Prerequisites
 

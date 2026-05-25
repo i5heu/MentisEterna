@@ -21,6 +21,13 @@
                     :key="r.note_id"
                     class="recipe-select-row"
                 >
+                    <img
+                        v-if="r.thumbnail_url"
+                        :src="r.thumbnail_url"
+                        :alt="`${r.title} thumbnail`"
+                        class="recipe-thumbnail"
+                        loading="lazy"
+                    />
                     <label class="recipe-checkbox-label">
                         <input
                             type="checkbox"
@@ -218,7 +225,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { pluginAction, pluginActionV2 } from "../../api.js";
+import { pluginActionV2 } from "../../api.js";
 
 const props = defineProps({
     note: { type: Object, default: null },
@@ -417,6 +424,16 @@ function formatDate(iso) {
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
     border-radius: 6px;
+}
+
+.recipe-thumbnail {
+    width: 7rem;
+    height: 4.5rem;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 1px solid var(--border-color);
+    background: var(--html-bg);
 }
 
 .recipe-checkbox-label {
