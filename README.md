@@ -88,6 +88,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] especially note types to see if we can abstract some common logic. 
 - [x] Options Page for job list, create backup, logout, register passkey and other settings
   - [x] Re Index, OCR and STT failed once, button in UI with counter.
+  - [x] Re Index ingridients category
+  - [ ] Parallelize re-indexing jobs.
 - [ ] better search (by title, path and tags)
   - [ ] Include Flieds in search:
     - [ ] Note titles

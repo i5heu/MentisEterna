@@ -324,6 +324,9 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if in.Type == "recipe" {
+		s.classifyRecipeIngredientsForNotes(id)
+	}
 
 	// Reconcile inline file refs from markdown body (after commit).
 	if s.mediaService != nil && in.Body != "" {
@@ -457,6 +460,9 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	if err = tx.Commit(); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if in.Type == "recipe" {
+		s.classifyRecipeIngredientsForNotes(id)
 	}
 
 	// Reconcile inline file refs from markdown body (after commit).
@@ -804,6 +810,7 @@ func (s *Server) dispatchAction(w http.ResponseWriter, r *http.Request, noteID i
 		writeErr(w, err)
 		return
 	}
+	s.maybePostProcessRecipeAction(noteType, actionID, noteID, result)
 	writeJSON(w, http.StatusOK, result)
 }
 
