@@ -72,6 +72,7 @@ const registry = [
                   : [];
             return {
                 ingredients: ings.map((i) => ({
+                    id: Number.isFinite(Number(i.id)) ? Number(i.id) : 0,
                     name: i.name || "",
                     prepare: i.prepare || "",
                     amount: i.amount || "",
@@ -79,6 +80,8 @@ const registry = [
                     non_metric_amount: i.non_metric_amount || "",
                     non_metric_unit: i.non_metric_unit || "",
                     metric_validated: !!i.metric_validated,
+                    grocery_category: i.grocery_category || "",
+                    grocery_category_manual: !!i.grocery_category_manual,
                 })),
                 servings: raw.servings || "",
                 attention_time: raw.attention_time || "",

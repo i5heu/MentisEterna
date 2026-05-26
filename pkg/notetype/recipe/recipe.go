@@ -33,15 +33,16 @@ var validNonMetricUnits = map[string]bool{
 
 // IngredientRow represents a single ingredient in a recipe.
 type IngredientRow struct {
-	ID              int64  `json:"id"`
-	Name            string `json:"name"`
-	Prepare         string `json:"prepare"`
-	Amount          string `json:"amount"` // stored as string to support "1-2", "to taste", etc.
-	Unit            string `json:"unit"`
-	NonMetricAmount string `json:"non_metric_amount"`
-	NonMetricUnit   string `json:"non_metric_unit"`
-	MetricValidated bool   `json:"metric_validated"`
-	GroceryCategory string `json:"grocery_category,omitempty"`
+	ID                    int64  `json:"id"`
+	Name                  string `json:"name"`
+	Prepare               string `json:"prepare"`
+	Amount                string `json:"amount"` // stored as string to support "1-2", "to taste", etc.
+	Unit                  string `json:"unit"`
+	NonMetricAmount       string `json:"non_metric_amount"`
+	NonMetricUnit         string `json:"non_metric_unit"`
+	MetricValidated       bool   `json:"metric_validated"`
+	GroceryCategory       string `json:"grocery_category,omitempty"`
+	GroceryCategoryManual bool   `json:"grocery_category_manual,omitempty"`
 }
 
 // Payload is the JSON structure the frontend sends for a recipe note.
@@ -69,17 +70,18 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	var err error
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_recipe_ingredients (
-			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-			note_id             INTEGER NOT NULL,
-			name                TEXT    NOT NULL,
-			prepare             TEXT    NOT NULL DEFAULT '',
-			amount              TEXT    NOT NULL DEFAULT '',
-			unit                TEXT    NOT NULL DEFAULT '',
-			non_metric_amount   TEXT    NOT NULL DEFAULT '',
-			non_metric_unit     TEXT    NOT NULL DEFAULT '',
-			metric_validated    INTEGER NOT NULL DEFAULT 0,
-			grocery_category    TEXT    NOT NULL DEFAULT '',
-			sort_order          INTEGER NOT NULL DEFAULT 0,
+			id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+			note_id                 INTEGER NOT NULL,
+			name                    TEXT    NOT NULL,
+			prepare                 TEXT    NOT NULL DEFAULT '',
+			amount                  TEXT    NOT NULL DEFAULT '',
+			unit                    TEXT    NOT NULL DEFAULT '',
+			non_metric_amount       TEXT    NOT NULL DEFAULT '',
+			non_metric_unit         TEXT    NOT NULL DEFAULT '',
+			metric_validated        INTEGER NOT NULL DEFAULT 0,
+			grocery_category        TEXT    NOT NULL DEFAULT '',
+			grocery_category_manual INTEGER NOT NULL DEFAULT 0,
+			sort_order              INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
 		CREATE INDEX IF NOT EXISTS idx_ct_recipe_ingredients_note
@@ -115,6 +117,7 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN non_metric_unit TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN metric_validated INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN grocery_category TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN grocery_category_manual INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -238,7 +241,7 @@ func (p *RecipePlugin) Manifest() notetype.Manifest {
 				ID:              "print_recipe",
 				Label:           "Print Recipe",
 				Description:     "Format and print this recipe on the thermal receipt printer",
-				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"device_path":{"type":"string","description":"Optional path to the printer device (e.g. /dev/usb/lp0)"}},"additionalProperties":false}`),
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"device_path":{"type":"string","description":"Optional path to the printer device (e.g. /dev/usb/lp0)"},"display_servings":{"oneOf":[{"type":"string"},{"type":"number"}],"description":"Optional serving count used to scale printed ingredient amounts."}},"additionalProperties":false}`),
 				Dangerous:       false,
 				RefreshStrategy: "none",
 				SuccessMessage:  "Recipe printed",
@@ -313,8 +316,12 @@ func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, n
 		if ing.MetricValidated {
 			metricValidated = 1
 		}
+		groceryCategoryManual := 0
+		if ing.GroceryCategoryManual {
+			groceryCategoryManual = 1
+		}
 		if _, err := tx.Exec(
-			`INSERT INTO ct_recipe_ingredients (note_id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO ct_recipe_ingredients (note_id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated, grocery_category, grocery_category_manual, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			noteID,
 			strings.TrimSpace(ing.Name),
 			strings.TrimSpace(ing.Prepare),
@@ -323,6 +330,8 @@ func (p *RecipePlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, n
 			strings.TrimSpace(ing.NonMetricAmount),
 			strings.TrimSpace(ing.NonMetricUnit),
 			metricValidated,
+			NormalizeIngredientCategory(ing.GroceryCategory),
+			groceryCategoryManual,
 			i,
 		); err != nil {
 			return fmt.Errorf("recipe: insert ingredient %d: %w", i, err)
@@ -382,7 +391,8 @@ func (p *RecipePlugin) HandleAction(ctx context.Context, db *sql.DB, userID int,
 
 // printRecipeParams is the JSON body for the print_recipe action.
 type printRecipeParams struct {
-	DevicePath string `json:"device_path"`
+	DevicePath      string `json:"device_path"`
+	DisplayServings string `json:"display_servings"`
 }
 
 // printRecipe loads the recipe config + note title, formats it for the
@@ -405,6 +415,7 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 	if err := json.Unmarshal(config, &payload); err != nil {
 		return nil, fmt.Errorf("recipe: unmarshal config for print: %w", err)
 	}
+	payload = ScalePayloadForServings(payload, pr.DisplayServings)
 
 	// Get the note title and latest body.
 	var title, body string
@@ -451,7 +462,7 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
 	// Load ingredients.
 	rows, err := db.Query(
-		`SELECT id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated, COALESCE(grocery_category, '') FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
+		`SELECT id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated, COALESCE(grocery_category, ''), COALESCE(grocery_category_manual, 0) FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
 		noteID,
 	)
 	if err != nil {
@@ -463,11 +474,13 @@ func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, n
 	for rows.Next() {
 		var ing IngredientRow
 		var metricValidatedInt int
-		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Prepare, &ing.Amount, &ing.Unit, &ing.NonMetricAmount, &ing.NonMetricUnit, &metricValidatedInt, &ing.GroceryCategory); err != nil {
+		var groceryCategoryManualInt int
+		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Prepare, &ing.Amount, &ing.Unit, &ing.NonMetricAmount, &ing.NonMetricUnit, &metricValidatedInt, &ing.GroceryCategory, &groceryCategoryManualInt); err != nil {
 			return nil, fmt.Errorf("recipe: scan ingredient: %w", err)
 		}
 		ing.MetricValidated = metricValidatedInt != 0
 		ing.GroceryCategory = NormalizeIngredientCategory(ing.GroceryCategory)
+		ing.GroceryCategoryManual = groceryCategoryManualInt != 0
 		ingredients = append(ingredients, ing)
 	}
 	if err := rows.Err(); err != nil {
