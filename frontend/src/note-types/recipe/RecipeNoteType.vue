@@ -99,6 +99,24 @@
             <pre class="recipe-print-preview-box">{{ printPreview }}</pre>
         </div>
 
+        <div v-if="editing" class="ingredient-order-controls">
+            <label class="ingredient-order-toggle">
+                <input
+                    type="checkbox"
+                    :checked="localIngredientOrderManual"
+                    @change="setIngredientOrderManual($event.target.checked)"
+                />
+                <span>Use manual ingredient order</span>
+            </label>
+            <p class="ingredient-order-hint">
+                {{
+                    localIngredientOrderManual
+                        ? "Manual ingredient order is used for the recipe view and printing."
+                        : "If manual order is off, the recipe view and printed version are sorted by category and then alphabetically."
+                }}
+            </p>
+        </div>
+
         <h3>Ingredients</h3>
 
         <div class="ingredient-table-wrapper">
@@ -113,11 +131,14 @@
                     <th>Non-Metric Type</th>
                     <th>Metric Validated</th>
                     <th>Grocery Category</th>
-                    <th v-if="editing"></th>
+                    <th v-if="editing">Actions</th>
                 </tr>
             </thead>
             <tbody>
-                <tr v-for="(ing, idx) in localIngredients" :key="idx">
+                <tr
+                    v-for="(ing, idx) in ingredientRows"
+                    :key="ing.id || `${idx}:${ing.name}:${ing.prepare}`"
+                >
                     <td v-if="editing">
                         <input
                             v-model="ing.name"
@@ -217,12 +238,30 @@
                     </td>
 
                     <td v-if="editing">
-                        <button
-                            class="btn-ghost btn-sm"
-                            @click="removeIngredient(idx)"
-                        >
-                            &times;
-                        </button>
+                        <div class="ingredient-row-actions">
+                            <button
+                                v-if="localIngredientOrderManual"
+                                class="btn-ghost btn-sm ingredient-order-btn"
+                                :disabled="idx === 0"
+                                @click="moveIngredient(idx, -1)"
+                            >
+                                ↑
+                            </button>
+                            <button
+                                v-if="localIngredientOrderManual"
+                                class="btn-ghost btn-sm ingredient-order-btn"
+                                :disabled="idx === ingredientRows.length - 1"
+                                @click="moveIngredient(idx, 1)"
+                            >
+                                ↓
+                            </button>
+                            <button
+                                class="btn-ghost btn-sm"
+                                @click="removeIngredient(idx)"
+                            >
+                                &times;
+                            </button>
+                        </div>
                     </td>
                 </tr>
             </tbody>
@@ -349,6 +388,10 @@ const GROCERY_CATEGORY_OPTIONS = [
     "household",
     "other",
 ];
+
+const GROCERY_CATEGORY_SORT_INDEX = Object.fromEntries(
+    GROCERY_CATEGORY_OPTIONS.map((category, index) => [category, index]),
+);
 
 const RECIPE_IMPORT_SCHEMA = {
     type: "object",
@@ -549,6 +592,7 @@ const { loading: printingRecipe, execute: execRecipeAction } = usePluginAction(
 );
 
 const localIngredients = ref([]);
+const localIngredientOrderManual = ref(false);
 const localServings = ref("");
 const localDisplayServings = ref("");
 const localAttentionTime = ref("");
@@ -595,6 +639,15 @@ const hasScaledIngredientView = computed(() => {
     if (target == null || target <= 0) return false;
     return Math.abs(target - baseServingsNumber.value) > 1e-9;
 });
+const orderedIngredients = computed(() =>
+    sortIngredientsForDisplay(
+        localIngredients.value,
+        localIngredientOrderManual.value,
+    ),
+);
+const ingredientRows = computed(() =>
+    props.editing ? localIngredients.value : orderedIngredients.value,
+);
 const printDisplayServings = computed(() => {
     if (!hasScaledIngredientView.value) return "";
     return formatNumericAmount(displayServingsNumber.value);
@@ -656,6 +709,7 @@ function buildRecipeCustomData(raw) {
         ingredients: Array.isArray(safe.ingredients)
             ? safe.ingredients.map(normalizeIngredient)
             : [],
+        ingredient_order_manual: !!safe.ingredient_order_manual,
         servings: normalizeString(safe.servings),
         attention_time: normalizeString(safe.attention_time),
         total_time: normalizeString(safe.total_time),
@@ -670,6 +724,35 @@ function buildRecipeCustomData(raw) {
 function normalizeGroceryCategory(value) {
     const normalized = normalizeString(value).toLowerCase();
     return GROCERY_CATEGORY_OPTIONS.includes(normalized) ? normalized : "";
+}
+
+function ingredientCategorySortIndex(category) {
+    return (
+        GROCERY_CATEGORY_SORT_INDEX[
+            normalizeGroceryCategory(category) || "other"
+        ] ?? GROCERY_CATEGORY_SORT_INDEX.other
+    );
+}
+
+function sortIngredientsForDisplay(ingredients, manual) {
+    const rows = Array.isArray(ingredients) ? [...ingredients] : [];
+    if (manual) return rows;
+    return rows.sort((left, right) => {
+        const categoryDiff =
+            ingredientCategorySortIndex(left?.grocery_category) -
+            ingredientCategorySortIndex(right?.grocery_category);
+        if (categoryDiff !== 0) return categoryDiff;
+
+        const leftName = normalizeString(left?.name).toLowerCase();
+        const rightName = normalizeString(right?.name).toLowerCase();
+        if (leftName !== rightName) {
+            return leftName.localeCompare(rightName);
+        }
+
+        return normalizeString(left?.prepare)
+            .toLowerCase()
+            .localeCompare(normalizeString(right?.prepare).toLowerCase());
+    });
 }
 
 function formatGroceryCategoryLabel(category) {
@@ -742,6 +825,7 @@ function hasRecipeCustomData(raw) {
     const data = buildRecipeCustomData(raw);
     return (
         data.ingredients.length > 0 ||
+        data.ingredient_order_manual ||
         hasText(data.servings) ||
         hasText(data.attention_time) ||
         hasText(data.total_time) ||
@@ -771,6 +855,7 @@ function setLocalRecipeState(raw, { emitAfter = false } = {}) {
     const data = buildRecipeCustomData(raw);
 
     localIngredients.value = data.ingredients;
+    localIngredientOrderManual.value = data.ingredient_order_manual;
     localServings.value = data.servings;
     localDisplayServings.value =
         parseNumericAmount(data.servings) != null
@@ -814,6 +899,7 @@ watch(
             hasRecipeCustomData(cd) &&
             !hasRecipeCustomData({
                 ingredients: localIngredients.value,
+                ingredient_order_manual: localIngredientOrderManual.value,
                 servings: localServings.value,
                 attention_time: localAttentionTime.value,
                 total_time: localTotalTime.value,
@@ -848,6 +934,7 @@ function emitCustomData() {
             ),
             grocery_category_manual: !!ingredient.grocery_category_manual,
         })),
+        ingredient_order_manual: localIngredientOrderManual.value,
         servings: localServings.value,
         attention_time: localAttentionTime.value,
         total_time: localTotalTime.value,
@@ -862,6 +949,7 @@ function emitCustomData() {
 watch(
     [
         localIngredients,
+        localIngredientOrderManual,
         localServings,
         localAttentionTime,
         localTotalTime,
@@ -937,6 +1025,29 @@ function resetDisplayedServings() {
         return;
     }
     localDisplayServings.value = formatNumericAmount(baseServingsNumber.value);
+}
+
+function setIngredientOrderManual(enabled) {
+    const next = !!enabled;
+    if (next && !localIngredientOrderManual.value) {
+        localIngredients.value = sortIngredientsForDisplay(
+            localIngredients.value,
+            false,
+        );
+    }
+    localIngredientOrderManual.value = next;
+}
+
+function moveIngredient(idx, delta) {
+    if (!localIngredientOrderManual.value) return;
+    const target = idx + delta;
+    if (idx < 0 || target < 0 || target >= localIngredients.value.length) {
+        return;
+    }
+    const next = [...localIngredients.value];
+    const [ingredient] = next.splice(idx, 1);
+    next.splice(target, 0, ingredient);
+    localIngredients.value = next;
 }
 
 async function printRecipe() {
@@ -1136,6 +1247,28 @@ function removeIngredient(idx) {
     white-space: pre;
 }
 
+.ingredient-order-controls {
+    margin: 0 0 0.85rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--raised-bg);
+}
+
+.ingredient-order-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.92rem;
+    font-weight: 600;
+}
+
+.ingredient-order-hint {
+    margin: 0.45rem 0 0;
+    color: var(--font-color-secondary);
+    font-size: 0.85rem;
+}
+
 .ingredient-table-wrapper {
     overflow-x: auto;
     width: 100%;
@@ -1171,6 +1304,16 @@ function removeIngredient(idx) {
     width: 100%;
     padding: 0.3rem 0.4rem;
     font-size: 0.9rem;
+}
+
+.ingredient-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.ingredient-order-btn {
+    min-width: 2rem;
 }
 
 .amount-input {

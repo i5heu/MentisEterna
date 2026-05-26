@@ -284,52 +284,18 @@ func formatNote(db *sql.DB, noteType string, noteID int64, title string) (*print
 
 // formatRecipeForPrint loads a recipe's config and formats it.
 func formatRecipeForPrint(db *sql.DB, noteID int64, title string) (*printer.Buf, string, error) {
-	var payload recipe.Payload
-	var servings, attentionTime, totalTime, gramsPerServing, kcalPerServing string
-	var rating int
-	var freezableInt int
-	var preCookServings string
-
-	// Load metadata.
-	err := db.QueryRow(`
-		SELECT servings, attention_time, total_time, grams_per_serving,
-		       kcal_per_serving, rating, freezable, pre_cook_servings
-		FROM ct_recipe_meta WHERE note_id = ?`, noteID,
-	).Scan(&servings, &attentionTime, &totalTime, &gramsPerServing,
-		&kcalPerServing, &rating, &freezableInt, &preCookServings)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, "", fmt.Errorf("load recipe meta: %w", err)
-	}
-
-	// Load ingredients.
-	rows, err := db.Query(
-		`SELECT id, name, prepare, amount, unit FROM ct_recipe_ingredients
-		 WHERE note_id = ? ORDER BY sort_order`, noteID,
-	)
+	plugin := &recipe.RecipePlugin{}
+	config, err := plugin.LoadConfig(context.Background(), db, 0, noteID)
 	if err != nil {
-		return nil, "", fmt.Errorf("load ingredients: %w", err)
+		return nil, "", fmt.Errorf("load recipe config: %w", err)
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var ing recipe.IngredientRow
-		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Prepare, &ing.Amount, &ing.Unit); err != nil {
-			return nil, "", fmt.Errorf("scan ingredient: %w", err)
+	var payload recipe.Payload
+	if len(config) > 0 {
+		if err := json.Unmarshal(config, &payload); err != nil {
+			return nil, "", fmt.Errorf("unmarshal recipe config: %w", err)
 		}
-		payload.Ingredients = append(payload.Ingredients, ing)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, "", err
-	}
-
-	payload.Servings = servings
-	payload.AttentionTime = attentionTime
-	payload.TotalTime = totalTime
-	payload.GramsPerServing = gramsPerServing
-	payload.KcalPerServing = kcalPerServing
-	payload.Rating = rating
-	payload.Freezable = freezableInt != 0
-	payload.PreCookServings = preCookServings
 
 	// Fetch latest body.
 	var body string

@@ -42,6 +42,7 @@ const registry = [
         ),
         emptyCustomData: () => ({
             ingredients: [],
+            ingredient_order_manual: false,
             servings: "",
             attention_time: "",
             total_time: "",
@@ -55,6 +56,7 @@ const registry = [
             if (!raw || typeof raw !== "object") {
                 return {
                     ingredients: [],
+                    ingredient_order_manual: false,
                     servings: "",
                     attention_time: "",
                     total_time: "",
@@ -83,6 +85,7 @@ const registry = [
                     grocery_category: i.grocery_category || "",
                     grocery_category_manual: !!i.grocery_category_manual,
                 })),
+                ingredient_order_manual: !!raw.ingredient_order_manual,
                 servings: raw.servings || "",
                 attention_time: raw.attention_time || "",
                 total_time: raw.total_time || "",

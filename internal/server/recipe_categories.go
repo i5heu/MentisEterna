@@ -23,9 +23,17 @@ func (s *Server) classifyRecipeIngredientsForNotes(noteIDs ...int64) {
 	if s == nil || s.db == nil || s.llm == nil || len(noteIDs) == 0 {
 		return
 	}
-	if err := recipeplugin.CategorizeIngredientsForNotesWithWorkers(context.Background(), s.db.DB, s.llm, noteIDs, s.recipeCategoryWorkerCount()); err != nil {
-		log.Printf("recipe: categorize ingredients for notes %v: %v", noteIDs, err)
-	}
+
+	ids := append([]int64(nil), noteIDs...)
+	dbConn := s.db.DB
+	embedder := s.llm
+	workers := s.recipeCategoryWorkerCount()
+
+	go func() {
+		if err := recipeplugin.CategorizeIngredientsForNotesWithWorkers(context.Background(), dbConn, embedder, ids, workers); err != nil {
+			log.Printf("recipe: categorize ingredients for notes %v: %v", ids, err)
+		}
+	}()
 }
 
 func (s *Server) maybePostProcessRecipeAction(noteType string, actionID string, noteID int64, result any) {

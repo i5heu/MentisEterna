@@ -224,6 +224,98 @@ func TestCategorizeIngredientsForNotesWithWorkersKeepsManualCategories(t *testin
 	}
 }
 
+func TestLoadConfigSortsIngredientsByCategoryThenNameWhenManualOrderDisabled(t *testing.T) {
+	d := plugintest.DB(t, &RecipePlugin{})
+	defer d.Close()
+
+	noteID := plugintest.CreateNote(t, d, "Sorted Recipe", &RecipePlugin{})
+	if _, err := d.Exec(`
+		INSERT INTO ct_recipe_ingredients (note_id, name, grocery_category, sort_order)
+		VALUES
+			(?, 'Banana', 'fruit', 2),
+			(?, 'Apple', 'fruit', 0),
+			(?, 'Carrot', 'vegetables', 1)
+	`, noteID, noteID, noteID); err != nil {
+		t.Fatalf("insert ingredients: %v", err)
+	}
+	if _, err := d.Exec(`
+		INSERT INTO ct_recipe_meta (note_id, ingredient_order_manual)
+		VALUES (?, 0)
+	`, noteID); err != nil {
+		t.Fatalf("insert meta: %v", err)
+	}
+
+	cfg, err := (&RecipePlugin{}).LoadConfig(context.Background(), d.DB, 0, noteID)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	var payload Payload
+	if err := json.Unmarshal(cfg, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	if len(payload.Ingredients) != 3 {
+		t.Fatalf("ingredient count = %d, want 3", len(payload.Ingredients))
+	}
+	got := []string{payload.Ingredients[0].Name, payload.Ingredients[1].Name, payload.Ingredients[2].Name}
+	want := []string{"Carrot", "Apple", "Banana"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ingredient order = %v, want %v", got, want)
+		}
+	}
+	if payload.IngredientOrderManual {
+		t.Fatal("IngredientOrderManual = true, want false")
+	}
+}
+
+func TestLoadConfigKeepsManualIngredientOrderWhenEnabled(t *testing.T) {
+	d := plugintest.DB(t, &RecipePlugin{})
+	defer d.Close()
+
+	noteID := plugintest.CreateNote(t, d, "Manual Order", &RecipePlugin{})
+	if _, err := d.Exec(`
+		INSERT INTO ct_recipe_ingredients (note_id, name, grocery_category, sort_order)
+		VALUES
+			(?, 'Banana', 'fruit', 2),
+			(?, 'Apple', 'fruit', 0),
+			(?, 'Carrot', 'vegetables', 1)
+	`, noteID, noteID, noteID); err != nil {
+		t.Fatalf("insert ingredients: %v", err)
+	}
+	if _, err := d.Exec(`
+		INSERT INTO ct_recipe_meta (note_id, ingredient_order_manual)
+		VALUES (?, 1)
+	`, noteID); err != nil {
+		t.Fatalf("insert meta: %v", err)
+	}
+
+	cfg, err := (&RecipePlugin{}).LoadConfig(context.Background(), d.DB, 0, noteID)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	var payload Payload
+	if err := json.Unmarshal(cfg, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	if len(payload.Ingredients) != 3 {
+		t.Fatalf("ingredient count = %d, want 3", len(payload.Ingredients))
+	}
+	got := []string{payload.Ingredients[0].Name, payload.Ingredients[1].Name, payload.Ingredients[2].Name}
+	want := []string{"Apple", "Carrot", "Banana"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ingredient order = %v, want %v", got, want)
+		}
+	}
+	if !payload.IngredientOrderManual {
+		t.Fatal("IngredientOrderManual = false, want true")
+	}
+}
+
 func TestScalePayloadForServingsScalesNumericAmountsAndServings(t *testing.T) {
 	payload := Payload{
 		Ingredients: []IngredientRow{
