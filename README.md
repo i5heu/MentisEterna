@@ -139,7 +139,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] Grocery List must recalculate the amounts to best metric unit (e.g. 1500g -> 1.5kg, 0.5l -> 500ml, etc.)
   - [x] Recipie overview Note type: First image in a recipe should be shown as thumbnail in in the Recipe Overview
   - [x] Recipie Note Type: If Empty show a import Recipe via JSON button - also provide the JSON schema
-  - [ ] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
+  - [x] Grocery List must be alphabetically sorted and grouped by category (e.g. vegetables, meat, dairy, etc.). using embedding an cosine similarity to these categories.: ["vegetables", "fruit", "meat", "dairy", "fish", "chilled & deli", "frozen", "spices", "beverages", "household", "other"]
   - [x] Print Grocery List and Recipes with a button via a recipe printer.
   - [x] API based Recipe Import instead of frontend import.
   - [x] Add mg to allowed units.
