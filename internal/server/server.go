@@ -67,7 +67,7 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		log.Fatalf("webauthn: %v", err)
 	}
 
-	jobMgr := jobs.NewManager(d.DB, 2)
+	jobMgr := jobs.NewManager(d.DB, envOrInt("JOB_WORKERS", 10))
 
 	// Media subsystem: set up cache, S3 store, and the service orchestrator.
 	var mediaSvc *media.Service
@@ -111,6 +111,19 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		mediaService:  mediaSvc,
 		backupService: backupSvc,
 	}
+}
+
+func envOrInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		log.Printf("server: invalid %s=%q; using default %d", key, v, def)
+		return def
+	}
+	return n
 }
 
 func (s *Server) Start(ctx context.Context) error {

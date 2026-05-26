@@ -91,6 +91,14 @@ func NewManager(db *sql.DB, workers int) *Manager {
 	}
 }
 
+// WorkerCount returns the configured number of concurrent job workers.
+func (m *Manager) WorkerCount() int {
+	if m == nil {
+		return 0
+	}
+	return m.workers
+}
+
 // UpsertDefinitions upserts job_definitions rows from the provided cron jobs.
 // Returns a map from plugin_id+name to the definition ID.
 func (m *Manager) UpsertDefinitions(pluginID string, jobs []CronJob) error {
