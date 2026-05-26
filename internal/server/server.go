@@ -153,15 +153,22 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Printf("plugin %s: %d job(s) registered", plugin.ID(), len(jobsForPlugin))
 	}
 
-	// Register ad-hoc VSS embedding index job (on-demand, not cron).
-	// Must happen before Start() so workers see the task.
-	if s.db.VSSAvailable() && s.llm != nil {
-		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{
-			{Name: "vss_index", Task: s.syncEmbeddingTask},
-			{Name: "sync_ocr_embedding", Task: s.syncOCREmbeddingTask},
-			{Name: "sync_stt_embedding", Task: s.syncSTTEmbeddingTask},
-		}); err != nil {
-			log.Fatalf("Failed to register VSS index job: %v", err)
+	// Register ad-hoc maintenance jobs (on-demand, not cron).
+	// Must happen before Start() so workers see the tasks.
+	if s.llm != nil {
+		systemJobs := []jobs.CronJob{{
+			Name: "recalculate_recipe_ingredient_categories",
+			Task: s.recalculateRecipeIngredientCategoriesTask,
+		}}
+		if s.db.VSSAvailable() {
+			systemJobs = append(systemJobs,
+				jobs.CronJob{Name: "vss_index", Task: s.syncEmbeddingTask},
+				jobs.CronJob{Name: "sync_ocr_embedding", Task: s.syncOCREmbeddingTask},
+				jobs.CronJob{Name: "sync_stt_embedding", Task: s.syncSTTEmbeddingTask},
+			)
+		}
+		if err := s.jobManager.RegisterAdHoc("_system", systemJobs); err != nil {
+			log.Fatalf("Failed to register system maintenance jobs: %v", err)
 		}
 	}
 
@@ -324,6 +331,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/maintenance/reindex", s.handleReindexNotes)
 	mux.HandleFunc("/maintenance/reindex-ocr", s.handleReindexOCR)
 	mux.HandleFunc("/maintenance/reindex-stt", s.handleReindexSTT)
+	mux.HandleFunc("/maintenance/recalculate-recipe-categories", s.handleRecalculateRecipeIngredientCategories)
 
 	// System status endpoints
 	mux.HandleFunc("/system/printer-status", s.handlePrinterStatus)
@@ -475,6 +483,29 @@ func (s *Server) handleBackupPurge(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Maintenance Reindex Handlers ---
+
+func (s *Server) handleRecalculateRecipeIngredientCategories(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.llm == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Embedding client not available"})
+		return
+	}
+
+	runID, err := s.jobManager.Enqueue("_system", "recalculate_recipe_ingredient_categories", nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to enqueue ingredient category recalculation: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"run_id":  runID,
+		"message": "Ingredient category recalculation enqueued. Check /jobs for progress.",
+	})
+}
 
 // handleReindexNotes enqueues vss_index jobs for all notes that are missing
 // embeddings in vss_notes. Returns the count of enqueued jobs.

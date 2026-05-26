@@ -329,119 +329,207 @@
                 <div class="reindex-grid">
                     <!-- Reindex Notes -->
                     <div class="reindex-card">
-                        <div class="reindex-card-header">
-                            <span class="reindex-icon">📝</span>
-                            <div>
-                                <h3>Re-Index Notes</h3>
-                                <p class="reindex-card-desc">
-                                    Re-generate vector embeddings for all notes
-                                    missing them.
-                                </p>
+                        <div class="reindex-card-top">
+                            <div class="reindex-card-header">
+                                <span class="reindex-icon">📝</span>
+                                <div>
+                                    <h3>Re-Index Notes</h3>
+                                    <p class="reindex-card-desc">
+                                        Re-generate vector embeddings for all
+                                        notes missing them.
+                                    </p>
+                                </div>
                             </div>
+                            <button
+                                class="btn-amber btn-sm shortcut-anchor"
+                                :title="getShortcutLabel('reindex-notes')"
+                                :disabled="reindexingNotes"
+                                @click="reindexNotes"
+                            >
+                                {{
+                                    reindexingNotes
+                                        ? "Enqueuing…"
+                                        : "Re-Index All Notes"
+                                }}
+                                <ShortcutHint
+                                    v-if="
+                                        shortcutHintsVisible &&
+                                        isShortcutEnabled('reindex-notes')
+                                    "
+                                    :label="getHintLabel('reindex-notes')"
+                                />
+                            </button>
                         </div>
-                        <button
-                            class="btn-amber btn-sm shortcut-anchor"
-                            :title="getShortcutLabel('reindex-notes')"
-                            :disabled="reindexingNotes"
-                            @click="reindexNotes"
+                        <div
+                            v-if="reindexNotesErr || reindexNotesOk"
+                            class="reindex-card-status"
                         >
-                            {{
-                                reindexingNotes
-                                    ? "Enqueuing…"
-                                    : "Re-Index All Notes"
-                            }}
-                            <ShortcutHint
-                                v-if="
-                                    shortcutHintsVisible &&
-                                    isShortcutEnabled('reindex-notes')
-                                "
-                                :label="getHintLabel('reindex-notes')"
-                            />
-                        </button>
-                        <p v-if="reindexNotesErr" class="msg-error">
-                            {{ reindexNotesErr }}
-                        </p>
-                        <p v-if="reindexNotesOk" class="msg-ok">
-                            {{ reindexNotesOk }}
-                        </p>
+                            <p v-if="reindexNotesErr" class="msg-error">
+                                {{ reindexNotesErr }}
+                            </p>
+                            <p v-if="reindexNotesOk" class="msg-ok">
+                                {{ reindexNotesOk }}
+                            </p>
+                        </div>
                     </div>
 
                     <!-- Reindex OCR -->
                     <div class="reindex-card">
-                        <div class="reindex-card-header">
-                            <span class="reindex-icon">🖼</span>
-                            <div>
-                                <h3>Re-Index OCR</h3>
-                                <p class="reindex-card-desc">
-                                    Re-generate embeddings for OCR-scanned file
-                                    contents missing them.
-                                </p>
+                        <div class="reindex-card-top">
+                            <div class="reindex-card-header">
+                                <span class="reindex-icon">🖼</span>
+                                <div>
+                                    <h3>Re-Index OCR</h3>
+                                    <p class="reindex-card-desc">
+                                        Re-generate embeddings for OCR-scanned
+                                        file contents missing them.
+                                    </p>
+                                </div>
                             </div>
+                            <button
+                                class="btn-amber btn-sm shortcut-anchor"
+                                :title="getShortcutLabel('reindex-ocr')"
+                                :disabled="reindexingOCR"
+                                @click="reindexOCR"
+                            >
+                                {{
+                                    reindexingOCR
+                                        ? "Enqueuing…"
+                                        : "Re-Index OCR Files"
+                                }}
+                                <ShortcutHint
+                                    v-if="
+                                        shortcutHintsVisible &&
+                                        isShortcutEnabled('reindex-ocr')
+                                    "
+                                    :label="getHintLabel('reindex-ocr')"
+                                />
+                            </button>
                         </div>
-                        <button
-                            class="btn-amber btn-sm shortcut-anchor"
-                            :title="getShortcutLabel('reindex-ocr')"
-                            :disabled="reindexingOCR"
-                            @click="reindexOCR"
+                        <div
+                            v-if="reindexOCRErr || reindexOCROk"
+                            class="reindex-card-status"
                         >
-                            {{
-                                reindexingOCR
-                                    ? "Enqueuing…"
-                                    : "Re-Index OCR Files"
-                            }}
-                            <ShortcutHint
-                                v-if="
-                                    shortcutHintsVisible &&
-                                    isShortcutEnabled('reindex-ocr')
-                                "
-                                :label="getHintLabel('reindex-ocr')"
-                            />
-                        </button>
-                        <p v-if="reindexOCRErr" class="msg-error">
-                            {{ reindexOCRErr }}
-                        </p>
-                        <p v-if="reindexOCROk" class="msg-ok">
-                            {{ reindexOCROk }}
-                        </p>
+                            <p v-if="reindexOCRErr" class="msg-error">
+                                {{ reindexOCRErr }}
+                            </p>
+                            <p v-if="reindexOCROk" class="msg-ok">
+                                {{ reindexOCROk }}
+                            </p>
+                        </div>
                     </div>
 
                     <!-- Reindex STT -->
                     <div class="reindex-card">
-                        <div class="reindex-card-header">
-                            <span class="reindex-icon">🎤</span>
-                            <div>
-                                <h3>Re-Index STT</h3>
-                                <p class="reindex-card-desc">
-                                    Re-generate embeddings for speech-to-text
-                                    transcriptions missing them.
-                                </p>
+                        <div class="reindex-card-top">
+                            <div class="reindex-card-header">
+                                <span class="reindex-icon">🎤</span>
+                                <div>
+                                    <h3>Re-Index STT</h3>
+                                    <p class="reindex-card-desc">
+                                        Re-generate embeddings for
+                                        speech-to-text transcriptions missing
+                                        them.
+                                    </p>
+                                </div>
                             </div>
+                            <button
+                                class="btn-amber btn-sm shortcut-anchor"
+                                :title="getShortcutLabel('reindex-stt')"
+                                :disabled="reindexingSTT"
+                                @click="reindexSTT"
+                            >
+                                {{
+                                    reindexingSTT
+                                        ? "Enqueuing…"
+                                        : "Re-Index STT Files"
+                                }}
+                                <ShortcutHint
+                                    v-if="
+                                        shortcutHintsVisible &&
+                                        isShortcutEnabled('reindex-stt')
+                                    "
+                                    :label="getHintLabel('reindex-stt')"
+                                />
+                            </button>
                         </div>
-                        <button
-                            class="btn-amber btn-sm shortcut-anchor"
-                            :title="getShortcutLabel('reindex-stt')"
-                            :disabled="reindexingSTT"
-                            @click="reindexSTT"
+                        <div
+                            v-if="reindexSTTErr || reindexSTTOk"
+                            class="reindex-card-status"
                         >
-                            {{
-                                reindexingSTT
-                                    ? "Enqueuing…"
-                                    : "Re-Index STT Files"
-                            }}
-                            <ShortcutHint
-                                v-if="
-                                    shortcutHintsVisible &&
-                                    isShortcutEnabled('reindex-stt')
+                            <p v-if="reindexSTTErr" class="msg-error">
+                                {{ reindexSTTErr }}
+                            </p>
+                            <p v-if="reindexSTTOk" class="msg-ok">
+                                {{ reindexSTTOk }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Recalculate Ingredient Categories -->
+                    <div class="reindex-card">
+                        <div class="reindex-card-top">
+                            <div class="reindex-card-header">
+                                <span class="reindex-icon">🛒</span>
+                                <div>
+                                    <h3>Recalculate Ingredient Categories</h3>
+                                    <p class="reindex-card-desc">
+                                        Re-run embedding matching for all recipe
+                                        ingredients and refresh their stored
+                                        grocery categories.
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                class="btn-amber btn-sm shortcut-anchor"
+                                :title="
+                                    getShortcutLabel(
+                                        'recalculate-recipe-categories',
+                                    )
                                 "
-                                :label="getHintLabel('reindex-stt')"
-                            />
-                        </button>
-                        <p v-if="reindexSTTErr" class="msg-error">
-                            {{ reindexSTTErr }}
-                        </p>
-                        <p v-if="reindexSTTOk" class="msg-ok">
-                            {{ reindexSTTOk }}
-                        </p>
+                                :disabled="recalculatingRecipeCategories"
+                                @click="recalculateRecipeCategories"
+                            >
+                                {{
+                                    recalculatingRecipeCategories
+                                        ? "Enqueuing…"
+                                        : "Recalculate All Ingredient Categories"
+                                }}
+                                <ShortcutHint
+                                    v-if="
+                                        shortcutHintsVisible &&
+                                        isShortcutEnabled(
+                                            'recalculate-recipe-categories',
+                                        )
+                                    "
+                                    :label="
+                                        getHintLabel(
+                                            'recalculate-recipe-categories',
+                                        )
+                                    "
+                                />
+                            </button>
+                        </div>
+                        <div
+                            v-if="
+                                recalculateRecipeCategoriesErr ||
+                                recalculateRecipeCategoriesOk
+                            "
+                            class="reindex-card-status"
+                        >
+                            <p
+                                v-if="recalculateRecipeCategoriesErr"
+                                class="msg-error"
+                            >
+                                {{ recalculateRecipeCategoriesErr }}
+                            </p>
+                            <p
+                                v-if="recalculateRecipeCategoriesOk"
+                                class="msg-ok"
+                            >
+                                {{ recalculateRecipeCategoriesOk }}
+                            </p>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -480,6 +568,7 @@ import {
     reindexNotes as apiReindexNotes,
     reindexOCR as apiReindexOCR,
     reindexSTT as apiReindexSTT,
+    recalculateRecipeCategories as apiRecalculateRecipeCategories,
     fetchPrinterStatus,
     fetchAIStatus,
 } from "../api.js";
@@ -520,6 +609,10 @@ const reindexOCROk = ref("");
 const reindexingSTT = ref(false);
 const reindexSTTErr = ref("");
 const reindexSTTOk = ref("");
+
+const recalculatingRecipeCategories = ref(false);
+const recalculateRecipeCategoriesErr = ref("");
+const recalculateRecipeCategoriesOk = ref("");
 
 function goBack() {
     if (showHotkeys.value) {
@@ -605,6 +698,14 @@ const shortcutDefinitions = computed(() => [
         allowInInput: true,
         enabled: () => !reindexingSTT.value,
         handler: () => reindexSTT(),
+    },
+    {
+        id: "recalculate-recipe-categories",
+        description: "Recalculate all recipe ingredient categories",
+        hintKey: "C",
+        allowInInput: true,
+        enabled: () => !recalculatingRecipeCategories.value,
+        handler: () => recalculateRecipeCategories(),
     },
     {
         id: "logout",
@@ -733,6 +834,24 @@ async function reindexSTT() {
         reindexSTTErr.value = e.message || "Re-index STT failed";
     } finally {
         reindexingSTT.value = false;
+    }
+}
+
+async function recalculateRecipeCategories() {
+    recalculateRecipeCategoriesErr.value = "";
+    recalculateRecipeCategoriesOk.value = "";
+    recalculatingRecipeCategories.value = true;
+    try {
+        const res = await apiRecalculateRecipeCategories(props.token);
+        recalculateRecipeCategoriesOk.value = res.message;
+        setTimeout(() => {
+            recalculateRecipeCategoriesOk.value = "";
+        }, 10000);
+    } catch (e) {
+        recalculateRecipeCategoriesErr.value =
+            e.message || "Ingredient category recalculation failed";
+    } finally {
+        recalculatingRecipeCategories.value = false;
     }
 }
 
@@ -882,13 +1001,13 @@ function doLogout() {
 .msg-error {
     color: var(--heading-color);
     font-size: 0.8rem;
-    margin-top: 0.5rem;
+    margin: 0;
 }
 
 .msg-ok {
     color: var(--accent-teal);
     font-size: 0.8rem;
-    margin-top: 0.5rem;
+    margin: 0;
 }
 
 /* Job queue embedded in card */
@@ -906,13 +1025,20 @@ function doLogout() {
 
 .reindex-card {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
+    flex-direction: column;
+    gap: 0.65rem;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 0.75rem 1rem;
+}
+
+.reindex-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    width: 100%;
 }
 
 .reindex-card-header {
@@ -942,6 +1068,14 @@ function doLogout() {
     line-height: 1.4;
 }
 
+.reindex-card-status {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding-left: 2rem;
+}
+
 /* Logout */
 .options-section-logout {
     text-align: center;
@@ -958,7 +1092,7 @@ function doLogout() {
         padding: 1.25rem;
     }
 
-    .reindex-card {
+    .reindex-card-top {
         flex-direction: column;
         align-items: flex-start;
         gap: 0.5rem;
@@ -966,6 +1100,10 @@ function doLogout() {
 
     .reindex-card button {
         align-self: flex-end;
+    }
+
+    .reindex-card-status {
+        padding-left: 0;
     }
 }
 </style>

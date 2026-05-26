@@ -41,6 +41,7 @@ type IngredientRow struct {
 	NonMetricAmount string `json:"non_metric_amount"`
 	NonMetricUnit   string `json:"non_metric_unit"`
 	MetricValidated bool   `json:"metric_validated"`
+	GroceryCategory string `json:"grocery_category,omitempty"`
 }
 
 // Payload is the JSON structure the frontend sends for a recipe note.
@@ -77,6 +78,7 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 			non_metric_amount   TEXT    NOT NULL DEFAULT '',
 			non_metric_unit     TEXT    NOT NULL DEFAULT '',
 			metric_validated    INTEGER NOT NULL DEFAULT 0,
+			grocery_category    TEXT    NOT NULL DEFAULT '',
 			sort_order          INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
@@ -112,6 +114,7 @@ func (p *RecipePlugin) InitSchema(db *sql.DB) error {
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN non_metric_amount TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN non_metric_unit TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN metric_validated INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE ct_recipe_ingredients ADD COLUMN grocery_category TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -448,7 +451,7 @@ func (p *RecipePlugin) printRecipe(ctx context.Context, db *sql.DB, userID int, 
 func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
 	// Load ingredients.
 	rows, err := db.Query(
-		`SELECT id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
+		`SELECT id, name, prepare, amount, unit, non_metric_amount, non_metric_unit, metric_validated, COALESCE(grocery_category, '') FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`,
 		noteID,
 	)
 	if err != nil {
@@ -460,10 +463,11 @@ func (p *RecipePlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, n
 	for rows.Next() {
 		var ing IngredientRow
 		var metricValidatedInt int
-		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Prepare, &ing.Amount, &ing.Unit, &ing.NonMetricAmount, &ing.NonMetricUnit, &metricValidatedInt); err != nil {
+		if err := rows.Scan(&ing.ID, &ing.Name, &ing.Prepare, &ing.Amount, &ing.Unit, &ing.NonMetricAmount, &ing.NonMetricUnit, &metricValidatedInt, &ing.GroceryCategory); err != nil {
 			return nil, fmt.Errorf("recipe: scan ingredient: %w", err)
 		}
 		ing.MetricValidated = metricValidatedInt != 0
+		ing.GroceryCategory = NormalizeIngredientCategory(ing.GroceryCategory)
 		ingredients = append(ingredients, ing)
 	}
 	if err := rows.Err(); err != nil {

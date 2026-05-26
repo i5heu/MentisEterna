@@ -319,6 +319,13 @@ export async function reindexSTT(token) {
     });
 }
 
+export async function recalculateRecipeCategories(token) {
+    return request("/maintenance/recalculate-recipe-categories", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 /**
  * Begin passkey login (discoverable / usernameless).
  */
