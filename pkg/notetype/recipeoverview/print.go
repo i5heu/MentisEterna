@@ -61,6 +61,7 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 	for _, group := range groupGroceryItems(gl.Items) {
 		b.FontA()
 		b.BigSize()
+		b.Bold(true)
 		b.Text(formatCategoryHeading(group.Category))
 		b.Ln()
 		b.FontB()
@@ -91,10 +92,9 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 		}
 		b.Bold(false)
 		b.Ln()
+		b.HLine(w)
 	}
 
-	b.HLine(w)
-	b.AlignCenter()
 	b.Ln()
 
 	return b

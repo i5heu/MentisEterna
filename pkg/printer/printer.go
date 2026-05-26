@@ -349,16 +349,24 @@ func (p *Buf) FontC() *Buf { return p.Font(escposFontC) }
 
 // Style sets character formatting via the ESC ! command.
 // Bit flags: 0x08 = bold, 0x10 = double height, 0x20 = double width.
-// Provide 0 to reset all styles. For compatibility with printers that only
-// honor ESC E for emphasized text, the bold bit is mirrored there as well.
+// Provide 0 to reset all styles. By executing ESC ! first and fine-tuning
+// with ESC E second, we prevent Toshiba emulation firmware from wiping out bold text.
 func (p *Buf) Style(n byte) *Buf {
 	p.style = n
+
+	// 1. Write the global master layout byte first.
+	p.b.Write([]byte{ESC, '!', n})
+
+	// 2. Override and fine-tune the bold state LAST.
+	// This guarantees that the bold command takes ultimate precedence.
 	if n&0x08 != 0 {
-		p.b.Write([]byte{ESC, 'E', 1})
+		p.b.Write([]byte{ESC, 'E', 1}) // Emphasized on
+		p.b.Write([]byte{ESC, 'G', 1}) // Double-strike on (extra bold density)
 	} else {
 		p.b.Write([]byte{ESC, 'E', 0})
+		p.b.Write([]byte{ESC, 'G', 0})
 	}
-	p.b.Write([]byte{ESC, '!', n})
+
 	return p
 }
 
