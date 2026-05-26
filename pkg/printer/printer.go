@@ -573,6 +573,15 @@ const (
 	defaultWriteDelayMS    = 50
 )
 
+var (
+	statPath       = os.Stat
+	newFilePrinter = func(devicePath string) (Printer, error) {
+		return NewFilePrinter(devicePath)
+	}
+	findUSBLPStrategy   = findUSBLP
+	findUSBByIDStrategy = findUSBByID
+)
+
 func configuredWriteChunkBytes() int {
 	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_WRITE_CHUNK_BYTES"))
 	if raw == "" {
@@ -673,15 +682,19 @@ func (p *FilePrinter) Close() error                   { return p.f.Close() }
 // FindUSBLP attempts to locate a USB printer device and return a Printer.
 // It tries common device paths in order.
 func FindUSBLP() (Printer, error) {
+	return findUSBLP()
+}
+
+func findUSBLP() (Printer, error) {
 	candidates := []string{
 		"/dev/usb/lp0",
 		"/dev/usb/lp1",
 		"/dev/usb/lp2",
 	}
 	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := statPath(path); err == nil {
 			log.Printf("printer: found device node %s", path)
-			return NewFilePrinter(path)
+			return newFilePrinter(path)
 		}
 	}
 	log.Printf("printer: no usblp device nodes found at %v", candidates)

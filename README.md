@@ -82,8 +82,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Printed Recipes need to use non-metric if metric is not validated
 - [x] If cursur in editor or input, ctrl+s should save the note even in edit mode, other hotkeys should be disabled.
 - [x] Ingredient categories need to be shown in Grocery List and printed version
-- [ ] The Shortcut helper modal is long and needs to be able to scroll.
-- [ ] Tables can become quite wide, we need to add a horizontal scroll to the table in the recipe note type. And we need a light zebra effect to make it easier to read.
+- [x] The Shortcut helper modal is long and needs to be able to scroll.
+- [x] Tables can become quite wide, we need to add a horizontal scroll to the table in the recipe note type. And we need a light zebra effect to make it easier to read.
 
 ## TODO Future
 - [x] OCR for images and pdfs
@@ -149,6 +149,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] Add a "Pantry Staples" Recipe that is used as a checklist to check if stuff for the hosehold is missing. There should be a extra Button in the Recipe Overview Note Type to print the Pantry Staples checklist via the recipe printer. And we need a modal with all the ingridients of the Pantry Staples recipe that we can select and add them to the current grocery list.
   - [x] The Recipe category must be manually selectable, if it was manually selected it should not be overwritten by the embedding based category.
   - [x] On the Recipe Note Type, there must be a input for how many servings the ingridiants are shown and that will also lead to the adjustment amounts in the print version of the recipe. 
+  - [ ] On the Recipe Note Type: The ingrediants should manually sortable (order). The manual order must be shown in the recipe web and printed version. If no manual order is set, the ingredients should be sorted by category and then alphabetically.
  
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
