@@ -15,11 +15,15 @@ type recipeImportActionResult struct {
 	CreatedNoteIDs []int64 `json:"created_note_ids"`
 }
 
+func (s *Server) recipeCategoryWorkerCount() int {
+	return envOrInt("RECIPE_CATEGORY_WORKERS", 10)
+}
+
 func (s *Server) classifyRecipeIngredientsForNotes(noteIDs ...int64) {
 	if s == nil || s.db == nil || s.llm == nil || len(noteIDs) == 0 {
 		return
 	}
-	if err := recipeplugin.CategorizeIngredientsForNotes(context.Background(), s.db.DB, s.llm, noteIDs); err != nil {
+	if err := recipeplugin.CategorizeIngredientsForNotesWithWorkers(context.Background(), s.db.DB, s.llm, noteIDs, s.recipeCategoryWorkerCount()); err != nil {
 		log.Printf("recipe: categorize ingredients for notes %v: %v", noteIDs, err)
 	}
 }
@@ -87,7 +91,7 @@ func (s *Server) classifyAllRecipeIngredients(ctx context.Context, dbConn *sql.D
 		if end > len(noteIDs) {
 			end = len(noteIDs)
 		}
-		if err := recipeplugin.CategorizeIngredientsForNotes(ctx, dbConn, s.llm, noteIDs[start:end]); err != nil {
+		if err := recipeplugin.CategorizeIngredientsForNotesWithWorkers(ctx, dbConn, s.llm, noteIDs[start:end], s.recipeCategoryWorkerCount()); err != nil {
 			return len(noteIDs), ingredientCount, err
 		}
 	}
