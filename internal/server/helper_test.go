@@ -28,3 +28,19 @@ func createTestSession(t *testing.T, s *Server) string {
 	}
 	return token
 }
+
+func TestNewServerJobWorkersDefault(t *testing.T) {
+	t.Setenv("JOB_WORKERS", "")
+	s := newTestServer(t)
+	if got := s.jobManager.WorkerCount(); got != 10 {
+		t.Fatalf("WorkerCount() = %d, want 10", got)
+	}
+}
+
+func TestNewServerJobWorkersFromEnv(t *testing.T) {
+	t.Setenv("JOB_WORKERS", "6")
+	s := newTestServer(t)
+	if got := s.jobManager.WorkerCount(); got != 6 {
+		t.Fatalf("WorkerCount() = %d, want 6", got)
+	}
+}
