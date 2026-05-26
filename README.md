@@ -139,7 +139,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
   - [x] Add rating 0 to 10 stars to recipe note type and show it in the recipe overview.
   - [x] Add "prepare" value to ingredients to shows how a ingredient should be prepared (e.g. chopped, sliced, etc.), do not show it in the grocery list. 
   - [x] in the generated grocery list: user should be able to delete, edit and add items.
-  - [ ] Add a "Pantry Staples" Recipe that is used as a checklist to check if stuff for the hosehold is missing. There should be a extra Button in the Recipe Overview Note Type to print the Pantry Staples checklist via the recipe printer. And we need a modal with all the ingridients of the Pantry Staples recipe that we can select and add them to the current grocery list.
+  - [x] Add a "Pantry Staples" Recipe that is used as a checklist to check if stuff for the hosehold is missing. There should be a extra Button in the Recipe Overview Note Type to print the Pantry Staples checklist via the recipe printer. And we need a modal with all the ingridients of the Pantry Staples recipe that we can select and add them to the current grocery list.
  
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
