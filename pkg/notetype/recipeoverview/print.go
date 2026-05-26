@@ -14,6 +14,7 @@ const groceryPrintWidth = 48
 func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 	b := new(printer.Buf)
 	b.Init()
+	b.FontA()
 	b.BigSize()
 	w := groceryPrintWidth
 
@@ -23,6 +24,8 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 	b.Text(title)
 	b.Ln()
 
+	b.FontB()
+	b.BigSize()
 	b.AlignLeft()
 	b.HLine(w)
 
@@ -56,8 +59,13 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 	}
 
 	for _, group := range groupGroceryItems(gl.Items) {
-		b.Text("  " + formatCategoryHeading(group.Category))
+		b.FontA()
+		b.BigSize()
+		b.Text(formatCategoryHeading(group.Category))
 		b.Ln()
+		b.FontB()
+		b.BigSize()
+		b.Bold(true)
 		for i, it := range group.Items {
 			if i > 0 && i%3 == 0 {
 				b.SpacerLine(w)
@@ -67,7 +75,7 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 			if it.Unit != "" {
 				right += " " + it.Unit
 			}
-			name := "    " + it.Name
+			name := " " + it.Name
 
 			if right != "" && strings.TrimSpace(right) != "" {
 				rightWidth := printer.TextWidth(right)
@@ -81,6 +89,7 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 				b.Text(name + "\n")
 			}
 		}
+		b.Bold(false)
 		b.Ln()
 	}
 
@@ -126,7 +135,7 @@ func FormatGroceryListText(gl GroceryList) string {
 	}
 
 	for _, group := range groupGroceryItems(gl.Items) {
-		sb.WriteString("  " + formatCategoryHeading(group.Category) + "\n")
+		sb.WriteString(formatCategoryHeading(group.Category) + "\n")
 		for i, it := range group.Items {
 			if i > 0 && i%3 == 0 {
 				sb.WriteString(strings.Repeat("-", w))
@@ -136,7 +145,7 @@ func FormatGroceryListText(gl GroceryList) string {
 			if it.Unit != "" {
 				right += " " + it.Unit
 			}
-			name := "    " + it.Name
+			name := " " + it.Name
 
 			if right != "" && strings.TrimSpace(right) != "" {
 				rightWidth := printer.TextWidth(right)

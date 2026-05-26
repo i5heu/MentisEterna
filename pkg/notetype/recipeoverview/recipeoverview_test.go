@@ -1,13 +1,16 @@
 package recipeoverview
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype/plugintest"
 	"github.com/i5heu/MentisEterna/pkg/notetype/recipe"
+	"github.com/i5heu/MentisEterna/pkg/printer"
 )
 
 func TestRecipeOverviewPlugin(t *testing.T) {
@@ -589,5 +592,64 @@ func TestBuildView_IncludesUnvalidIngredientsAcrossRecipes(t *testing.T) {
 	}
 	if issues["Flour"] != "missing_metric" {
 		t.Fatalf("expected Flour to be missing_metric, got %q", issues["Flour"])
+	}
+}
+
+func TestFormatGroceryListTextCategoryIndentation(t *testing.T) {
+	gl := GroceryList{
+		NumPeople: 2,
+		Items: []GroceryItem{
+			{Category: "vegetables", Name: "Carrot", Amount: "2", Unit: "pcs"},
+			{Category: "vegetables", Name: "Zucchini", Amount: "1", Unit: "pcs"},
+		},
+	}
+
+	out := FormatGroceryListText(gl)
+	if !strings.Contains(out, "\nVegetables\n") {
+		t.Fatalf("expected category heading to start at far left, got:\n%s", out)
+	}
+	if !strings.Contains(out, "\n Carrot") {
+		t.Fatalf("expected ingredient row to use a small single-space indent, got:\n%s", out)
+	}
+	if strings.Contains(out, "\n    Carrot") {
+		t.Fatalf("expected ingredient row indent to be reduced, got:\n%s", out)
+	}
+}
+
+func TestFormatGroceryListReceiptBoldItems(t *testing.T) {
+	gl := GroceryList{
+		NumPeople: 2,
+		Items: []GroceryItem{
+			{Category: "vegetables", Name: "Carrot", Amount: "2", Unit: "pcs"},
+		},
+	}
+
+	buf := FormatGroceryListReceipt(gl)
+	out := buf.Bytes()
+	boldOn := []byte{printer.ESC, 'E', 1}
+	boldOff := []byte{printer.ESC, 'E', 0}
+	name := []byte(" Carrot")
+	right := []byte("2 pcs")
+
+	nameIdx := bytes.Index(out, name)
+	rightIdx := bytes.Index(out, right)
+	if nameIdx < 0 || rightIdx < 0 {
+		t.Fatalf("expected grocery item name and amount/unit in receipt, got: %q", string(out))
+	}
+
+	boldOnIdx := bytes.LastIndex(out[:nameIdx], boldOn)
+	boldOffRelIdx := bytes.Index(out[rightIdx+len(right):], boldOff)
+	if boldOnIdx < 0 {
+		t.Fatalf("expected grocery item rows to explicitly enable bold before item content, receipt bytes: %v", out)
+	}
+	if boldOffRelIdx < 0 {
+		t.Fatalf("expected grocery item rows to explicitly disable bold after printing, receipt bytes: %v", out)
+	}
+	boldOffIdx := rightIdx + len(right) + boldOffRelIdx
+	if boldOnIdx > nameIdx || boldOnIdx > rightIdx {
+		t.Fatalf("expected bold to be enabled before item content, receipt bytes: %v", out)
+	}
+	if boldOffIdx < nameIdx || boldOffIdx < rightIdx {
+		t.Fatalf("expected bold to stay enabled through ingredient name and amount/unit, receipt bytes: %v", out)
 	}
 }

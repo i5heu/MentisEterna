@@ -28,6 +28,10 @@ const (
 
 	escposCodeTablePC437   = 0
 	escposCodeTableWPC1252 = 16
+
+	escposFontA = 0
+	escposFontB = 1
+	escposFontC = 2
 )
 
 type escposCodePage struct {
@@ -299,11 +303,13 @@ type Buf struct {
 	b            bytes.Buffer
 	codeTableSet bool
 	codePage     escposCodePage
+	style        byte
 }
 
 // Init resets the printer to its default state.
 func (p *Buf) Init() *Buf {
 	p.codePage = configuredCodePage()
+	p.style = 0
 	p.b.Write([]byte{ESC, '@'})
 	p.b.Write([]byte{ESC, 't', p.codePage.table})
 	p.codeTableSet = true
@@ -325,10 +331,33 @@ func (p *Buf) AlignCenter() *Buf { return p.Align(1) }
 // AlignRight is shorthand for Align(2).
 func (p *Buf) AlignRight() *Buf { return p.Align(2) }
 
+// Font selects the printer's built-in font family.
+// Common values are 0=Font A, 1=Font B, 2=Font C.
+func (p *Buf) Font(n byte) *Buf {
+	p.b.Write([]byte{ESC, 'M', n})
+	return p
+}
+
+// FontA selects the printer's default font family.
+func (p *Buf) FontA() *Buf { return p.Font(escposFontA) }
+
+// FontB selects the printer's denser/smaller font family.
+func (p *Buf) FontB() *Buf { return p.Font(escposFontB) }
+
+// FontC selects the printer's alternate compact font family.
+func (p *Buf) FontC() *Buf { return p.Font(escposFontC) }
+
 // Style sets character formatting via the ESC ! command.
 // Bit flags: 0x08 = bold, 0x10 = double height, 0x20 = double width.
-// Provide 0 to reset all styles.
+// Provide 0 to reset all styles. For compatibility with printers that only
+// honor ESC E for emphasized text, the bold bit is mirrored there as well.
 func (p *Buf) Style(n byte) *Buf {
+	p.style = n
+	if n&0x08 != 0 {
+		p.b.Write([]byte{ESC, 'E', 1})
+	} else {
+		p.b.Write([]byte{ESC, 'E', 0})
+	}
 	p.b.Write([]byte{ESC, '!', n})
 	return p
 }
@@ -336,11 +365,9 @@ func (p *Buf) Style(n byte) *Buf {
 // Bold sets or clears bold text.
 func (p *Buf) Bold(on bool) *Buf {
 	if on {
-		p.b.Write([]byte{ESC, 'E', 1})
-	} else {
-		p.b.Write([]byte{ESC, 'E', 0})
+		return p.Style(p.style | 0x08)
 	}
-	return p
+	return p.Style(p.style &^ 0x08)
 }
 
 // Underline sets or clears underline. n: 0=off, 1=1-dot, 2=2-dot.
@@ -472,6 +499,7 @@ func (p *Buf) Reset() {
 	p.b.Reset()
 	p.codeTableSet = false
 	p.codePage = escposCodePage{}
+	p.style = 0
 }
 
 // TextWidth returns the printable width of s in runes.

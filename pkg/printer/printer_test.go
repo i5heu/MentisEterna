@@ -48,19 +48,53 @@ func TestBufAlign(t *testing.T) {
 func TestBufBold(t *testing.T) {
 	b := new(Buf)
 	b.Bold(true)
-	if len(b.Bytes()) != 3 || b.Bytes()[2] != 1 {
-		t.Errorf("Bold(true) failed")
+	want := []byte{ESC, 'E', 1, ESC, '!', 0x08}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Fatalf("Bold(true) failed, got %v want %v", b.Bytes(), want)
 	}
+
 	b.Reset()
 	b.Bold(false)
+	want = []byte{ESC, 'E', 0, ESC, '!', 0x00}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Fatalf("Bold(false) failed, got %v want %v", b.Bytes(), want)
+	}
+}
+
+func TestBufBoldPreservesExistingStyle(t *testing.T) {
+	b := new(Buf)
+	b.BigSize()
+	b.Bold(false)
+	want := []byte{ESC, 'E', 1, ESC, '!', 0x18, ESC, 'E', 0, ESC, '!', 0x10}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Fatalf("Bold(false) should preserve non-bold style bits, got %v want %v", b.Bytes(), want)
+	}
+}
+
+func TestBufFontSelection(t *testing.T) {
+	b := new(Buf)
+	b.FontA()
+	if got := b.Bytes(); len(got) != 3 || got[0] != ESC || got[1] != 'M' || got[2] != escposFontA {
+		t.Fatalf("FontA failed, got %v", got)
+	}
+	b.Reset()
+	b.FontB()
+	if got := b.Bytes(); len(got) != 3 || got[2] != escposFontB {
+		t.Fatalf("FontB failed, got %v", got)
+	}
+	b.Reset()
+	b.FontC()
+	if got := b.Bytes(); len(got) != 3 || got[2] != escposFontC {
+		t.Fatalf("FontC failed, got %v", got)
+	}
 }
 
 func TestBufDoubleSize(t *testing.T) {
 	b := new(Buf)
 	b.DoubleSize()
-	// ESC ! 0x38 (0x08 | 0x10 | 0x20)
-	if len(b.Bytes()) != 3 || b.Bytes()[2] != 0x38 {
-		t.Errorf("DoubleSize failed, got %v", b.Bytes())
+	want := []byte{ESC, 'E', 1, ESC, '!', 0x38}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Fatalf("DoubleSize failed, got %v want %v", b.Bytes(), want)
 	}
 }
 
