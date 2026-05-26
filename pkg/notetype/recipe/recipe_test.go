@@ -174,6 +174,80 @@ func TestCategorizeIngredientsForNotesWithWorkersRunsInParallel(t *testing.T) {
 	}
 }
 
+func TestCategorizeIngredientsForNotesWithWorkersKeepsManualCategories(t *testing.T) {
+	d := plugintest.DB(t, &RecipePlugin{})
+	defer d.Close()
+
+	noteID := plugintest.CreateNote(t, d, "Manual Categories", &RecipePlugin{})
+	if _, err := d.Exec(`
+		INSERT INTO ct_recipe_ingredients (note_id, name, grocery_category, grocery_category_manual, sort_order)
+		VALUES (?, 'Carrot', 'dairy', 1, 0), (?, 'Milk', '', 0, 1)
+	`, noteID, noteID); err != nil {
+		t.Fatalf("insert ingredients: %v", err)
+	}
+
+	embedder := newCategoryTestEmbedder(0)
+	if err := CategorizeIngredientsForNotesWithWorkers(context.Background(), d.DB, embedder, []int64{noteID}, 2); err != nil {
+		t.Fatalf("CategorizeIngredientsForNotesWithWorkers: %v", err)
+	}
+
+	rows, err := d.Query(`SELECT name, grocery_category, grocery_category_manual FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`, noteID)
+	if err != nil {
+		t.Fatalf("query categories: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]struct {
+		category string
+		manual   int
+	}{}
+	for rows.Next() {
+		var name, category string
+		var manual int
+		if err := rows.Scan(&name, &category, &manual); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[name] = struct {
+			category string
+			manual   int
+		}{category: category, manual: manual}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if got["Carrot"].category != "dairy" || got["Carrot"].manual != 1 {
+		t.Fatalf("manual category should be preserved, got %+v", got["Carrot"])
+	}
+	if got["Milk"].category != "dairy" || got["Milk"].manual != 0 {
+		t.Fatalf("automatic category should still be classified, got %+v", got["Milk"])
+	}
+}
+
+func TestScalePayloadForServingsScalesNumericAmountsAndServings(t *testing.T) {
+	payload := Payload{
+		Ingredients: []IngredientRow{
+			{Name: "Flour", Amount: "200", Unit: "g", NonMetricAmount: "1", NonMetricUnit: "cup"},
+			{Name: "Salt", Amount: "to taste", Unit: "", NonMetricAmount: "", NonMetricUnit: ""},
+		},
+		Servings: "4",
+	}
+
+	scaled := ScalePayloadForServings(payload, "6")
+	if scaled.Servings != "6" {
+		t.Fatalf("scaled servings = %q, want 6", scaled.Servings)
+	}
+	if scaled.Ingredients[0].Amount != "300" {
+		t.Fatalf("scaled metric amount = %q, want 300", scaled.Ingredients[0].Amount)
+	}
+	if scaled.Ingredients[0].NonMetricAmount != "1.5" {
+		t.Fatalf("scaled non-metric amount = %q, want 1.5", scaled.Ingredients[0].NonMetricAmount)
+	}
+	if scaled.Ingredients[1].Amount != "to taste" {
+		t.Fatalf("non-numeric amount should stay unchanged, got %q", scaled.Ingredients[1].Amount)
+	}
+}
+
 func TestRecipeTextPrint(t *testing.T) {
 	var payload Payload
 	if err := json.Unmarshal([]byte(`{"ingredients":[{"name":"Flour","prepare":"sifted","amount":"2","unit":"g"},{"name":"Eggs","amount":"3","unit":"pcs"}],"servings":"4","attention_time":"30m","total_time":"1h","grams_per_serving":"250","kcal_per_serving":"420","rating":8,"freezable":true,"pre_cook_servings":"8"}`), &payload); err != nil {

@@ -159,6 +159,7 @@ func loadIngredientsForCategorization(ctx context.Context, db *sql.DB, noteIDs [
 		SELECT id, name
 		FROM ct_recipe_ingredients
 		WHERE note_id IN (` + strings.Join(placeholders, ",") + `)
+		  AND COALESCE(grocery_category_manual, 0) = 0
 		ORDER BY note_id, sort_order, id
 	`
 	rows, err := db.QueryContext(ctx, query, args...)

@@ -64,6 +64,31 @@
                 {{ printingRecipe ? "Printing..." : "Print Recipe" }}
             </button>
         </div>
+        <div v-if="!editing" class="recipe-scale-row">
+            <label class="recipe-scale-label">
+                <span>Show ingredient amounts for</span>
+                <input
+                    v-model="localDisplayServings"
+                    type="number"
+                    min="0.25"
+                    step="0.25"
+                    class="detail-input recipe-scale-input"
+                    :disabled="!canScaleIngredients"
+                    placeholder="Servings"
+                />
+                <span>servings</span>
+            </label>
+            <button
+                v-if="hasScaledIngredientView"
+                class="btn-ghost btn-sm"
+                @click="resetDisplayedServings"
+            >
+                Reset
+            </button>
+        </div>
+        <p v-if="!editing && !canScaleIngredients" class="recipe-scale-hint">
+            Enter a numeric recipe servings value to enable ingredient scaling.
+        </p>
         <p v-if="dirty && !editing" class="recipe-print-hint">
             Save your changes before printing so the printer uses the latest
             recipe.
@@ -86,6 +111,7 @@
                     <th>Non-Metric Amount</th>
                     <th>Non-Metric Type</th>
                     <th>Metric Validated</th>
+                    <th>Grocery Category</th>
                     <th v-if="editing"></th>
                 </tr>
             </thead>
@@ -114,7 +140,7 @@
                             class="amount-input"
                         />
                     </td>
-                    <td v-else>{{ ing.amount || "-" }}</td>
+                    <td v-else>{{ formatIngredientAmount(ing) }}</td>
 
                     <td v-if="editing">
                         <select v-model="ing.unit" class="unit-select">
@@ -136,7 +162,7 @@
                             class="amount-input"
                         />
                     </td>
-                    <td v-else>{{ ing.non_metric_amount || "-" }}</td>
+                    <td v-else>{{ formatIngredientNonMetricAmount(ing) }}</td>
 
                     <td v-if="editing">
                         <select
@@ -166,6 +192,27 @@
                             </span>
                         </template>
                         <span v-else class="muted-dash">—</span>
+                    </td>
+
+                    <td>
+                        <select
+                            v-if="editing"
+                            :value="ingredientCategorySelection(ing)"
+                            class="unit-select category-select"
+                            @change="setIngredientCategorySelection(ing, $event.target.value)"
+                        >
+                            <option value="__auto__">
+                                {{ autoCategoryOptionLabel(ing) }}
+                            </option>
+                            <option
+                                v-for="category in GROCERY_CATEGORY_OPTIONS"
+                                :key="category"
+                                :value="category"
+                            >
+                                {{ formatGroceryCategoryLabel(category) }}
+                            </option>
+                        </select>
+                        <span v-else>{{ formatIngredientCategory(ing) }}</span>
                     </td>
 
                     <td v-if="editing">
@@ -286,6 +333,20 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { usePluginAction } from "../shared/usePluginAction.js";
+
+const GROCERY_CATEGORY_OPTIONS = [
+    "vegetables",
+    "fruit",
+    "meat",
+    "dairy",
+    "fish",
+    "chilled & deli",
+    "frozen",
+    "spices",
+    "beverages",
+    "household",
+    "other",
+];
 
 const RECIPE_IMPORT_SCHEMA = {
     type: "object",
@@ -487,6 +548,7 @@ const { loading: printingRecipe, execute: execRecipeAction } = usePluginAction(
 
 const localIngredients = ref([]);
 const localServings = ref("");
+const localDisplayServings = ref("");
 const localAttentionTime = ref("");
 const localTotalTime = ref("");
 const localGramsPerServing = ref("");
@@ -514,6 +576,28 @@ const displayImportError = computed(() => {
     return importError.value || props.actionError || "";
 });
 
+const baseServingsNumber = computed(() => parseNumericAmount(localServings.value));
+const displayServingsNumber = computed(() =>
+    parseNumericAmount(localDisplayServings.value),
+);
+const canScaleIngredients = computed(() => baseServingsNumber.value != null);
+const ingredientScaleFactor = computed(() => {
+    if (!canScaleIngredients.value) return 1;
+    const target = displayServingsNumber.value;
+    if (target == null || target <= 0) return 1;
+    return target / baseServingsNumber.value;
+});
+const hasScaledIngredientView = computed(() => {
+    if (!canScaleIngredients.value) return false;
+    const target = displayServingsNumber.value;
+    if (target == null || target <= 0) return false;
+    return Math.abs(target - baseServingsNumber.value) > 1e-9;
+});
+const printDisplayServings = computed(() => {
+    if (!hasScaledIngredientView.value) return "";
+    return formatNumericAmount(displayServingsNumber.value);
+});
+
 let hydrating = false;
 
 function hasText(value) {
@@ -525,8 +609,23 @@ function normalizeString(value) {
     return String(value).trim();
 }
 
+function parseNumericAmount(value) {
+    const trimmed = normalizeString(value);
+    if (!/^\d+(?:[.,]\d+)?$/.test(trimmed)) {
+        return null;
+    }
+    const parsed = Number.parseFloat(trimmed.replace(",", "."));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function formatNumericAmount(value) {
+    if (!Number.isFinite(value) || value <= 0) return "";
+    return String(Number(value.toFixed(6)));
+}
+
 function normalizeIngredient(raw) {
     const normalized = {
+        id: Number.isFinite(Number(raw?.id)) ? Number(raw.id) : 0,
         name: normalizeString(raw?.name),
         prepare: normalizeString(raw?.prepare),
         amount: normalizeString(raw?.amount),
@@ -534,6 +633,8 @@ function normalizeIngredient(raw) {
         non_metric_amount: normalizeString(raw?.non_metric_amount),
         non_metric_unit: normalizeString(raw?.non_metric_unit),
         metric_validated: !!raw?.metric_validated,
+        grocery_category: normalizeGroceryCategory(raw?.grocery_category),
+        grocery_category_manual: !!raw?.grocery_category_manual,
     };
     if (!shouldShowMetricValidatedField(normalized)) {
         normalized.metric_validated = false;
@@ -564,6 +665,38 @@ function buildRecipeCustomData(raw) {
     };
 }
 
+function normalizeGroceryCategory(value) {
+    const normalized = normalizeString(value).toLowerCase();
+    return GROCERY_CATEGORY_OPTIONS.includes(normalized) ? normalized : "";
+}
+
+function formatGroceryCategoryLabel(category) {
+    switch (normalizeGroceryCategory(category) || "other") {
+        case "vegetables":
+            return "Vegetables";
+        case "fruit":
+            return "Fruit";
+        case "meat":
+            return "Meat";
+        case "dairy":
+            return "Dairy";
+        case "fish":
+            return "Fish";
+        case "chilled & deli":
+            return "Chilled & Deli";
+        case "frozen":
+            return "Frozen";
+        case "spices":
+            return "Spices";
+        case "beverages":
+            return "Beverages";
+        case "household":
+            return "Household";
+        default:
+            return "Other";
+    }
+}
+
 function shouldShowMetricValidatedField(ingredient) {
     return (
         hasText(ingredient?.amount) &&
@@ -571,6 +704,36 @@ function shouldShowMetricValidatedField(ingredient) {
         hasText(ingredient?.non_metric_amount) &&
         hasText(ingredient?.non_metric_unit)
     );
+}
+
+function ingredientCategorySelection(ingredient) {
+    return ingredient?.grocery_category_manual
+        ? normalizeGroceryCategory(ingredient?.grocery_category) || "other"
+        : "__auto__";
+}
+
+function autoCategoryOptionLabel(ingredient) {
+    const autoCategory = normalizeGroceryCategory(ingredient?.grocery_category);
+    if (autoCategory) {
+        return `Auto (${formatGroceryCategoryLabel(autoCategory)})`;
+    }
+    return "Auto";
+}
+
+function setIngredientCategorySelection(ingredient, value) {
+    if (value === "__auto__") {
+        ingredient.grocery_category_manual = false;
+        return;
+    }
+    ingredient.grocery_category = normalizeGroceryCategory(value) || "other";
+    ingredient.grocery_category_manual = true;
+}
+
+function formatIngredientCategory(ingredient) {
+    const category = normalizeGroceryCategory(ingredient?.grocery_category);
+    if (!category) return "-";
+    const suffix = ingredient?.grocery_category_manual ? " (manual)" : "";
+    return `${formatGroceryCategoryLabel(category)}${suffix}`;
 }
 
 function hasRecipeCustomData(raw) {
@@ -607,6 +770,10 @@ function setLocalRecipeState(raw, { emitAfter = false } = {}) {
 
     localIngredients.value = data.ingredients;
     localServings.value = data.servings;
+    localDisplayServings.value =
+        parseNumericAmount(data.servings) != null
+            ? formatNumericAmount(parseNumericAmount(data.servings))
+            : "";
     localAttentionTime.value = data.attention_time;
     localTotalTime.value = data.total_time;
     localGramsPerServing.value = data.grams_per_serving;
@@ -664,6 +831,7 @@ function emitCustomData() {
     if (hydrating) return;
     emit("update:customData", {
         ingredients: localIngredients.value.map((ingredient) => ({
+            id: ingredient.id || 0,
             name: ingredient.name,
             prepare: ingredient.prepare,
             amount: ingredient.amount,
@@ -673,6 +841,10 @@ function emitCustomData() {
             metric_validated: shouldShowMetricValidatedField(ingredient)
                 ? !!ingredient.metric_validated
                 : false,
+            grocery_category: normalizeGroceryCategory(
+                ingredient.grocery_category,
+            ),
+            grocery_category_manual: !!ingredient.grocery_category_manual,
         })),
         servings: localServings.value,
         attention_time: localAttentionTime.value,
@@ -735,6 +907,36 @@ function formatRatingStars(rating) {
     return "★".repeat(safeRating) + "☆".repeat(10 - safeRating);
 }
 
+function scaleAmountString(amount, factor) {
+    const trimmed = normalizeString(amount);
+    if (!trimmed) return "";
+    if (!Number.isFinite(factor) || factor <= 0) return trimmed;
+    const numeric = parseNumericAmount(trimmed);
+    if (numeric == null) return trimmed;
+    return formatNumericAmount(numeric * factor);
+}
+
+function formatIngredientAmount(ingredient) {
+    const scaled = scaleAmountString(ingredient?.amount, ingredientScaleFactor.value);
+    return scaled || "-";
+}
+
+function formatIngredientNonMetricAmount(ingredient) {
+    const scaled = scaleAmountString(
+        ingredient?.non_metric_amount,
+        ingredientScaleFactor.value,
+    );
+    return scaled || "-";
+}
+
+function resetDisplayedServings() {
+    if (baseServingsNumber.value == null) {
+        localDisplayServings.value = "";
+        return;
+    }
+    localDisplayServings.value = formatNumericAmount(baseServingsNumber.value);
+}
+
 async function printRecipe() {
     printError.value = "";
     printPreview.value = "";
@@ -742,10 +944,14 @@ async function printRecipe() {
     if (!props.note?.id) return;
 
     try {
+        const params = {};
+        if (printDisplayServings.value) {
+            params.display_servings = printDisplayServings.value;
+        }
         const result = await execRecipeAction(
             props.note.id,
             "print_recipe",
-            {},
+            params,
         );
         if (result?.preview) {
             printPreview.value = result.preview;
@@ -758,6 +964,7 @@ async function printRecipe() {
 
 function addIngredient() {
     localIngredients.value.push({
+        id: 0,
         name: "",
         prepare: "",
         amount: "",
@@ -765,6 +972,8 @@ function addIngredient() {
         non_metric_amount: "",
         non_metric_unit: "",
         metric_validated: false,
+        grocery_category: "",
+        grocery_category_manual: false,
     });
 }
 
@@ -861,6 +1070,33 @@ function removeIngredient(idx) {
     margin-bottom: 0.75rem;
 }
 
+.recipe-scale-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+}
+
+.recipe-scale-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    color: var(--font-color-secondary);
+    font-size: 0.9rem;
+}
+
+.recipe-scale-input {
+    max-width: 7rem;
+}
+
+.recipe-scale-hint {
+    margin: 0 0 0.5rem;
+    color: var(--font-color-secondary);
+    font-size: 0.85rem;
+}
+
 .recipe-print-hint {
     margin: 0 0 0.5rem;
     color: var(--font-color-secondary);
@@ -937,6 +1173,10 @@ function removeIngredient(idx) {
 
 .non-metric-unit-select {
     width: 9rem;
+}
+
+.category-select {
+    width: 12rem;
 }
 
 .muted-dash {
