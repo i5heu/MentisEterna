@@ -2096,8 +2096,8 @@ function viewRecipeFromModal(recipeNoteId) {
 }
 
 .category-group-row td {
-    font-size: 0.78rem;
-    font-weight: 700;
+    font-size: 1.1rem;
+    font-weight: 800;
     color: var(--font-color-secondary);
     text-transform: uppercase;
     letter-spacing: 0.04em;
