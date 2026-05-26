@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
+	"github.com/i5heu/MentisEterna/pkg/notetype/recipe"
 )
 
 const pluginID = "recipe_overview"
@@ -102,9 +103,10 @@ type GroceryList struct {
 }
 
 type GroceryItem struct {
-	Name   string `json:"name"`
-	Amount string `json:"amount"`
-	Unit   string `json:"unit"`
+	Category string `json:"category,omitempty"`
+	Name     string `json:"name"`
+	Amount   string `json:"amount"`
+	Unit     string `json:"unit"`
 }
 
 type UnvalidIngredient struct {
@@ -184,7 +186,7 @@ func (p *RecipeOverviewPlugin) Manifest() notetype.Manifest {
 				ID:              "update_grocery_list",
 				Label:           "Update Grocery List",
 				Description:     "Update grocery list items after manual edits",
-				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"list_id":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"amount":{"type":"string"},"unit":{"type":"string"}},"required":["name"]}}},"required":["list_id","items"]}`),
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"list_id":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"category":{"type":"string"},"name":{"type":"string"},"amount":{"type":"string"},"unit":{"type":"string"}},"required":["name"]}}},"required":["list_id","items"]}`),
 				Dangerous:       false,
 				RefreshStrategy: "reload_view",
 				SuccessMessage:  "Grocery list updated",
@@ -338,6 +340,10 @@ func (p *RecipeOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID
 			if err := json.Unmarshal([]byte(itemsJSON), &gl.Items); err != nil {
 				return nil, fmt.Errorf("recipe_overview: unmarshal grocery items: %w", err)
 			}
+			for i := range gl.Items {
+				gl.Items[i].Category = recipe.NormalizeIngredientCategory(gl.Items[i].Category)
+			}
+			sortGroceryItems(gl.Items)
 		}
 
 		// Load associated recipe IDs and titles for this grocery list.

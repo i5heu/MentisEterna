@@ -81,6 +81,8 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Printed Recipes need to use non-metric if metric is not validated
 - [x] If cursur in editor or input, ctrl+s should save the note even in edit mode, other hotkeys should be disabled.
 - [ ] Ingredient categories need to be shown in Grocery List and printed version
+- [ ] The Shortcut helper modal is long and needs to be able to scroll.
+- [ ] Tables can become quite wide, we need to add a horizontal scroll to the table in the recipe note type. And we need a light zebra effect to make it easier to read.
 
 ## TODO Future
 - [x] OCR for images and pdfs

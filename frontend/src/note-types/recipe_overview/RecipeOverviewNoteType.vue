@@ -248,41 +248,51 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <tr
-                        v-for="(item, idx) in editableLatestListItems"
-                        :key="`${latestList.id}-${idx}`"
+                    <template
+                        v-for="group in groupedEditableLatestListItems"
+                        :key="`current-${group.category}`"
                     >
-                        <td>
-                            <input
-                                v-model="item.name"
-                                class="grocery-input"
-                                placeholder="Item name"
-                            />
-                        </td>
-                        <td>
-                            <input
-                                v-model="item.amount"
-                                class="grocery-input"
-                                placeholder="Amount"
-                            />
-                        </td>
-                        <td>
-                            <input
-                                v-model="item.unit"
-                                class="grocery-input"
-                                placeholder="Unit"
-                            />
-                        </td>
-                        <td class="item-row-actions">
-                            <button
-                                class="btn-ghost btn-sm btn-delete-row"
-                                :disabled="savingCurrentList"
-                                @click="removeCurrentListItem(idx)"
-                            >
-                                ✕
-                            </button>
-                        </td>
-                    </tr>
+                        <tr class="category-group-row">
+                            <td colspan="4">
+                                {{ formatGroceryCategoryLabel(group.category) }}
+                            </td>
+                        </tr>
+                        <tr
+                            v-for="entry in group.items"
+                            :key="`${latestList.id}-${entry.index}`"
+                        >
+                            <td>
+                                <input
+                                    v-model="entry.item.name"
+                                    class="grocery-input"
+                                    placeholder="Item name"
+                                />
+                            </td>
+                            <td>
+                                <input
+                                    v-model="entry.item.amount"
+                                    class="grocery-input"
+                                    placeholder="Amount"
+                                />
+                            </td>
+                            <td>
+                                <input
+                                    v-model="entry.item.unit"
+                                    class="grocery-input"
+                                    placeholder="Unit"
+                                />
+                            </td>
+                            <td class="item-row-actions">
+                                <button
+                                    class="btn-ghost btn-sm btn-delete-row"
+                                    :disabled="savingCurrentList"
+                                    @click="removeCurrentListItem(entry.index)"
+                                >
+                                    ✕
+                                </button>
+                            </td>
+                        </tr>
+                    </template>
                     <tr v-if="editableLatestListItems.length === 0">
                         <td colspan="4" class="empty-table-cell">
                             No items yet. Add items manually or from Pantry
@@ -343,11 +353,28 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="(item, idx) in gl.items" :key="idx">
-                                <td>{{ item.name }}</td>
-                                <td>{{ item.amount }}</td>
-                                <td>{{ item.unit }}</td>
-                            </tr>
+                            <template
+                                v-for="group in groupPastListItems(gl.items)"
+                                :key="`${gl.id}-${group.category}`"
+                            >
+                                <tr class="category-group-row">
+                                    <td colspan="3">
+                                        {{
+                                            formatGroceryCategoryLabel(
+                                                group.category,
+                                            )
+                                        }}
+                                    </td>
+                                </tr>
+                                <tr
+                                    v-for="(item, idx) in group.items"
+                                    :key="`${gl.id}-${group.category}-${idx}`"
+                                >
+                                    <td>{{ item.name }}</td>
+                                    <td>{{ item.amount }}</td>
+                                    <td>{{ item.unit }}</td>
+                                </tr>
+                            </template>
                         </tbody>
                     </table>
                 </div>
@@ -629,6 +656,20 @@ const selectedPantryIngredientIds = ref([]);
 const actionErrorMessage = ref("");
 const actionPreviewText = ref("");
 
+const GROCERY_CATEGORY_ORDER = [
+    "vegetables",
+    "fruit",
+    "meat",
+    "dairy",
+    "fish",
+    "chilled & deli",
+    "frozen",
+    "spices",
+    "beverages",
+    "household",
+    "other",
+];
+
 const allRecipes = computed(() => {
     const recipes = overviewData.value?.recipes;
     return Array.isArray(recipes) ? recipes : [];
@@ -674,6 +715,10 @@ const currentListDirty = computed(() => {
     );
 });
 
+const groupedEditableLatestListItems = computed(() =>
+    groupEditableGroceryItems(editableLatestListItems.value),
+);
+
 let hydrating = false;
 
 function clearActionFeedback() {
@@ -707,8 +752,92 @@ function createEmptyRecipePayload() {
     };
 }
 
+function normalizeGroceryCategory(value) {
+    const normalized = normalizeString(value).toLowerCase();
+    return GROCERY_CATEGORY_ORDER.includes(normalized) ? normalized : "other";
+}
+
+function groceryCategorySortIndex(category) {
+    return GROCERY_CATEGORY_ORDER.indexOf(normalizeGroceryCategory(category));
+}
+
+function formatGroceryCategoryLabel(category) {
+    switch (normalizeGroceryCategory(category)) {
+        case "vegetables":
+            return "Vegetables";
+        case "fruit":
+            return "Fruit";
+        case "meat":
+            return "Meat";
+        case "dairy":
+            return "Dairy";
+        case "fish":
+            return "Fish";
+        case "chilled & deli":
+            return "Chilled & Deli";
+        case "frozen":
+            return "Frozen";
+        case "spices":
+            return "Spices";
+        case "beverages":
+            return "Beverages";
+        case "household":
+            return "Household";
+        default:
+            return "Other";
+    }
+}
+
+function compareGroceryItems(left, right) {
+    const categoryDiff =
+        groceryCategorySortIndex(left?.category) -
+        groceryCategorySortIndex(right?.category);
+    if (categoryDiff !== 0) return categoryDiff;
+
+    const leftName = normalizeString(left?.name).toLowerCase();
+    const rightName = normalizeString(right?.name).toLowerCase();
+    if (leftName !== rightName) return leftName.localeCompare(rightName);
+
+    const leftUnit = normalizeString(left?.unit).toLowerCase();
+    const rightUnit = normalizeString(right?.unit).toLowerCase();
+    if (leftUnit !== rightUnit) return leftUnit.localeCompare(rightUnit);
+
+    return normalizeString(left?.amount)
+        .toLowerCase()
+        .localeCompare(normalizeString(right?.amount).toLowerCase());
+}
+
+function groupEditableGroceryItems(items) {
+    const groups = [];
+    let currentGroup = null;
+    for (const [index, item] of (Array.isArray(items) ? items : []).entries()) {
+        const category = normalizeGroceryCategory(item?.category);
+        if (!currentGroup || currentGroup.category !== category) {
+            currentGroup = { category, items: [] };
+            groups.push(currentGroup);
+        }
+        currentGroup.items.push({ item, index });
+    }
+    return groups;
+}
+
+function groupPastListItems(items) {
+    const grouped = [];
+    let currentGroup = null;
+    for (const item of cloneGroceryItems(items).sort(compareGroceryItems)) {
+        const category = normalizeGroceryCategory(item?.category);
+        if (!currentGroup || currentGroup.category !== category) {
+            currentGroup = { category, items: [] };
+            grouped.push(currentGroup);
+        }
+        currentGroup.items.push(item);
+    }
+    return grouped;
+}
+
 function createEmptyGroceryItem() {
     return {
+        category: "other",
         name: "",
         amount: "",
         unit: "",
@@ -718,6 +847,7 @@ function createEmptyGroceryItem() {
 function cloneGroceryItems(items) {
     return Array.isArray(items)
         ? items.map((item) => ({
+              category: normalizeGroceryCategory(item?.category),
               name: item?.name || "",
               amount: item?.amount || "",
               unit: item?.unit || "",
@@ -729,6 +859,7 @@ function serializeGroceryItems(items) {
     return JSON.stringify(
         (Array.isArray(items) ? items : [])
             .map((item) => ({
+                category: normalizeGroceryCategory(item?.category),
                 name: normalizeString(item?.name),
                 amount: normalizeString(item?.amount),
                 unit: normalizeString(item?.unit),
@@ -888,6 +1019,9 @@ function effectivePantryGroceryItem(item) {
     const nonMetricAmount = normalizeString(item?.non_metric_amount);
     const nonMetricUnit = normalizeString(item?.non_metric_unit);
     const metricValidated = !!item?.metric_validated;
+    const category = normalizeGroceryCategory(
+        item?.grocery_category || item?.category,
+    );
 
     if (
         hasMetricIngredientValue(item) &&
@@ -898,6 +1032,7 @@ function effectivePantryGroceryItem(item) {
             metricUnit,
         );
         return {
+            category,
             name,
             amount: normalizedMetric.amount,
             unit: normalizedMetric.unit,
@@ -906,6 +1041,7 @@ function effectivePantryGroceryItem(item) {
 
     if (hasNonMetricIngredientValue(item)) {
         return {
+            category,
             name,
             amount: nonMetricAmount,
             unit: nonMetricUnit,
@@ -913,6 +1049,7 @@ function effectivePantryGroceryItem(item) {
     }
 
     return {
+        category,
         name,
         amount: metricAmount,
         unit: metricUnit,
@@ -939,6 +1076,7 @@ function mergeGroceryItems(baseItems, additions) {
 
     for (const rawAddition of additions) {
         const addition = {
+            category: normalizeGroceryCategory(rawAddition?.category),
             name: normalizeString(rawAddition?.name),
             amount: normalizeString(rawAddition?.amount),
             unit: normalizeString(rawAddition?.unit),
@@ -950,6 +1088,10 @@ function mergeGroceryItems(baseItems, additions) {
             addition.unit,
         );
         const existingIndex = nextItems.findIndex((item) => {
+            const sameCategory =
+                normalizeGroceryCategory(item.category) === addition.category;
+            if (!sameCategory) return false;
+
             const sameName =
                 normalizeString(item.name).toLowerCase() ===
                 addition.name.toLowerCase();
@@ -990,12 +1132,14 @@ function mergeGroceryItems(baseItems, additions) {
                 );
                 nextItems[existingIndex] = {
                     ...existingItem,
+                    category: addition.category,
                     amount: normalizedMetric.amount,
                     unit: normalizedMetric.unit,
                 };
             } else {
                 nextItems[existingIndex] = {
                     ...existingItem,
+                    category: addition.category,
                     amount: mergeAmountStrings(
                         existingItem.amount,
                         addition.amount,
@@ -1009,13 +1153,14 @@ function mergeGroceryItems(baseItems, additions) {
         nextItems.push(addition);
     }
 
-    return nextItems;
+    return nextItems.sort(compareGroceryItems);
 }
 
 function sanitizeGroceryItemsForSave(items) {
     const sanitized = [];
     for (const item of Array.isArray(items) ? items : []) {
         const normalized = {
+            category: normalizeGroceryCategory(item?.category),
             name: normalizeString(item?.name),
             amount: normalizeString(item?.amount),
             unit: normalizeString(item?.unit),
@@ -1026,7 +1171,7 @@ function sanitizeGroceryItemsForSave(items) {
         }
         sanitized.push(normalized);
     }
-    return sanitized;
+    return sanitized.sort(compareGroceryItems);
 }
 
 function hydrateCurrentListDraft() {
@@ -1948,6 +2093,15 @@ function viewRecipeFromModal(recipeNoteId) {
     color: var(--font-color-secondary);
     text-transform: uppercase;
     letter-spacing: 0.03em;
+}
+
+.category-group-row td {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--font-color-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: color-mix(in srgb, var(--raised-bg) 70%, var(--html-bg) 30%);
 }
 
 .config-hint {

@@ -55,29 +55,33 @@ func FormatGroceryListReceipt(gl GroceryList) *printer.Buf {
 		b.Text("  (none)\n")
 	}
 
-	for i, it := range gl.Items {
-		// Guide line every 3 rows (after the 3rd, 6th, 9th, …).
-		if i > 0 && i%3 == 0 {
-			b.SpacerLine(w)
-		}
-
-		right := it.Amount
-		if it.Unit != "" {
-			right += " " + it.Unit
-		}
-		name := "  " + it.Name
-
-		if right != "" && strings.TrimSpace(right) != "" {
-			rightWidth := printer.TextWidth(right)
-			maxName := w - rightWidth - 1
-			if printer.TextWidth(name) > maxName {
-				name = printer.TruncateWithEllipsis(name, maxName)
+	for _, group := range groupGroceryItems(gl.Items) {
+		b.Text("  " + formatCategoryHeading(group.Category))
+		b.Ln()
+		for i, it := range group.Items {
+			if i > 0 && i%3 == 0 {
+				b.SpacerLine(w)
 			}
-			line := printer.PadRight(name, w-rightWidth)
-			b.Text(line + right + "\n")
-		} else {
-			b.Text(name + "\n")
+
+			right := it.Amount
+			if it.Unit != "" {
+				right += " " + it.Unit
+			}
+			name := "    " + it.Name
+
+			if right != "" && strings.TrimSpace(right) != "" {
+				rightWidth := printer.TextWidth(right)
+				maxName := w - rightWidth - 1
+				if printer.TextWidth(name) > maxName {
+					name = printer.TruncateWithEllipsis(name, maxName)
+				}
+				line := printer.PadRight(name, w-rightWidth)
+				b.Text(line + right + "\n")
+			} else {
+				b.Text(name + "\n")
+			}
 		}
+		b.Ln()
 	}
 
 	b.HLine(w)
@@ -121,32 +125,63 @@ func FormatGroceryListText(gl GroceryList) string {
 		sb.WriteString("  (none)\n")
 	}
 
-	for i, it := range gl.Items {
-		if i > 0 && i%3 == 0 {
-			sb.WriteString(strings.Repeat("-", w))
-			sb.WriteByte('\n')
-		}
-		right := it.Amount
-		if it.Unit != "" {
-			right += " " + it.Unit
-		}
-		name := "  " + it.Name
-
-		if right != "" && strings.TrimSpace(right) != "" {
-			rightWidth := printer.TextWidth(right)
-			maxName := w - rightWidth - 1
-			if printer.TextWidth(name) > maxName {
-				name = printer.TruncateWithEllipsis(name, maxName)
+	for _, group := range groupGroceryItems(gl.Items) {
+		sb.WriteString("  " + formatCategoryHeading(group.Category) + "\n")
+		for i, it := range group.Items {
+			if i > 0 && i%3 == 0 {
+				sb.WriteString(strings.Repeat("-", w))
+				sb.WriteByte('\n')
 			}
-			line := printer.PadRight(name, w-rightWidth)
-			sb.WriteString(line + right + "\n")
-		} else {
-			sb.WriteString(name + "\n")
+			right := it.Amount
+			if it.Unit != "" {
+				right += " " + it.Unit
+			}
+			name := "    " + it.Name
+
+			if right != "" && strings.TrimSpace(right) != "" {
+				rightWidth := printer.TextWidth(right)
+				maxName := w - rightWidth - 1
+				if printer.TextWidth(name) > maxName {
+					name = printer.TruncateWithEllipsis(name, maxName)
+				}
+				line := printer.PadRight(name, w-rightWidth)
+				sb.WriteString(line + right + "\n")
+			} else {
+				sb.WriteString(name + "\n")
+			}
 		}
+		sb.WriteByte('\n')
 	}
 
 	sb.WriteString(strings.Repeat("-", w))
 	sb.WriteByte('\n')
 
 	return sb.String()
+}
+
+func formatCategoryHeading(category string) string {
+	switch recipe.NormalizeIngredientCategory(category) {
+	case "vegetables":
+		return "Vegetables"
+	case "fruit":
+		return "Fruit"
+	case "meat":
+		return "Meat"
+	case "dairy":
+		return "Dairy"
+	case "fish":
+		return "Fish"
+	case "chilled & deli":
+		return "Chilled & Deli"
+	case "frozen":
+		return "Frozen"
+	case "spices":
+		return "Spices"
+	case "beverages":
+		return "Beverages"
+	case "household":
+		return "Household"
+	default:
+		return "Other"
+	}
 }
