@@ -264,6 +264,10 @@ func (p *usbDevFSPrinter) Close() error {
 //
 // Example: FindUSBByID(0x08A6, 0x003D) — Epson TM-T88III.
 func FindUSBByID(vendorID, productID uint16) (Printer, error) {
+	return findUSBByID(vendorID, productID)
+}
+
+func findUSBByID(vendorID, productID uint16) (Printer, error) {
 	log.Printf("printer: searching for USB device %04x:%04x", vendorID, productID)
 	devs, err := findUSBDevices(vendorID, productID)
 	if err != nil {
@@ -288,7 +292,7 @@ func FindPrinter() (Printer, error) {
 	// Strategy 1: explicit device path from env var.
 	if dev := os.Getenv("THERMAL_PRINTER_DEVICE"); dev != "" {
 		log.Printf("printer: trying THERMAL_PRINTER_DEVICE=%s", dev)
-		if pr, err := NewFilePrinter(dev); err == nil {
+		if pr, err := newFilePrinter(dev); err == nil {
 			log.Printf("printer: connected via THERMAL_PRINTER_DEVICE=%s", dev)
 			return pr, nil
 		} else {
@@ -298,7 +302,7 @@ func FindPrinter() (Printer, error) {
 
 	// Strategy 2: usblp character device auto-detect.
 	log.Printf("printer: trying /dev/usb/lp* auto-detect")
-	if lp, err := FindUSBLP(); err == nil {
+	if lp, err := findUSBLPStrategy(); err == nil {
 		log.Printf("printer: connected via usblp device node")
 		return lp, nil
 	} else {
@@ -308,7 +312,7 @@ func FindPrinter() (Printer, error) {
 	// Strategy 3: raw USB by THERMAL_PRINTER_USB_ID (format: "vid:pid").
 	if vid, pid, ok := PrinterUSBID(); ok {
 		log.Printf("printer: trying raw USB %04x:%04x from THERMAL_PRINTER_USB_ID", vid, pid)
-		if pr, err := FindUSBByID(vid, pid); err == nil {
+		if pr, err := findUSBByIDStrategy(vid, pid); err == nil {
 			return pr, nil
 		} else {
 			log.Printf("printer: raw USB %04x:%04x failed: %v", vid, pid, err)

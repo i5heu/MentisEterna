@@ -48,14 +48,14 @@ func TestBufAlign(t *testing.T) {
 func TestBufBold(t *testing.T) {
 	b := new(Buf)
 	b.Bold(true)
-	want := []byte{ESC, 'E', 1, ESC, '!', 0x08}
+	want := []byte{ESC, '!', 0x08, ESC, 'E', 1, ESC, 'G', 1}
 	if !bytes.Equal(b.Bytes(), want) {
 		t.Fatalf("Bold(true) failed, got %v want %v", b.Bytes(), want)
 	}
 
 	b.Reset()
 	b.Bold(false)
-	want = []byte{ESC, 'E', 0, ESC, '!', 0x00}
+	want = []byte{ESC, '!', 0x00, ESC, 'E', 0, ESC, 'G', 0}
 	if !bytes.Equal(b.Bytes(), want) {
 		t.Fatalf("Bold(false) failed, got %v want %v", b.Bytes(), want)
 	}
@@ -65,7 +65,7 @@ func TestBufBoldPreservesExistingStyle(t *testing.T) {
 	b := new(Buf)
 	b.BigSize()
 	b.Bold(false)
-	want := []byte{ESC, 'E', 1, ESC, '!', 0x18, ESC, 'E', 0, ESC, '!', 0x10}
+	want := []byte{ESC, '!', 0x18, ESC, 'E', 1, ESC, 'G', 1, ESC, '!', 0x10, ESC, 'E', 0, ESC, 'G', 0}
 	if !bytes.Equal(b.Bytes(), want) {
 		t.Fatalf("Bold(false) should preserve non-bold style bits, got %v want %v", b.Bytes(), want)
 	}
@@ -92,7 +92,7 @@ func TestBufFontSelection(t *testing.T) {
 func TestBufDoubleSize(t *testing.T) {
 	b := new(Buf)
 	b.DoubleSize()
-	want := []byte{ESC, 'E', 1, ESC, '!', 0x38}
+	want := []byte{ESC, '!', 0x38, ESC, 'E', 1, ESC, 'G', 1}
 	if !bytes.Equal(b.Bytes(), want) {
 		t.Fatalf("DoubleSize failed, got %v want %v", b.Bytes(), want)
 	}
@@ -360,46 +360,132 @@ func TestBufReset(t *testing.T) {
 }
 
 func TestFindUSBLP_NoDevice(t *testing.T) {
-	// This should fail gracefully on a system without a USB printer.
+	origStatPath := statPath
+	origNewFilePrinter := newFilePrinter
+	t.Cleanup(func() {
+		statPath = origStatPath
+		newFilePrinter = origNewFilePrinter
+	})
+
+	statPath = func(path string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	newFilePrinter = func(devicePath string) (Printer, error) {
+		t.Fatalf("newFilePrinter should not be called when no device exists")
+		return nil, nil
+	}
+
 	_, err := FindUSBLP()
 	if err == nil {
-		t.Log("USB printer found (unexpected in CI, but OK)")
-	} else {
-		t.Logf("FindUSBLP returned expected error: %v", err)
+		t.Fatal("FindUSBLP should return an error when no mocked device exists")
 	}
 }
 
-func TestFindUSBByID(t *testing.T) {
-	if os.Getenv("PRINT_TEST") != "1" {
-		t.Skip("skipping USB discovery test (set PRINT_TEST=1 to run)")
+func TestFindUSBLP_FindsFirstAvailableDevice(t *testing.T) {
+	origStatPath := statPath
+	origNewFilePrinter := newFilePrinter
+	t.Cleanup(func() {
+		statPath = origStatPath
+		newFilePrinter = origNewFilePrinter
+	})
+
+	var openedPath string
+	wantPrinter := &mockPrinter{}
+	statPath = func(path string) (os.FileInfo, error) {
+		if path == "/dev/usb/lp1" {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
 	}
-	// Try the Epson TM-T88III (from the Python demo).
-	// If the device is plugged in, this should find it.
-	// If not, it should return a clean error (not panic).
-	pr, err := FindUSBByID(0x08A6, 0x003D)
+	newFilePrinter = func(devicePath string) (Printer, error) {
+		openedPath = devicePath
+		return wantPrinter, nil
+	}
+
+	got, err := FindUSBLP()
 	if err != nil {
-		t.Logf("FindUSBByID(08a6:003d) returned error (printer not connected?): %v", err)
-		return
+		t.Fatalf("FindUSBLP returned error: %v", err)
 	}
-	t.Logf("Found printer via raw USB: %T", pr)
-	// Don't actually write — just close it to release the interface.
-	if err := pr.Close(); err != nil {
-		t.Errorf("close: %v", err)
+	if got != wantPrinter {
+		t.Fatalf("FindUSBLP returned %T, want mocked printer", got)
+	}
+	if openedPath != "/dev/usb/lp1" {
+		t.Fatalf("FindUSBLP opened %q, want %q", openedPath, "/dev/usb/lp1")
 	}
 }
 
-func TestFindPrinter(t *testing.T) {
-	if os.Getenv("PRINT_TEST") != "1" {
-		t.Skip("skipping printer discovery test (set PRINT_TEST=1 to run)")
+func TestFindPrinterPrefersExplicitDevice(t *testing.T) {
+	origNewFilePrinter := newFilePrinter
+	origFindUSBLPStrategy := findUSBLPStrategy
+	origFindUSBByIDStrategy := findUSBByIDStrategy
+	t.Cleanup(func() {
+		newFilePrinter = origNewFilePrinter
+		findUSBLPStrategy = origFindUSBLPStrategy
+		findUSBByIDStrategy = origFindUSBByIDStrategy
+	})
+
+	t.Setenv("THERMAL_PRINTER_DEVICE", "/tmp/mock-printer")
+	t.Setenv("THERMAL_PRINTER_USB_ID", "08a6:003d")
+
+	wantPrinter := &mockPrinter{}
+	newFilePrinter = func(devicePath string) (Printer, error) {
+		if devicePath != "/tmp/mock-printer" {
+			t.Fatalf("newFilePrinter called with %q", devicePath)
+		}
+		return wantPrinter, nil
 	}
-	pr, err := FindPrinter()
+	findUSBLPStrategy = func() (Printer, error) {
+		t.Fatal("FindPrinter should not fall through to usblp discovery when explicit device is configured")
+		return nil, nil
+	}
+	findUSBByIDStrategy = func(vendorID, productID uint16) (Printer, error) {
+		t.Fatal("FindPrinter should not fall through to raw USB discovery when explicit device is configured")
+		return nil, nil
+	}
+
+	got, err := FindPrinter()
 	if err != nil {
-		t.Logf("FindPrinter returned error: %v", err)
-		return
+		t.Fatalf("FindPrinter returned error: %v", err)
 	}
-	t.Logf("FindPrinter found: %T", pr)
-	if err := pr.Close(); err != nil {
-		t.Errorf("close: %v", err)
+	if got != wantPrinter {
+		t.Fatalf("FindPrinter returned %T, want mocked printer", got)
+	}
+}
+
+func TestFindPrinterFallsBackToUSBID(t *testing.T) {
+	origNewFilePrinter := newFilePrinter
+	origFindUSBLPStrategy := findUSBLPStrategy
+	origFindUSBByIDStrategy := findUSBByIDStrategy
+	t.Cleanup(func() {
+		newFilePrinter = origNewFilePrinter
+		findUSBLPStrategy = origFindUSBLPStrategy
+		findUSBByIDStrategy = origFindUSBByIDStrategy
+	})
+
+	t.Setenv("THERMAL_PRINTER_DEVICE", "")
+	t.Setenv("THERMAL_PRINTER_USB_ID", "08a6:003d")
+
+	wantPrinter := &mockPrinter{}
+	newFilePrinter = func(devicePath string) (Printer, error) {
+		t.Fatalf("newFilePrinter should not be called without THERMAL_PRINTER_DEVICE")
+		return nil, nil
+	}
+	findUSBLPStrategy = func() (Printer, error) {
+		return nil, errors.New("no usblp device")
+	}
+	findUSBByIDStrategy = func(vendorID, productID uint16) (Printer, error) {
+		if vendorID != 0x08A6 || productID != 0x003D {
+			t.Fatalf("FindPrinter passed %04x:%04x, want 08a6:003d", vendorID, productID)
+		}
+		return wantPrinter, nil
+	}
+
+	got, err := FindPrinter()
+	if err != nil {
+		t.Fatalf("FindPrinter returned error: %v", err)
+	}
+	if got != wantPrinter {
+		t.Fatalf("FindPrinter returned %T, want mocked printer", got)
 	}
 }
 
