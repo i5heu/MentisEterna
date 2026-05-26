@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/i5heu/MentisEterna/pkg/notetype/recipe"
 	"github.com/i5heu/MentisEterna/pkg/printer"
 )
 
@@ -117,7 +118,11 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT ri.note_id, ri.name, ri.amount, ri.unit, COALESCE(ri.non_metric_amount, ''), COALESCE(ri.non_metric_unit, ''), COALESCE(ri.metric_validated, 0)
+		SELECT ri.note_id, ri.name, ri.amount, ri.unit,
+			COALESCE(ri.non_metric_amount, ''),
+			COALESCE(ri.non_metric_unit, ''),
+			COALESCE(ri.metric_validated, 0),
+			COALESCE(ri.grocery_category, '')
 		FROM ct_recipe_ingredients ri
 		JOIN notes n ON n.id = ri.note_id
 		WHERE n.type = 'recipe' AND n.id IN (%s)
@@ -130,19 +135,14 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 	}
 	defer rows.Close()
 
-	// Aggregate: group by name+unit, scaling each ingredient by
+	// Aggregate: group by category+name+unit, scaling each ingredient by
 	// (num_people / recipe_servings) before merging.
-	type item struct {
-		Name   string `json:"name"`
-		Amount string `json:"amount"`
-		Unit   string `json:"unit"`
-	}
-	aggregated := map[string]item{}
+	aggregated := map[string]GroceryItem{}
 	for rows.Next() {
 		var rid int64
-		var name, amount, unit, nonMetricAmount, nonMetricUnit string
+		var name, amount, unit, nonMetricAmount, nonMetricUnit, category string
 		var metricValidatedInt int
-		if err := rows.Scan(&rid, &name, &amount, &unit, &nonMetricAmount, &nonMetricUnit, &metricValidatedInt); err != nil {
+		if err := rows.Scan(&rid, &name, &amount, &unit, &nonMetricAmount, &nonMetricUnit, &metricValidatedInt, &category); err != nil {
 			return nil, fmt.Errorf("scan ingredient: %w", err)
 		}
 
@@ -156,29 +156,31 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 		}
 
 		amount, unit = effectiveGroceryListAmountUnit(amount, unit, nonMetricAmount, nonMetricUnit, metricValidatedInt != 0, factor)
+		category = recipe.NormalizeIngredientCategory(category)
+		name = strings.TrimSpace(name)
+		unit = strings.TrimSpace(unit)
 
-		key := name + "|" + unit
+		key := strings.ToLower(category) + "|" + strings.ToLower(name) + "|" + strings.ToLower(unit)
 		if existing, ok := aggregated[key]; ok {
 			existing.Amount = mergeAmounts(existing.Amount, amount)
 			aggregated[key] = existing
 		} else {
-			aggregated[key] = item{Name: name, Amount: amount, Unit: unit}
+			aggregated[key] = GroceryItem{Category: category, Name: name, Amount: amount, Unit: unit}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	scaled := make([]item, 0, len(aggregated))
+	groceryItems := make([]GroceryItem, 0, len(aggregated))
 	for _, it := range aggregated {
 		it.Amount, it.Unit = normalizeMetricAmount(it.Amount, it.Unit)
-		scaled = append(scaled, it)
+		it.Category = recipe.NormalizeIngredientCategory(it.Category)
+		groceryItems = append(groceryItems, it)
 	}
-	sort.Slice(scaled, func(i, j int) bool {
-		return scaled[i].Name < scaled[j].Name
-	})
+	sortGroceryItems(groceryItems)
 
-	itemsJSON, err := json.Marshal(scaled)
+	itemsJSON, err := json.Marshal(groceryItems)
 	if err != nil {
 		return nil, fmt.Errorf("marshal items: %w", err)
 	}
@@ -218,12 +220,6 @@ func generateGroceryList(db *sql.DB, noteID int64, params json.RawMessage) (any,
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
-	// Convert to GroceryItem slice.
-	groceryItems := make([]GroceryItem, len(scaled))
-	for i, it := range scaled {
-		groceryItems[i] = GroceryItem{Name: it.Name, Amount: it.Amount, Unit: it.Unit}
-	}
-
 	// Return the full grocery list object so the frontend can display it.
 	return map[string]any{
 		"grocery_list": GroceryList{
@@ -247,6 +243,67 @@ type updateGroceryListParams struct {
 	Items  []GroceryItem `json:"items"`
 }
 
+type groceryItemGroup struct {
+	Category string
+	Items    []GroceryItem
+}
+
+func sortGroceryItems(items []GroceryItem) {
+	sort.Slice(items, func(i, j int) bool {
+		leftCategory := recipe.NormalizeIngredientCategory(items[i].Category)
+		rightCategory := recipe.NormalizeIngredientCategory(items[j].Category)
+		leftIdx := recipe.IngredientCategorySortIndex(leftCategory)
+		rightIdx := recipe.IngredientCategorySortIndex(rightCategory)
+		if leftIdx != rightIdx {
+			return leftIdx < rightIdx
+		}
+
+		leftName := strings.ToLower(strings.TrimSpace(items[i].Name))
+		rightName := strings.ToLower(strings.TrimSpace(items[j].Name))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+
+		leftUnit := strings.ToLower(strings.TrimSpace(items[i].Unit))
+		rightUnit := strings.ToLower(strings.TrimSpace(items[j].Unit))
+		if leftUnit != rightUnit {
+			return leftUnit < rightUnit
+		}
+
+		return strings.ToLower(strings.TrimSpace(items[i].Amount)) < strings.ToLower(strings.TrimSpace(items[j].Amount))
+	})
+}
+
+func groupGroceryItems(items []GroceryItem) []groceryItemGroup {
+	prepared := make([]GroceryItem, len(items))
+	copy(prepared, items)
+	prepareLoadedGroceryItems(prepared)
+
+	groups := make([]groceryItemGroup, 0)
+	currentCategory := ""
+	for _, item := range prepared {
+		category := recipe.NormalizeIngredientCategory(item.Category)
+		item.Category = category
+		if len(groups) == 0 || category != currentCategory {
+			groups = append(groups, groceryItemGroup{Category: category, Items: []GroceryItem{item}})
+			currentCategory = category
+			continue
+		}
+		groups[len(groups)-1].Items = append(groups[len(groups)-1].Items, item)
+	}
+	return groups
+}
+
+func prepareLoadedGroceryItems(items []GroceryItem) {
+	for i := range items {
+		items[i].Category = recipe.NormalizeIngredientCategory(items[i].Category)
+		items[i].Name = strings.TrimSpace(items[i].Name)
+		items[i].Amount = strings.TrimSpace(items[i].Amount)
+		items[i].Unit = strings.TrimSpace(items[i].Unit)
+	}
+	sortGroceryItems(items)
+}
+
 func normalizeGroceryItems(items []GroceryItem) ([]GroceryItem, error) {
 	normalized := make([]GroceryItem, 0, len(items))
 	for i, item := range items {
@@ -260,11 +317,13 @@ func normalizeGroceryItems(items []GroceryItem) ([]GroceryItem, error) {
 			return nil, fmt.Errorf("item %d: name is required", i+1)
 		}
 		normalized = append(normalized, GroceryItem{
-			Name:   name,
-			Amount: amount,
-			Unit:   unit,
+			Category: recipe.NormalizeIngredientCategory(item.Category),
+			Name:     name,
+			Amount:   amount,
+			Unit:     unit,
 		})
 	}
+	sortGroceryItems(normalized)
 	return normalized, nil
 }
 
@@ -291,6 +350,7 @@ func loadGroceryListByID(db *sql.DB, noteID int64, listID int64) (GroceryList, e
 		if err := json.Unmarshal([]byte(itemsJSON), &gl.Items); err != nil {
 			return gl, fmt.Errorf("unmarshal items: %w", err)
 		}
+		prepareLoadedGroceryItems(gl.Items)
 	}
 
 	rows, err := db.Query(`
@@ -401,6 +461,7 @@ func listGroceryLists(db *sql.DB, noteID int64) (any, error) {
 			if err := json.Unmarshal([]byte(itemsJSON), &gl.Items); err != nil {
 				return nil, fmt.Errorf("unmarshal items: %w", err)
 			}
+			prepareLoadedGroceryItems(gl.Items)
 		}
 
 		// Load recipe IDs.

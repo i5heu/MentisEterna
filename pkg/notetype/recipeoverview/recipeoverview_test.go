@@ -405,6 +405,67 @@ func TestGenerateGroceryListIgnoresIngredientPrepare(t *testing.T) {
 	}
 }
 
+func TestGenerateGroceryListIncludesAndOrdersCategories(t *testing.T) {
+	d := plugintest.DB(t, &RecipeOverviewPlugin{})
+	defer d.Close()
+
+	recipePlugin := &recipe.RecipePlugin{}
+	if err := recipePlugin.InitSchema(d.DB); err != nil {
+		t.Fatalf("recipe InitSchema: %v", err)
+	}
+
+	noteID := plugintest.CreateNote(t, d, "Shop", recipePlugin)
+	if _, err := d.DB.Exec(`
+		INSERT INTO ct_recipe_ingredients (note_id, name, amount, unit, metric_validated, grocery_category, sort_order)
+		VALUES
+			(?, 'Zucchini', '1', 'pcs', 1, 'vegetables', 0),
+			(?, 'Carrot', '2', 'pcs', 1, 'vegetables', 1),
+			(?, 'Milk', '1', 'l', 1, 'dairy', 2)
+	`, noteID, noteID, noteID); err != nil {
+		t.Fatalf("insert ingredients: %v", err)
+	}
+	if _, err := d.DB.Exec(`INSERT INTO ct_recipe_meta (note_id, servings) VALUES (?, '1')`, noteID); err != nil {
+		t.Fatalf("insert meta: %v", err)
+	}
+
+	overviewNote := plugintest.CreateNote(t, d, "Weekly Overview", &RecipeOverviewPlugin{})
+	params := json.RawMessage(fmt.Sprintf(`{"recipe_ids":[%d],"num_people":1}`, noteID))
+	result, err := generateGroceryList(d.DB, overviewNote, params)
+	if err != nil {
+		t.Fatalf("generateGroceryList: %v", err)
+	}
+
+	payload, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	glRaw, ok := payload["grocery_list"]
+	if !ok {
+		t.Fatalf("expected grocery_list in result")
+	}
+	encoded, err := json.Marshal(glRaw)
+	if err != nil {
+		t.Fatalf("marshal grocery list: %v", err)
+	}
+	var gl GroceryList
+	if err := json.Unmarshal(encoded, &gl); err != nil {
+		t.Fatalf("unmarshal grocery list: %v", err)
+	}
+
+	if len(gl.Items) != 3 {
+		t.Fatalf("expected 3 grocery items, got %d", len(gl.Items))
+	}
+	if gl.Items[0].Category != "vegetables" || gl.Items[0].Name != "Carrot" {
+		t.Fatalf("unexpected first grocery item: %+v", gl.Items[0])
+	}
+	if gl.Items[1].Category != "vegetables" || gl.Items[1].Name != "Zucchini" {
+		t.Fatalf("unexpected second grocery item: %+v", gl.Items[1])
+	}
+	if gl.Items[2].Category != "dairy" || gl.Items[2].Name != "Milk" {
+		t.Fatalf("unexpected third grocery item: %+v", gl.Items[2])
+	}
+}
+
 func TestUpdateGroceryListPersistsManualEdits(t *testing.T) {
 	d := plugintest.DB(t, &RecipeOverviewPlugin{})
 	defer d.Close()
@@ -470,10 +531,10 @@ func TestUpdateGroceryListPersistsManualEdits(t *testing.T) {
 	if len(updatedList.Items) != 2 {
 		t.Fatalf("expected 2 items after update, got %d", len(updatedList.Items))
 	}
-	if updatedList.Items[0].Name != "Pasta" || updatedList.Items[0].Amount != "250" || updatedList.Items[0].Unit != "g" {
+	if updatedList.Items[0].Name != "Olive Oil" || updatedList.Items[0].Amount != "1" || updatedList.Items[0].Unit != "bottle" || updatedList.Items[0].Category != "other" {
 		t.Fatalf("unexpected first item after update: %+v", updatedList.Items[0])
 	}
-	if updatedList.Items[1].Name != "Olive Oil" || updatedList.Items[1].Amount != "1" || updatedList.Items[1].Unit != "bottle" {
+	if updatedList.Items[1].Name != "Pasta" || updatedList.Items[1].Amount != "250" || updatedList.Items[1].Unit != "g" || updatedList.Items[1].Category != "other" {
 		t.Fatalf("unexpected second item after update: %+v", updatedList.Items[1])
 	}
 
@@ -481,7 +542,7 @@ func TestUpdateGroceryListPersistsManualEdits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadGroceryListByID: %v", err)
 	}
-	if len(stored.Items) != 2 || stored.Items[1].Name != "Olive Oil" {
+	if len(stored.Items) != 2 || stored.Items[0].Name != "Olive Oil" || stored.Items[1].Name != "Pasta" {
 		t.Fatalf("expected stored grocery list to match manual edits, got %+v", stored.Items)
 	}
 }
