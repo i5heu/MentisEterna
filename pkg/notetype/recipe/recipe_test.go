@@ -3,8 +3,12 @@ package recipe
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype/plugintest"
 	"github.com/i5heu/MentisEterna/pkg/printer"
@@ -38,6 +42,135 @@ func TestValidateConfigRejectsOutOfRangeRating(t *testing.T) {
 	err := plugin.ValidateConfig(json.RawMessage(`{"ingredients":[{"name":"Sugar"}],"rating":11}`))
 	if err == nil {
 		t.Fatal("expected out-of-range rating to be rejected")
+	}
+}
+
+type categoryTestEmbedder struct {
+	mu        sync.Mutex
+	vectors   map[string][]float64
+	active    int32
+	maxActive int32
+	delay     time.Duration
+}
+
+func newCategoryTestEmbedder(delay time.Duration) *categoryTestEmbedder {
+	categories := IngredientCategoryList()
+	vectors := make(map[string][]float64, len(categories)+8)
+	for idx, category := range categories {
+		vectors[category] = categoryVector(len(categories), idx)
+	}
+	vectors["carrot"] = categoryVector(len(categories), categoryIndex(categories, "vegetables"))
+	vectors["milk"] = categoryVector(len(categories), categoryIndex(categories, "dairy"))
+	vectors["paprika"] = categoryVector(len(categories), categoryIndex(categories, "spices"))
+	vectors["salmon"] = categoryVector(len(categories), categoryIndex(categories, "fish"))
+	return &categoryTestEmbedder{vectors: vectors, delay: delay}
+}
+
+func (e *categoryTestEmbedder) GenerateEmbedding(text string) ([]float64, error) {
+	current := atomic.AddInt32(&e.active, 1)
+	defer atomic.AddInt32(&e.active, -1)
+	for {
+		max := atomic.LoadInt32(&e.maxActive)
+		if current <= max || atomic.CompareAndSwapInt32(&e.maxActive, max, current) {
+			break
+		}
+	}
+	if e.delay > 0 {
+		time.Sleep(e.delay)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	vec, ok := e.vectors[strings.ToLower(strings.TrimSpace(text))]
+	if !ok {
+		return nil, fmt.Errorf("missing test vector for %q", text)
+	}
+	out := make([]float64, len(vec))
+	copy(out, vec)
+	return out, nil
+}
+
+func categoryVector(size int, index int) []float64 {
+	vec := make([]float64, size)
+	if index >= 0 && index < size {
+		vec[index] = 1
+	}
+	return vec
+}
+
+func categoryIndex(categories []string, target string) int {
+	for i, category := range categories {
+		if category == target {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestCategorizeIngredientsForNotesWithWorkersStoresCategories(t *testing.T) {
+	d := plugintest.DB(t, &RecipePlugin{})
+	defer d.Close()
+
+	noteID := plugintest.CreateNote(t, d, "Ingredients", &RecipePlugin{})
+	if _, err := d.Exec(`
+		INSERT INTO ct_recipe_ingredients (note_id, name, sort_order)
+		VALUES (?, 'Carrot', 0), (?, 'Milk', 1), (?, 'Paprika', 2)
+	`, noteID, noteID, noteID); err != nil {
+		t.Fatalf("insert ingredients: %v", err)
+	}
+
+	embedder := newCategoryTestEmbedder(0)
+	if err := CategorizeIngredientsForNotesWithWorkers(context.Background(), d.DB, embedder, []int64{noteID}, 3); err != nil {
+		t.Fatalf("CategorizeIngredientsForNotesWithWorkers: %v", err)
+	}
+
+	rows, err := d.Query(`SELECT name, grocery_category FROM ct_recipe_ingredients WHERE note_id = ? ORDER BY sort_order`, noteID)
+	if err != nil {
+		t.Fatalf("query categories: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]string{}
+	for rows.Next() {
+		var name, category string
+		if err := rows.Scan(&name, &category); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[name] = category
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if got["Carrot"] != "vegetables" {
+		t.Fatalf("Carrot category = %q, want vegetables", got["Carrot"])
+	}
+	if got["Milk"] != "dairy" {
+		t.Fatalf("Milk category = %q, want dairy", got["Milk"])
+	}
+	if got["Paprika"] != "spices" {
+		t.Fatalf("Paprika category = %q, want spices", got["Paprika"])
+	}
+}
+
+func TestCategorizeIngredientsForNotesWithWorkersRunsInParallel(t *testing.T) {
+	d := plugintest.DB(t, &RecipePlugin{})
+	defer d.Close()
+
+	noteID := plugintest.CreateNote(t, d, "Parallel", &RecipePlugin{})
+	if _, err := d.Exec(`
+		INSERT INTO ct_recipe_ingredients (note_id, name, sort_order)
+		VALUES (?, 'Carrot', 0), (?, 'Milk', 1), (?, 'Paprika', 2), (?, 'Salmon', 3)
+	`, noteID, noteID, noteID, noteID); err != nil {
+		t.Fatalf("insert ingredients: %v", err)
+	}
+
+	embedder := newCategoryTestEmbedder(20 * time.Millisecond)
+	if err := CategorizeIngredientsForNotesWithWorkers(context.Background(), d.DB, embedder, []int64{noteID}, 4); err != nil {
+		t.Fatalf("CategorizeIngredientsForNotesWithWorkers: %v", err)
+	}
+	if got := atomic.LoadInt32(&embedder.maxActive); got < 2 {
+		t.Fatalf("expected parallel embedding calls, maxActive = %d", got)
 	}
 }
 

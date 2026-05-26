@@ -44,3 +44,19 @@ func TestNewServerJobWorkersFromEnv(t *testing.T) {
 		t.Fatalf("WorkerCount() = %d, want 6", got)
 	}
 }
+
+func TestRecipeCategoryWorkerCountDefault(t *testing.T) {
+	t.Setenv("RECIPE_CATEGORY_WORKERS", "")
+	s := newTestServer(t)
+	if got := s.recipeCategoryWorkerCount(); got != 10 {
+		t.Fatalf("recipeCategoryWorkerCount() = %d, want 10", got)
+	}
+}
+
+func TestRecipeCategoryWorkerCountFromEnv(t *testing.T) {
+	t.Setenv("RECIPE_CATEGORY_WORKERS", "4")
+	s := newTestServer(t)
+	if got := s.recipeCategoryWorkerCount(); got != 4 {
+		t.Fatalf("recipeCategoryWorkerCount() = %d, want 4", got)
+	}
+}

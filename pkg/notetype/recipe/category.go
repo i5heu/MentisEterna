@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 )
 
 const OtherIngredientCategory = "other"
@@ -69,6 +70,10 @@ func IngredientCategorySortIndex(category string) int {
 }
 
 func CategorizeIngredientsForNotes(ctx context.Context, db *sql.DB, embedder IngredientCategoryEmbedder, noteIDs []int64) error {
+	return CategorizeIngredientsForNotesWithWorkers(ctx, db, embedder, noteIDs, 1)
+}
+
+func CategorizeIngredientsForNotesWithWorkers(ctx context.Context, db *sql.DB, embedder IngredientCategoryEmbedder, noteIDs []int64, workers int) error {
 	if db == nil || embedder == nil || len(noteIDs) == 0 {
 		return nil
 	}
@@ -91,6 +96,8 @@ func CategorizeIngredientsForNotes(ctx context.Context, db *sql.DB, embedder Ing
 		return fmt.Errorf("recipe: build category embeddings: %w", err)
 	}
 
+	categoryByName := categorizeIngredientNames(ctx, embedder, ingredients, categoryEmbeddings, workers)
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("recipe: begin ingredient categorization tx: %w", err)
@@ -103,21 +110,14 @@ func CategorizeIngredientsForNotes(ctx context.Context, db *sql.DB, embedder Ing
 	}
 	defer stmt.Close()
 
-	categoryByName := make(map[string]string, len(ingredients))
 	for _, ingredient := range ingredients {
 		name := normalizeIngredientText(ingredient.Name)
 		if name == "" {
 			continue
 		}
-
 		category, ok := categoryByName[name]
 		if !ok {
-			vec, err := embedder.GenerateEmbedding(name)
-			if err != nil {
-				continue
-			}
-			category = bestIngredientCategory(vec, categoryEmbeddings)
-			categoryByName[name] = category
+			continue
 		}
 
 		if _, err := stmt.ExecContext(ctx, category, ingredient.ID); err != nil {
@@ -191,6 +191,80 @@ func buildCategoryEmbeddings(embedder IngredientCategoryEmbedder) ([]categoryEmb
 		out = append(out, categoryEmbedding{Category: category, Vector: vec})
 	}
 	return out, nil
+}
+
+func categorizeIngredientNames(ctx context.Context, embedder IngredientCategoryEmbedder, ingredients []categorizedIngredient, categoryEmbeddings []categoryEmbedding, workers int) map[string]string {
+	uniqueNames := make(map[string]struct{}, len(ingredients))
+	for _, ingredient := range ingredients {
+		name := normalizeIngredientText(ingredient.Name)
+		if name == "" {
+			continue
+		}
+		uniqueNames[name] = struct{}{}
+	}
+	if len(uniqueNames) == 0 {
+		return map[string]string{}
+	}
+
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(uniqueNames) {
+		workers = len(uniqueNames)
+	}
+
+	type result struct {
+		name     string
+		category string
+		ok       bool
+	}
+
+	jobs := make(chan string)
+	results := make(chan result, len(uniqueNames))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for name := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				vec, err := embedder.GenerateEmbedding(name)
+				if err != nil {
+					results <- result{name: name, ok: false}
+					continue
+				}
+				results <- result{name: name, category: bestIngredientCategory(vec, categoryEmbeddings), ok: true}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for name := range uniqueNames {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- name:
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	categoryByName := make(map[string]string, len(uniqueNames))
+	for res := range results {
+		if !res.ok {
+			continue
+		}
+		categoryByName[res.name] = res.category
+	}
+	return categoryByName
 }
 
 func normalizeIngredientText(name string) string {

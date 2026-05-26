@@ -42,6 +42,7 @@ export LOCALAI_CHAT_MODEL="gemma-3-4b-it"  # Model for title generation
 export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
 export LOCALAI_STT_MODEL="voxtral-mini-4b-realtime"  # Whisper-compatible model for speech-to-text
 export JOB_WORKERS="10"  # Concurrent background jobs (reindexing, OCR, STT, etc.)
+export RECIPE_CATEGORY_WORKERS="10"  # Parallel ingredient-category embedding requests
 export MEDIA_CACHE_DIR="/var/mentis/cache"  # Local directory for encrypted file cache
 export MEDIA_S3_ENDPOINTS='[
   {
@@ -80,7 +81,7 @@ Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 - [x] Grocery List needs to round to 2 decimal places.
 - [x] Printed Recipes need to use non-metric if metric is not validated
 - [x] If cursur in editor or input, ctrl+s should save the note even in edit mode, other hotkeys should be disabled.
-- [ ] Ingredient categories need to be shown in Grocery List and printed version
+- [x] Ingredient categories need to be shown in Grocery List and printed version
 - [ ] The Shortcut helper modal is long and needs to be able to scroll.
 - [ ] Tables can become quite wide, we need to add a horizontal scroll to the table in the recipe note type. And we need a light zebra effect to make it easier to read.
 
