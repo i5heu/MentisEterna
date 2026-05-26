@@ -101,6 +101,7 @@
 
         <h3>Ingredients</h3>
 
+        <div class="ingredient-table-wrapper">
         <table class="ingredient-table">
             <thead>
                 <tr>
@@ -226,6 +227,7 @@
                 </tr>
             </tbody>
         </table>
+        </div>
         <button v-if="editing" class="btn-ghost btn-sm" @click="addIngredient">
             + Add Ingredient
         </button>
@@ -1134,6 +1136,11 @@ function removeIngredient(idx) {
     white-space: pre;
 }
 
+.ingredient-table-wrapper {
+    overflow-x: auto;
+    width: 100%;
+}
+
 .ingredient-table {
     width: 100%;
     border-collapse: collapse;
@@ -1145,6 +1152,11 @@ function removeIngredient(idx) {
     text-align: left;
     border-bottom: 1px solid var(--border-color);
     vertical-align: middle;
+    white-space: nowrap;
+}
+
+.ingredient-table tbody tr:nth-child(even) {
+    background: rgba(128, 128, 128, 0.06);
 }
 
 .ingredient-table th {

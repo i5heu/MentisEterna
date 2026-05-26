@@ -78,6 +78,10 @@ function close() {
 
 .keyboard-shortcuts-modal {
     max-width: 520px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .keyboard-shortcuts-header {
@@ -102,6 +106,9 @@ function close() {
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
+    overflow-y: auto;
+    flex: 1;
+    padding-right: 0.25rem;
 }
 
 .keyboard-shortcuts-row {
