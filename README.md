@@ -125,7 +125,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 
 ## TODO Future
 - [x] OCR for images and pdfs
-- [ ] If not selecting or focusing somethign, pressing "u" should open the parent in main.
+- [x] If not selecting or focusing somethign, pressing "u" should open the parent in main.
 - [x] speech to text notes
 - [x] Refactor code
   - [x] Split NoteTypeRenderer.vue into multiple components for better maintainability.
