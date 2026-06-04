@@ -25,9 +25,6 @@ services:
             THERMAL_PRINTER_WRITE_CHUNK_BYTES: "${THERMAL_PRINTER_WRITE_CHUNK_BYTES:-}"
             THERMAL_PRINTER_WRITE_DELAY_MS: "${THERMAL_PRINTER_WRITE_DELAY_MS:-}"
         volumes:
-            - mentis-data:/data
+            - ./mentis-data:/data
         extra_hosts:
             - "host.docker.internal:host-gateway"
-
-volumes:
-    mentis-data:
