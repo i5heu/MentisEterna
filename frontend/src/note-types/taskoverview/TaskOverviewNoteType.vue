@@ -58,7 +58,7 @@
                 {{ loadingDaily ? "Loading..." : "🔄 Refresh" }}
             </button>
             <div v-if="dailyTasks.length === 0" class="empty-hint">
-                No non-done tasks available. Create some tasks first!
+                No tasks available. Create some tasks first!
             </div>
             <div v-else class="daily-tasks-grid">
                 <div
@@ -194,6 +194,40 @@
                 </div>
             </div>
         </div>
+
+        <!-- Daily History -->
+        <div class="section" v-if="dailyHistory.length > 0">
+            <h4 class="collapsible-header" @click="historyOpen = !historyOpen">
+                <span class="collapse-arrow">{{
+                    historyOpen ? "▼" : "▶"
+                }}</span>
+                📜 Daily History ({{ dailyHistory.length }})
+            </h4>
+            <div v-if="historyOpen" class="history-list">
+                <div
+                    v-for="entry in dailyHistory"
+                    :key="entry.generated_at"
+                    class="history-day"
+                >
+                    <div class="history-date">
+                        {{ formatHistoryDate(entry.generated_at) }}
+                    </div>
+                    <div class="history-tasks">
+                        <span
+                            v-for="t in entry.tasks"
+                            :key="t.note_id"
+                            class="history-task"
+                            :class="'status-' + t.status"
+                            @click="$emit('selectNote', t.note_id)"
+                            :title="t.title"
+                        >
+                            {{ t.status === "done" ? "✅" : "🔲" }}
+                            {{ t.title || "Untitled" }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </template>
 
@@ -223,7 +257,12 @@ const statusLoading = ref({});
 const { emitStatusChange, onStatusChange } = useTaskEventBus();
 
 // View data from the server (BuildView result)
-const viewData = ref({ tasks: [], daily_tasks: [], stats: {} });
+const viewData = ref({
+    tasks: [],
+    daily_tasks: [],
+    daily_history: [],
+    stats: {},
+});
 
 let hydrating = false;
 
@@ -234,6 +273,9 @@ function hydrateFromProp() {
         viewData.value = {
             tasks: Array.isArray(cd.tasks) ? cd.tasks : [],
             daily_tasks: Array.isArray(cd.daily_tasks) ? cd.daily_tasks : [],
+            daily_history: Array.isArray(cd.daily_history)
+                ? cd.daily_history
+                : [],
             stats: cd.stats || {},
         };
     }
@@ -291,6 +333,43 @@ const filteredTasks = computed(() => {
 
 // Daily tasks
 const dailyTasks = computed(() => viewData.value.daily_tasks || []);
+
+// Daily history
+const dailyHistory = computed(() => viewData.value.daily_history || []);
+const historyOpen = ref(false);
+
+function formatHistoryDate(isoStr) {
+    if (!isoStr) return "";
+    try {
+        const d = new Date(isoStr + (isoStr.includes("Z") ? "" : "Z"));
+        const now = new Date();
+        const today = now.toISOString().slice(0, 10);
+        const datePart = isoStr.slice(0, 10);
+        const timePart = d.toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "UTC",
+        });
+
+        const fmt = d.toLocaleDateString(undefined, {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            timeZone: "UTC",
+        });
+
+        if (datePart === today) return `Today ${timePart} (${fmt})`;
+
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (datePart === yesterday.toISOString().slice(0, 10))
+            return `Yesterday ${timePart} (${fmt})`;
+
+        return `${fmt} ${timePart}`;
+    } catch {
+        return isoStr;
+    }
+}
 
 async function generateDailyTasks() {
     try {
@@ -435,6 +514,21 @@ onBeforeUnmount(unsubOverview);
     font-size: 1rem;
     margin: 0;
     color: var(--font-color);
+}
+
+.collapsible-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.collapsible-header:hover {
+    color: var(--accent-teal);
+}
+
+.collapse-arrow {
+    font-size: 0.7rem;
+    margin-right: 0.3rem;
+    vertical-align: middle;
 }
 
 .daily-tasks-grid {
@@ -650,6 +744,56 @@ onBeforeUnmount(unsubOverview);
     color: var(--font-color-secondary);
     font-style: italic;
     padding: 0.5rem 0;
+}
+
+/* Daily History */
+.history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.history-day {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.history-day:last-child {
+    border-bottom: none;
+}
+
+.history-date {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--font-color-secondary);
+    white-space: nowrap;
+    min-width: 120px;
+    padding-top: 0.15rem;
+}
+
+.history-tasks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 0.6rem;
+}
+
+.history-task {
+    font-size: 0.8rem;
+    cursor: pointer;
+    color: var(--font-color);
+    transition: color 0.15s;
+}
+
+.history-task:hover {
+    color: var(--accent-teal);
+}
+
+.history-task.status-done {
+    opacity: 0.6;
+    text-decoration: line-through;
 }
 </style>
 

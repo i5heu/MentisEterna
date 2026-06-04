@@ -30,12 +30,11 @@ func (p *TaskOverviewPlugin) InitSchema(db *sql.DB) error {
 			overview_note_id INTEGER NOT NULL,
 			task_note_id     INTEGER NOT NULL,
 			assigned_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-			PRIMARY KEY (overview_note_id, task_note_id),
 			FOREIGN KEY (overview_note_id) REFERENCES notes(id) ON DELETE CASCADE,
 			FOREIGN KEY (task_note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
 		CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_ov
-			ON ct_taskoverview_daily(overview_note_id);
+			ON ct_taskoverview_daily(overview_note_id, assigned_at);
 	`)
 	return err
 }
@@ -58,11 +57,18 @@ type TaskSummary struct {
 	Body           string `json:"body"`
 }
 
+// DailyHistoryEntry groups the tasks that were assigned at a particular generation.
+type DailyHistoryEntry struct {
+	GeneratedAt string        `json:"generated_at"`
+	Tasks       []TaskSummary `json:"tasks"`
+}
+
 // OverviewData is the view returned to the frontend.
 type OverviewData struct {
-	Tasks      []TaskSummary `json:"tasks"`
-	DailyTasks []TaskSummary `json:"daily_tasks"`
-	Stats      TaskStats     `json:"stats"`
+	Tasks        []TaskSummary       `json:"tasks"`
+	DailyTasks   []TaskSummary       `json:"daily_tasks"`
+	DailyHistory []DailyHistoryEntry `json:"daily_history"`
+	Stats        TaskStats           `json:"stats"`
 }
 
 // TaskStats holds aggregate statistics.
@@ -147,10 +153,16 @@ func (p *TaskOverviewPlugin) BuildView(ctx context.Context, db *sql.DB, userID i
 		_ = storeDailyTasks(db, noteID, dailyTasks) // best-effort
 	}
 
+	dailyHistory, err := loadDailyHistory(db, noteID)
+	if err != nil {
+		return nil, err
+	}
+
 	return &OverviewData{
-		Tasks:      tasks,
-		DailyTasks: dailyTasks,
-		Stats:      stats,
+		Tasks:        tasks,
+		DailyTasks:   dailyTasks,
+		DailyHistory: dailyHistory,
+		Stats:        stats,
 	}, nil
 }
 
@@ -211,7 +223,8 @@ func regenerateAllDailyTasks(db *sql.DB, payload []byte) (string, error) {
 	return fmt.Sprintf("regenerated daily tasks for %d task_overview notes", regenCount), nil
 }
 
-// loadDailyTasks returns the persisted daily tasks for a given overview note.
+// loadDailyTasks returns the most recent generation of daily tasks
+// for a given overview note (the set with the highest assigned_at).
 func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 	rows, err := db.Query(`
 		SELECT n.id, n.title, n.created_at,
@@ -233,8 +246,11 @@ func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 		)
 		LEFT JOIN ct_task_config tc ON tc.note_id = n.id
 		WHERE d.overview_note_id = ?
-		ORDER BY d.assigned_at DESC
-	`, overviewNoteID)
+		AND d.assigned_at = (
+			SELECT MAX(assigned_at) FROM ct_taskoverview_daily WHERE overview_note_id = ?
+		)
+		ORDER BY d.assigned_at ASC
+	`, overviewNoteID, overviewNoteID)
 	if err != nil {
 		return nil, fmt.Errorf("task_overview: load daily: %w", err)
 	}
@@ -254,31 +270,104 @@ func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 		return nil, err
 	}
 
-	// Filter out tasks that have since been marked done.
-	filtered := make([]TaskSummary, 0, len(tasks))
-	for _, t := range tasks {
-		if t.Status != "done" {
-			filtered = append(filtered, t)
-		}
-	}
-	return filtered, nil
+	return tasks, nil
 }
 
 // storeDailyTasks persists daily task assignments for an overview note.
-// It replaces all existing assignments for this note.
+// Each call creates a new generation — all tasks share the same assigned_at timestamp.
 func storeDailyTasks(db *sql.DB, overviewNoteID int64, tasks []TaskSummary) error {
-	if _, err := db.Exec(`DELETE FROM ct_taskoverview_daily WHERE overview_note_id = ?`, overviewNoteID); err != nil {
-		return err
-	}
+	now := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	for _, t := range tasks {
 		if _, err := db.Exec(
-			`INSERT OR IGNORE INTO ct_taskoverview_daily (overview_note_id, task_note_id) VALUES (?, ?)`,
-			overviewNoteID, t.NoteID,
+			`INSERT INTO ct_taskoverview_daily (overview_note_id, task_note_id, assigned_at) VALUES (?, ?, ?)`,
+			overviewNoteID, t.NoteID, now,
 		); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// loadDailyHistory returns all past generations grouped by assigned_at,
+// newest first, excluding the most recent generation (which is current).
+func loadDailyHistory(db *sql.DB, overviewNoteID int64) ([]DailyHistoryEntry, error) {
+	// Find the most recent generation timestamp.
+	var latest string
+	err := db.QueryRow(
+		`SELECT MAX(assigned_at) FROM ct_taskoverview_daily WHERE overview_note_id = ?`,
+		overviewNoteID,
+	).Scan(&latest)
+	if err != nil || latest == "" {
+		return []DailyHistoryEntry{}, nil // no generations yet
+	}
+
+	// Load all rows except the most recent generation.
+	rows, err := db.Query(`
+		SELECT d.assigned_at, n.id, n.title, n.created_at,
+		       COALESCE(u.body, '') AS body,
+		       COALESCE(u.created_at, n.created_at) AS updated_at,
+		       COALESCE(tc.status, 'todo'),
+		       COALESCE(tc.priority, 0),
+		       COALESCE(tc.difficulty, 0),
+		       COALESCE(tc.fun, 0),
+		       COALESCE(tc.due_date, ''),
+		       COALESCE(tc.time_estimation, ''),
+		       COALESCE(tc.time_used, ''),
+		       COALESCE(tc.recurring, 'none'),
+		       COALESCE(tc.completed_at, '')
+		FROM ct_taskoverview_daily d
+		JOIN notes n ON n.id = d.task_note_id
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
+		LEFT JOIN ct_task_config tc ON tc.note_id = n.id
+		WHERE d.overview_note_id = ? AND d.assigned_at != ?
+		ORDER BY d.assigned_at DESC, n.title ASC
+	`, overviewNoteID, latest)
+	if err != nil {
+		return nil, fmt.Errorf("task_overview: load history: %w", err)
+	}
+	defer rows.Close()
+
+	// Group tasks by assigned_at in order (descending = newest first).
+	type row struct {
+		assignedAt string
+		task       TaskSummary
+	}
+	var all []row
+	for rows.Next() {
+		var assignedAt string
+		var t TaskSummary
+		if err := rows.Scan(&assignedAt, &t.NoteID, &t.Title, &t.CreatedAt, &t.Body, &t.UpdatedAt,
+			&t.Status, &t.Priority, &t.Difficulty, &t.Fun,
+			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt); err != nil {
+			return nil, fmt.Errorf("task_overview: scan history: %w", err)
+		}
+		all = append(all, row{assignedAt, t})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(all) == 0 {
+		return []DailyHistoryEntry{}, nil
+	}
+
+	// Group consecutive rows with the same assigned_at.
+	var result []DailyHistoryEntry
+	var cur *DailyHistoryEntry
+	for _, r := range all {
+		if cur == nil || cur.GeneratedAt != r.assignedAt {
+			result = append(result, DailyHistoryEntry{
+				GeneratedAt: r.assignedAt,
+				Tasks:       []TaskSummary{r.task},
+			})
+			cur = &result[len(result)-1]
+		} else {
+			cur.Tasks = append(cur.Tasks, r.task)
+		}
+	}
+	return result, nil
 }
 
 // --- Helpers ---
