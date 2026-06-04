@@ -120,152 +120,167 @@
         <h3>Ingredients</h3>
 
         <div class="ingredient-table-wrapper">
-        <table class="ingredient-table">
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Prepare</th>
-                    <th>Metric Amount</th>
-                    <th>Metric Unit</th>
-                    <th>Non-Metric Amount</th>
-                    <th>Non-Metric Type</th>
-                    <th>Metric Validated</th>
-                    <th>Grocery Category</th>
-                    <th v-if="editing">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr
-                    v-for="(ing, idx) in ingredientRows"
-                    :key="ing.id || `${idx}:${ing.name}:${ing.prepare}`"
-                >
-                    <td v-if="editing">
-                        <input
-                            v-model="ing.name"
-                            placeholder="Ingredient name"
-                        />
-                    </td>
-                    <td v-else>{{ ing.name || "-" }}</td>
-
-                    <td v-if="editing">
-                        <input
-                            v-model="ing.prepare"
-                            placeholder="e.g. chopped"
-                        />
-                    </td>
-                    <td v-else>{{ ing.prepare || "-" }}</td>
-
-                    <td v-if="editing">
-                        <input
-                            v-model="ing.amount"
-                            placeholder="e.g. 2"
-                            class="amount-input"
-                        />
-                    </td>
-                    <td v-else>{{ formatIngredientAmount(ing) }}</td>
-
-                    <td v-if="editing">
-                        <select v-model="ing.unit" class="unit-select">
-                            <option value="">—</option>
-                            <option value="mg">mg</option>
-                            <option value="g">g</option>
-                            <option value="kg">kg</option>
-                            <option value="ml">ml</option>
-                            <option value="l">l</option>
-                            <option value="pcs">pcs</option>
-                        </select>
-                    </td>
-                    <td v-else>{{ ing.unit || "-" }}</td>
-
-                    <td v-if="editing">
-                        <input
-                            v-model="ing.non_metric_amount"
-                            placeholder="e.g. 1"
-                            class="amount-input"
-                        />
-                    </td>
-                    <td v-else>{{ formatIngredientNonMetricAmount(ing) }}</td>
-
-                    <td v-if="editing">
-                        <select
-                            v-model="ing.non_metric_unit"
-                            class="unit-select non-metric-unit-select"
-                        >
-                            <option value="">—</option>
-                            <option value="teaspoon">Teaspoon</option>
-                            <option value="tablespoon">Tablespoon</option>
-                            <option value="cup">Cup</option>
-                        </select>
-                    </td>
-                    <td v-else>
-                        {{ formatNonMetricUnit(ing.non_metric_unit) }}
-                    </td>
-
-                    <td>
-                        <template v-if="shouldShowMetricValidatedField(ing)">
+            <table
+                class="ingredient-table"
+                :class="{ 'ingredient-table-editing': editing }"
+            >
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Prepare</th>
+                        <th>Metric Amount</th>
+                        <th>Metric Unit</th>
+                        <th>Non-Metric Amount</th>
+                        <th>Non-Metric Type</th>
+                        <th>Metric Validated</th>
+                        <th>Grocery Category</th>
+                        <th v-if="editing">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="(ing, idx) in ingredientRows" :key="ing._rowKey">
+                        <td v-if="editing">
                             <input
-                                v-if="editing"
-                                type="checkbox"
-                                v-model="ing.metric_validated"
-                                class="detail-checkbox"
+                                v-model="ing.name"
+                                class="ingredient-name-input"
+                                placeholder="Ingredient name"
                             />
-                            <span v-else>
-                                {{ ing.metric_validated ? "Yes" : "No" }}
-                            </span>
-                        </template>
-                        <span v-else class="muted-dash">—</span>
-                    </td>
+                        </td>
+                        <td v-else>{{ ing.name || "-" }}</td>
 
-                    <td>
-                        <select
-                            v-if="editing"
-                            :value="ingredientCategorySelection(ing)"
-                            class="unit-select category-select"
-                            @change="setIngredientCategorySelection(ing, $event.target.value)"
-                        >
-                            <option value="__auto__">
-                                {{ autoCategoryOptionLabel(ing) }}
-                            </option>
-                            <option
-                                v-for="category in GROCERY_CATEGORY_OPTIONS"
-                                :key="category"
-                                :value="category"
-                            >
-                                {{ formatGroceryCategoryLabel(category) }}
-                            </option>
-                        </select>
-                        <span v-else>{{ formatIngredientCategory(ing) }}</span>
-                    </td>
+                        <td v-if="editing">
+                            <input
+                                v-model="ing.prepare"
+                                class="ingredient-prepare-input"
+                                placeholder="e.g. chopped"
+                            />
+                        </td>
+                        <td v-else>{{ ing.prepare || "-" }}</td>
 
-                    <td v-if="editing">
-                        <div class="ingredient-row-actions">
-                            <button
-                                v-if="localIngredientOrderManual"
-                                class="btn-ghost btn-sm ingredient-order-btn"
-                                :disabled="idx === 0"
-                                @click="moveIngredient(idx, -1)"
+                        <td v-if="editing">
+                            <input
+                                v-model="ing.amount"
+                                placeholder="e.g. 2"
+                                class="amount-input"
+                            />
+                        </td>
+                        <td v-else>{{ formatIngredientAmount(ing) }}</td>
+
+                        <td v-if="editing">
+                            <select v-model="ing.unit" class="unit-select">
+                                <option value="">—</option>
+                                <option value="mg">mg</option>
+                                <option value="g">g</option>
+                                <option value="kg">kg</option>
+                                <option value="ml">ml</option>
+                                <option value="l">l</option>
+                                <option value="pcs">pcs</option>
+                            </select>
+                        </td>
+                        <td v-else>{{ ing.unit || "-" }}</td>
+
+                        <td v-if="editing">
+                            <input
+                                v-model="ing.non_metric_amount"
+                                placeholder="e.g. 1"
+                                class="amount-input"
+                            />
+                        </td>
+                        <td v-else>
+                            {{ formatIngredientNonMetricAmount(ing) }}
+                        </td>
+
+                        <td v-if="editing">
+                            <select
+                                v-model="ing.non_metric_unit"
+                                class="unit-select non-metric-unit-select"
                             >
-                                ↑
-                            </button>
-                            <button
-                                v-if="localIngredientOrderManual"
-                                class="btn-ghost btn-sm ingredient-order-btn"
-                                :disabled="idx === ingredientRows.length - 1"
-                                @click="moveIngredient(idx, 1)"
+                                <option value="">—</option>
+                                <option value="teaspoon">Teaspoon</option>
+                                <option value="tablespoon">Tablespoon</option>
+                                <option value="cup">Cup</option>
+                            </select>
+                        </td>
+                        <td v-else>
+                            {{ formatNonMetricUnit(ing.non_metric_unit) }}
+                        </td>
+
+                        <td>
+                            <template
+                                v-if="shouldShowMetricValidatedField(ing)"
                             >
-                                ↓
-                            </button>
-                            <button
-                                class="btn-ghost btn-sm"
-                                @click="removeIngredient(idx)"
+                                <input
+                                    v-if="editing"
+                                    type="checkbox"
+                                    v-model="ing.metric_validated"
+                                    class="detail-checkbox"
+                                />
+                                <span v-else>
+                                    {{ ing.metric_validated ? "Yes" : "No" }}
+                                </span>
+                            </template>
+                            <span v-else class="muted-dash">—</span>
+                        </td>
+
+                        <td>
+                            <select
+                                v-if="editing"
+                                :value="ingredientCategorySelection(ing)"
+                                class="unit-select category-select"
+                                @change="
+                                    setIngredientCategorySelection(
+                                        ing,
+                                        $event.target.value,
+                                    )
+                                "
                             >
-                                &times;
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
+                                <option value="__auto__">
+                                    {{ autoCategoryOptionLabel(ing) }}
+                                </option>
+                                <option
+                                    v-for="category in GROCERY_CATEGORY_OPTIONS"
+                                    :key="category"
+                                    :value="category"
+                                >
+                                    {{ formatGroceryCategoryLabel(category) }}
+                                </option>
+                            </select>
+                            <span v-else>{{
+                                formatIngredientCategory(ing)
+                            }}</span>
+                        </td>
+
+                        <td v-if="editing">
+                            <div class="ingredient-row-actions">
+                                <button
+                                    v-if="localIngredientOrderManual"
+                                    class="btn-ghost btn-sm ingredient-order-btn"
+                                    :disabled="idx === 0"
+                                    @click="moveIngredient(idx, -1)"
+                                >
+                                    ↑
+                                </button>
+                                <button
+                                    v-if="localIngredientOrderManual"
+                                    class="btn-ghost btn-sm ingredient-order-btn"
+                                    :disabled="
+                                        idx === ingredientRows.length - 1
+                                    "
+                                    @click="moveIngredient(idx, 1)"
+                                >
+                                    ↓
+                                </button>
+                                <button
+                                    class="btn-ghost btn-sm"
+                                    @click="removeIngredient(idx)"
+                                >
+                                    &times;
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
         <button v-if="editing" class="btn-ghost btn-sm" @click="addIngredient">
             + Add Ingredient
@@ -622,7 +637,9 @@ const displayImportError = computed(() => {
     return importError.value || props.actionError || "";
 });
 
-const baseServingsNumber = computed(() => parseNumericAmount(localServings.value));
+const baseServingsNumber = computed(() =>
+    parseNumericAmount(localServings.value),
+);
 const displayServingsNumber = computed(() =>
     parseNumericAmount(localDisplayServings.value),
 );
@@ -654,6 +671,13 @@ const printDisplayServings = computed(() => {
 });
 
 let hydrating = false;
+let nextIngredientRowKey = 1;
+
+function allocateIngredientRowKey() {
+    const key = `ingredient-${nextIngredientRowKey}`;
+    nextIngredientRowKey += 1;
+    return key;
+}
 
 function hasText(value) {
     return String(value ?? "").trim() !== "";
@@ -680,6 +704,7 @@ function formatNumericAmount(value) {
 
 function normalizeIngredient(raw) {
     const normalized = {
+        _rowKey: allocateIngredientRowKey(),
         id: Number.isFinite(Number(raw?.id)) ? Number(raw.id) : 0,
         name: normalizeString(raw?.name),
         prepare: normalizeString(raw?.prepare),
@@ -1007,7 +1032,10 @@ function scaleAmountString(amount, factor) {
 }
 
 function formatIngredientAmount(ingredient) {
-    const scaled = scaleAmountString(ingredient?.amount, ingredientScaleFactor.value);
+    const scaled = scaleAmountString(
+        ingredient?.amount,
+        ingredientScaleFactor.value,
+    );
     return scaled || "-";
 }
 
@@ -1077,6 +1105,7 @@ async function printRecipe() {
 
 function addIngredient() {
     localIngredients.value.push({
+        _rowKey: allocateIngredientRowKey(),
         id: 0,
         name: "",
         prepare: "",
@@ -1279,6 +1308,10 @@ function removeIngredient(idx) {
     border-collapse: collapse;
 }
 
+.ingredient-table-editing {
+    min-width: 72rem;
+}
+
 .ingredient-table th,
 .ingredient-table td {
     padding: 0.35rem 0.5rem;
@@ -1304,6 +1337,14 @@ function removeIngredient(idx) {
     width: 100%;
     padding: 0.3rem 0.4rem;
     font-size: 0.9rem;
+}
+
+.ingredient-name-input {
+    min-width: 12rem;
+}
+
+.ingredient-prepare-input {
+    min-width: 10rem;
 }
 
 .ingredient-row-actions {

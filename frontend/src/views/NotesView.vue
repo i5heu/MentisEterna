@@ -1148,6 +1148,8 @@ const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
 const editTitleInput = ref(null);
+const UNSAVED_NOTE_WARNING =
+    "You have unsaved changes in this note. Leave without saving?";
 const bodyTextarea = ref(null);
 const newReplyTitleInput = ref(null);
 const newReplyTextarea = ref(null);
@@ -1281,7 +1283,23 @@ const sidebarList = computed(() =>
     searchQuery.value.trim() ? searchResults.value : rootNotes.value,
 );
 
+function hasUnsavedSelectedChanges() {
+    return Boolean(selected.value) && dirty.value;
+}
+
+function confirmLeaveCurrentNote() {
+    if (!hasUnsavedSelectedChanges()) return true;
+    return window.confirm(UNSAVED_NOTE_WARNING);
+}
+
+function onBeforeUnload(event) {
+    if (!hasUnsavedSelectedChanges()) return;
+    event.preventDefault();
+    event.returnValue = "";
+}
+
 function openOptions() {
+    if (!confirmLeaveCurrentNote()) return;
     emit("navigate-options");
 }
 
@@ -1619,7 +1637,14 @@ async function loadNotes() {
     }
 }
 
-async function selectNote(note) {
+async function selectNote(
+    note,
+    { skipDirtyCheck = false, updateURL = true } = {},
+) {
+    if (!skipDirtyCheck && !confirmLeaveCurrentNote()) {
+        return false;
+    }
+
     threadNote.value = null;
     // Re-fetch from server to get full enriched data (plugin.config, plugin.view, etc.)
     try {
@@ -1648,10 +1673,20 @@ async function selectNote(note) {
     loadChildren(note.id);
     populateParentSearch(note);
     await loadAncestors(note.id);
-    pushURL();
+    if (updateURL) {
+        pushURL();
+    }
+    return true;
 }
 
-async function selectSearchResult(sr) {
+async function selectSearchResult(
+    sr,
+    { skipDirtyCheck = false, updateURL = true } = {},
+) {
+    if (!skipDirtyCheck && !confirmLeaveCurrentNote()) {
+        return false;
+    }
+
     threadNote.value = null;
     // Re-fetch full note for proper hydration.
     try {
@@ -1688,7 +1723,10 @@ async function selectSearchResult(sr) {
     loadChildren(sr.id);
     populateParentSearch(selected.value);
     await loadAncestors(sr.id);
-    pushURL();
+    if (updateURL) {
+        pushURL();
+    }
+    return true;
 }
 
 function populateParentSearch(note) {
@@ -1701,7 +1739,14 @@ function populateParentSearch(note) {
     }
 }
 
-function newNote(parentNote = null) {
+function newNote(
+    parentNote = null,
+    { skipDirtyCheck = false, updateURL = true } = {},
+) {
+    if (!skipDirtyCheck && !confirmLeaveCurrentNote()) {
+        return false;
+    }
+
     threadNote.value = null;
     selected.value = {
         id: null,
@@ -1728,15 +1773,19 @@ function newNote(parentNote = null) {
     if (parentNote) {
         parentSearch.value = parentNote.title || "";
     }
-    pushURL();
+    if (updateURL) {
+        pushURL();
+    }
     requestAnimationFrame(() =>
         document.querySelector(".body-textarea")?.focus(),
     );
+    return true;
 }
 
 function newChildNote() {
     if (!selected.value?.id) return;
-    newNote(selected.value);
+    const created = newNote(selected.value);
+    if (!created) return;
     isEditing.value = true;
     requestAnimationFrame(() =>
         document.querySelector(".body-textarea")?.focus(),
@@ -1885,7 +1934,7 @@ async function selectNoteById(id) {
     openThreadSidebar(note);
 }
 
-async function openThreadSidebar(note) {
+async function openThreadSidebar(note, { updateURL = true } = {}) {
     // Fetch the full enriched note so plugin data is available for rendering.
     try {
         threadNote.value = await fetchNote(props.token, note.id);
@@ -1909,14 +1958,18 @@ async function openThreadSidebar(note) {
     } catch {
         threadAncestors.value = [];
     }
-    pushURL();
+    if (updateURL) {
+        pushURL();
+    }
 }
 
-function closeThreadSidebar() {
+function closeThreadSidebar({ updateURL = true } = {}) {
     threadNote.value = null;
     threadChildren.value = [];
     threadAncestors.value = [];
-    pushURL();
+    if (updateURL) {
+        pushURL();
+    }
 }
 
 async function sendThreadReply() {
@@ -2568,6 +2621,7 @@ function handleEnterShortcut(event) {
 onMounted(() => {
     window.addEventListener("click", onClickOutside);
     window.addEventListener("popstate", onPopstate);
+    window.addEventListener("beforeunload", onBeforeUnload);
     // Restore state from URL on initial load
     loadFromURL();
 });
@@ -2575,6 +2629,7 @@ onMounted(() => {
 onUnmounted(() => {
     window.removeEventListener("click", onClickOutside);
     window.removeEventListener("popstate", onPopstate);
+    window.removeEventListener("beforeunload", onBeforeUnload);
 });
 
 function onClickOutside(e) {
@@ -2663,7 +2718,7 @@ async function loadFromURL() {
     // Handle /note/new
     if (noteSlug === "new") {
         if (!selected.value || selected.value.id !== null) {
-            newNote();
+            newNote(null, { skipDirtyCheck: true, updateURL: false });
         }
     } else {
         const id = extractID(noteSlug);
@@ -2683,7 +2738,10 @@ async function loadFromURL() {
                 }
             }
             if (note) {
-                selectNote(note);
+                await selectNote(note, {
+                    skipDirtyCheck: true,
+                    updateURL: false,
+                });
             } else {
                 replaceURL();
                 return;
@@ -2711,18 +2769,22 @@ async function loadFromURL() {
                     }
                 }
                 if (tNote) {
-                    await openThreadSidebar(tNote);
+                    await openThreadSidebar(tNote, { updateURL: false });
                 }
             }
         }
     } else {
         if (threadNote.value) {
-            closeThreadSidebar();
+            closeThreadSidebar({ updateURL: false });
         }
     }
 }
 
 function onPopstate() {
+    if (!confirmLeaveCurrentNote()) {
+        pushURL();
+        return;
+    }
     loadFromURL();
 }
 </script>
