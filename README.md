@@ -71,6 +71,14 @@ Build and run with Docker Compose:
 docker compose up --build
 ```
 
+On first startup with an empty data volume, create the database explicitly:
+
+```bash
+docker compose run --rm mentis --create-db
+```
+
+After that, normal `docker compose up` works without the flag.
+
 The Compose setup stores the SQLite database and media cache in the named volume `mentis-data` mounted at `/data` inside the container.
 
 If you want AI features to work from inside the container, set `LOCALAI_BASE_URL` in `.env` to a reachable endpoint for your LocalAI instance.
