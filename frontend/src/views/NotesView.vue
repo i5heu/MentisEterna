@@ -1557,6 +1557,25 @@ const shortcutDefinitions = computed(() => [
         handler: () => sendThreadReply(),
     },
     {
+        id: "open-parent",
+        description: "Open parent note in main view",
+        keys: ["u"],
+        enabled: () => Boolean(selected.value?.parent_id),
+        handler: async () => {
+            const parentId = selected.value?.parent_id;
+            if (!parentId) return;
+            let parent = notes.value.find((n) => n.id === parentId);
+            if (!parent) {
+                try {
+                    parent = await fetchNote(props.token, parentId);
+                } catch {
+                    return;
+                }
+            }
+            if (parent) selectNote(parent);
+        },
+    },
+    {
         id: "cancel-delete",
         description: "Cancel delete",
         hintKey: "N",
