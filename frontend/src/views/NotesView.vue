@@ -1128,6 +1128,7 @@ import {
 import {
     getTypeOptions,
     getNoteTypeOrDefault,
+    getDefaultChildType,
     fetchAndMergeManifests,
 } from "../note-types/registry.js";
 import {
@@ -1753,17 +1754,20 @@ function newNote(
     }
 
     threadNote.value = null;
+    const defaultType = parentNote
+        ? getDefaultChildType(parentNote.type)
+        : "standard";
     selected.value = {
         id: null,
         title: "",
         body: "",
-        type: "standard",
+        type: defaultType,
         parent_id: parentNote ? parentNote.id : null,
     };
     editTitle.value = "";
     editBody.value = "";
-    noteType.value = "standard";
-    const typeDef = getNoteTypeOrDefault("standard");
+    noteType.value = defaultType;
+    const typeDef = getNoteTypeOrDefault(defaultType);
     customData.value = typeDef.emptyCustomData();
     editTags.value = [];
     dirty.value = true;
@@ -1983,11 +1987,13 @@ async function sendThreadReply() {
     if (!hasReplyDraft(threadReplyTitle.value, threadReplyBody.value)) return;
     threadSendingReply.value = true;
     try {
+        const childType = getDefaultChildType(threadNote.value.type);
         const child = await createNote(
             props.token,
             threadReplyTitle.value,
             threadReplyBody.value,
             threadNote.value.id,
+            childType,
         );
         // Reload the note list so sort order is correct.
         await loadNotes();
@@ -2273,11 +2279,13 @@ async function sendReply() {
     }
     sendingReply.value = true;
     try {
+        const childType = getDefaultChildType(selected.value.type);
         const child = await createNote(
             props.token,
             newReplyTitle.value,
             newReplyBody.value,
             selected.value.id,
+            childType,
         );
         // Reload the note list so sort order is correct.
         await loadNotes();

@@ -35,6 +35,40 @@ const registry = [
     },
 
     {
+        id: "recipe_overview",
+        label: "Recipe Overview",
+        component: defineAsyncComponent(
+            () => import("./recipe_overview/RecipeOverviewNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            recipes: [],
+            grocery_lists: [],
+            unvalid_ingredients: [],
+        }),
+        normalizeCustomData(raw, _note) {
+            if (!raw || typeof raw !== "object") {
+                return {
+                    recipes: [],
+                    grocery_lists: [],
+                    unvalid_ingredients: [],
+                };
+            }
+            return {
+                recipes: Array.isArray(raw.recipes) ? raw.recipes : [],
+                grocery_lists: Array.isArray(raw.grocery_lists)
+                    ? raw.grocery_lists
+                    : [],
+                unvalid_ingredients: Array.isArray(raw.unvalid_ingredients)
+                    ? raw.unvalid_ingredients
+                    : [],
+            };
+        },
+        supportsSchemaFallback: false,
+        supportsActions: true,
+        defaultChildType: "recipe",
+    },
+
+    {
         id: "recipe",
         label: "Recipe",
         component: defineAsyncComponent(
@@ -96,39 +130,6 @@ const registry = [
                     : 0,
                 freezable: !!raw.freezable,
                 pre_cook_servings: raw.pre_cook_servings || "",
-            };
-        },
-        supportsSchemaFallback: false,
-        supportsActions: true,
-    },
-
-    {
-        id: "recipe_overview",
-        label: "Recipe Overview",
-        component: defineAsyncComponent(
-            () => import("./recipe_overview/RecipeOverviewNoteType.vue"),
-        ),
-        emptyCustomData: () => ({
-            recipes: [],
-            grocery_lists: [],
-            unvalid_ingredients: [],
-        }),
-        normalizeCustomData(raw, _note) {
-            if (!raw || typeof raw !== "object") {
-                return {
-                    recipes: [],
-                    grocery_lists: [],
-                    unvalid_ingredients: [],
-                };
-            }
-            return {
-                recipes: Array.isArray(raw.recipes) ? raw.recipes : [],
-                grocery_lists: Array.isArray(raw.grocery_lists)
-                    ? raw.grocery_lists
-                    : [],
-                unvalid_ingredients: Array.isArray(raw.unvalid_ingredients)
-                    ? raw.unvalid_ingredients
-                    : [],
             };
         },
         supportsSchemaFallback: false,
@@ -275,6 +276,7 @@ const registry = [
         },
         supportsSchemaFallback: false,
         supportsActions: true,
+        defaultChildType: "task",
     },
 
     {
@@ -403,6 +405,15 @@ export function getNoteTypeOrDefault(id) {
  */
 export function getTypeOptions() {
     return registry.map((t) => ({ value: t.id, label: t.label }));
+}
+
+/**
+ * Get the default child type for a given parent note type.
+ * Returns the parent's defaultChildType if configured, otherwise "standard".
+ */
+export function getDefaultChildType(parentTypeId) {
+    const entry = getNoteType(parentTypeId);
+    return (entry && entry.defaultChildType) || "standard";
 }
 
 /**
