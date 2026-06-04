@@ -1,0 +1,15 @@
+.git
+.gitignore
+.claude
+.sisyphus
+.zed
+__pycache__/
+.media/
+bin/
+tmp/
+frontend/node_modules/
+FrontEndDist/
+mentis.db
+*.db-shm
+*.db-wal
+*.log

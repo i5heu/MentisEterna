@@ -12,3 +12,10 @@ start.sh
 /server
 /restore
 connect_printer.sh
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.prod
+mentis-data/
