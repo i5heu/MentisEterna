@@ -592,7 +592,22 @@
                     </div>
 
                     <!-- Children loading / empty state -->
-                    <div v-if="childrenLoading" class="chat-status">
+                    <div
+                        v-if="
+                            !childrenLoaded &&
+                            isLazyChildren(selected?.type) &&
+                            selected.id
+                        "
+                        class="chat-status"
+                    >
+                        <button
+                            class="btn-ghost btn-sm"
+                            @click="loadChildren(selected.id)"
+                        >
+                            📋 Load children
+                        </button>
+                    </div>
+                    <div v-else-if="childrenLoading" class="chat-status">
                         Loading replies…
                     </div>
                     <div
@@ -901,7 +916,21 @@
                     </div>
                 </div>
 
-                <div v-if="threadChildrenLoading" class="chat-status">
+                <div
+                    v-if="
+                        !threadChildrenLoaded &&
+                        isLazyChildren(threadNote?.type)
+                    "
+                    class="chat-status"
+                >
+                    <button
+                        class="btn-ghost btn-sm"
+                        @click="loadThreadChildren"
+                    >
+                        📋 Load children
+                    </button>
+                </div>
+                <div v-else-if="threadChildrenLoading" class="chat-status">
                     Loading replies…
                 </div>
                 <div
@@ -1129,6 +1158,7 @@ import {
     getTypeOptions,
     getNoteTypeOrDefault,
     getDefaultChildType,
+    isLazyChildren,
     fetchAndMergeManifests,
 } from "../note-types/registry.js";
 import {
@@ -1232,11 +1262,13 @@ function getLinkSearchContext(target = linkSearchTarget.value) {
 // Children state
 const children = ref([]);
 const childrenLoading = ref(false);
+const childrenLoaded = ref(false);
 
 // Thread sidebar state
 const threadNote = ref(null); // the note whose thread is shown in the right sidebar
 const threadChildren = ref([]);
 const threadChildrenLoading = ref(false);
+const threadChildrenLoaded = ref(false);
 const threadAncestors = ref([]);
 const threadReplyTitle = ref("");
 const threadReplyBody = ref("");
@@ -1676,7 +1708,13 @@ async function selectNote(
     history.value = [];
     isEditing.value = false;
     highlightedIndex.value = rootNotes.value.indexOf(note);
-    loadChildren(note.id);
+    const noteTypeVal = noteType.value || "standard";
+    if (isLazyChildren(noteTypeVal)) {
+        children.value = [];
+        childrenLoaded.value = false;
+    } else {
+        loadChildren(note.id);
+    }
     populateParentSearch(note);
     await loadAncestors(note.id);
     if (updateURL) {
@@ -1726,7 +1764,13 @@ async function selectSearchResult(
     history.value = [];
     isEditing.value = false;
     highlightedIndex.value = searchResults.value.indexOf(sr);
-    loadChildren(sr.id);
+    const noteTypeVal = noteType.value || "standard";
+    if (isLazyChildren(noteTypeVal)) {
+        children.value = [];
+        childrenLoaded.value = false;
+    } else {
+        loadChildren(sr.id);
+    }
     populateParentSearch(selected.value);
     await loadAncestors(sr.id);
     if (updateURL) {
@@ -1776,6 +1820,7 @@ function newNote(
     history.value = [];
     highlightedIndex.value = -1;
     children.value = [];
+    childrenLoaded.value = false;
     parentSearch.value = "";
     ancestors.value = [];
     isEditing.value = true;
@@ -1838,6 +1883,7 @@ async function toggleHistory() {
 async function loadChildren(noteId) {
     if (!noteId) {
         children.value = [];
+        childrenLoaded.value = false;
         return;
     }
     childrenLoading.value = true;
@@ -1847,6 +1893,23 @@ async function loadChildren(noteId) {
         children.value = [];
     } finally {
         childrenLoading.value = false;
+        childrenLoaded.value = true;
+    }
+}
+
+async function loadThreadChildren() {
+    if (!threadNote.value?.id) return;
+    threadChildrenLoading.value = true;
+    try {
+        threadChildren.value = await fetchChildren(
+            props.token,
+            threadNote.value.id,
+        );
+    } catch {
+        threadChildren.value = [];
+    } finally {
+        threadChildrenLoading.value = false;
+        threadChildrenLoaded.value = true;
     }
 }
 
@@ -1952,14 +2015,20 @@ async function openThreadSidebar(note, { updateURL = true } = {}) {
     }
     threadReplyTitle.value = "";
     threadReplyBody.value = "";
-    // Load children of the thread note
-    threadChildrenLoading.value = true;
-    try {
-        threadChildren.value = await fetchChildren(props.token, note.id);
-    } catch {
+    const noteTypeVal = threadNote.value?.type || "standard";
+    if (isLazyChildren(noteTypeVal)) {
         threadChildren.value = [];
-    } finally {
-        threadChildrenLoading.value = false;
+        threadChildrenLoaded.value = false;
+    } else {
+        threadChildrenLoading.value = true;
+        try {
+            threadChildren.value = await fetchChildren(props.token, note.id);
+        } catch {
+            threadChildren.value = [];
+        } finally {
+            threadChildrenLoading.value = false;
+            threadChildrenLoaded.value = true;
+        }
     }
     // Load ancestors for breadcrumb
     try {
@@ -1997,6 +2066,7 @@ async function sendThreadReply() {
         );
         // Reload the note list so sort order is correct.
         await loadNotes();
+        threadChildrenLoaded.value = true;
         threadChildren.value.push(child);
         threadReplyTitle.value = "";
         threadReplyBody.value = "";
@@ -2289,6 +2359,8 @@ async function sendReply() {
         );
         // Reload the note list so sort order is correct.
         await loadNotes();
+        // Mark children as loaded so the reply appears.
+        childrenLoaded.value = true;
         // Append to children so it appears in the chat feed
         children.value.push(child);
         newReplyTitle.value = "";

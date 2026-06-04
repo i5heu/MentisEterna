@@ -168,8 +168,17 @@ Emits:
     emptyCustomData: () => ({ ... }),          // default payload for new notes
     normalizeCustomData(raw, note) { ... },    // normalize server payload
     supportsSchemaFallback: false,             // use SchemaNoteType if no component
+    defaultChildType: "task",                  // (optional) type to pre-select when adding a child
+    lazyChildren: false,                       // (optional) show "Load children" button instead of auto-loading
 }
 ```
+
+**Optional fields:**
+
+| Field | Default | Purpose |
+|---|---|---|
+| `defaultChildType` | none (→ `"standard"`) | When a child note is created under this type, the child's type picker defaults to this value. Useful for overviews (e.g. `task_overview` → `"task"`, `recipe_overview` → `"recipe"`). |
+| `lazyChildren` | `false` | When `true`, children are not auto-fetched on note selection. A "📋 Load children" button is shown instead. Use for overview/dashboard types where the children list isn't the primary interaction. |
 
 ### How `NoteTypeRenderer.vue` resolves rendering
 

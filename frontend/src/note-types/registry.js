@@ -9,6 +9,19 @@
  * merged into the local registry entries to provide editor mode, viewer
  * mode, actions metadata, and default_config.  Call fetchAndMergeManifests()
  * after login to synchronize with the server.
+ *
+ * Optional per-type flags:
+ *
+ *   defaultChildType: "typeId"  — child notes created under this type
+ *                                  will default to the given type (e.g.
+ *                                  task_overview → "task"). Omitting this
+ *                                  falls back to "standard".
+ *
+ *   lazyChildren: true           — children are not auto-fetched when this
+ *                                  note is selected. A "Load children"
+ *                                  button is shown instead. Use for
+ *                                  dashboard/overview types where the
+ *                                  children list is secondary.
  */
 
 import { defineAsyncComponent } from "vue";
@@ -66,6 +79,7 @@ const registry = [
         supportsSchemaFallback: false,
         supportsActions: true,
         defaultChildType: "recipe",
+        lazyChildren: true,
     },
 
     {
@@ -277,6 +291,7 @@ const registry = [
         supportsSchemaFallback: false,
         supportsActions: true,
         defaultChildType: "task",
+        lazyChildren: true,
     },
 
     {
@@ -414,6 +429,15 @@ export function getTypeOptions() {
 export function getDefaultChildType(parentTypeId) {
     const entry = getNoteType(parentTypeId);
     return (entry && entry.defaultChildType) || "standard";
+}
+
+/**
+ * Returns true if the note type uses lazy (on-demand) child loading.
+ * Override cards like task/review overviews don't need children eagerly.
+ */
+export function isLazyChildren(typeId) {
+    const entry = getNoteType(typeId);
+    return !!(entry && entry.lazyChildren);
 }
 
 /**
