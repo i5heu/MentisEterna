@@ -1,5 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, unref } from "vue";
 
+const RESERVED_HINT_KEYS = new Set(["C", "F"]);
+
 function getPlatform() {
     return navigator.platform || navigator.userAgentData?.platform || "";
 }
@@ -129,6 +131,9 @@ function normalizeShortcutDefinition(definition, index) {
         : definition.key
           ? [definition.key]
           : [];
+    const normalizedHintKey = definition.hintKey
+        ? normalizeKeyName(definition.hintKey)
+        : "";
 
     return {
         id: definition.id || `shortcut-${index}`,
@@ -137,7 +142,9 @@ function normalizeShortcutDefinition(definition, index) {
         group: definition.group || "General",
         keys: keyList,
         parsedKeys: keyList.map(parseShortcutCombo),
-        hintKey: definition.hintKey ? normalizeKeyName(definition.hintKey) : "",
+        hintKey: RESERVED_HINT_KEYS.has(normalizedHintKey)
+            ? ""
+            : normalizedHintKey,
         includeInHelp: definition.includeInHelp !== false,
         preventDefault: definition.preventDefault !== false,
         allowInInput: Boolean(definition.allowInInput),
@@ -199,6 +206,7 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
                               .join(" / ")
                         : "",
                 ]);
+                if (badges.length === 0) return null;
                 return {
                     id: shortcut.id,
                     description: shortcut.description,
@@ -206,7 +214,8 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
                     group: shortcut.group,
                     enabled: shortcut.enabled,
                 };
-            }),
+            })
+            .filter(Boolean),
     );
 
     function findShortcut(id) {
@@ -290,26 +299,29 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
         const active = document.activeElement;
         const activeIsEditable = isEditableElement(active);
 
-        if (
-            activeIsEditable &&
-            event.key === "Escape" &&
-            !event.ctrlKey &&
-            !event.altKey &&
-            !event.metaKey
-        ) {
-            event.preventDefault();
-            active?.blur?.();
-        } else if (activeIsEditable) {
+        if (activeIsEditable) {
             hideHintOverlay();
-            // When focus is in an editable element, still allow direct key-combo
-            // shortcuts (like Ctrl+S) that explicitly opt in via allowInInput.
-            // Hint-based shortcuts (hold Ctrl, press key) are blocked in this mode.
-            if (event.ctrlKey || event.metaKey) {
-                const directShortcut = findDirectShortcut(event);
-                if (directShortcut && canRunShortcut(directShortcut)) {
-                    event.preventDefault();
-                    runShortcut(directShortcut, event, "direct");
-                }
+            const directShortcut = findDirectShortcut(event);
+            const normalizedKey = normalizeKeyName(event.key);
+
+            if (
+                directShortcut &&
+                canRunShortcut(directShortcut) &&
+                (event.ctrlKey || event.metaKey || normalizedKey === "Escape")
+            ) {
+                event.preventDefault();
+                runShortcut(directShortcut, event, "direct");
+                return;
+            }
+
+            if (
+                normalizedKey === "Escape" &&
+                !event.ctrlKey &&
+                !event.altKey &&
+                !event.metaKey
+            ) {
+                event.preventDefault();
+                active?.blur?.();
             }
             return;
         }
@@ -328,14 +340,21 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
             !event.altKey &&
             !event.metaKey
         ) {
+            const normalizedKey = normalizeKeyName(event.key);
+            const hintedShortcut = shortcuts.value.find(
+                (shortcut) =>
+                    shortcut.hintKey && normalizedKey === shortcut.hintKey,
+            );
+            const directShortcut = findDirectShortcut(event);
+
+            if (!hintedShortcut && !directShortcut) {
+                hideHintOverlay();
+                return;
+            }
+
             event.preventDefault();
             event.stopPropagation();
 
-            const hintedShortcut = shortcuts.value.find(
-                (shortcut) =>
-                    shortcut.hintKey &&
-                    normalizeKeyName(event.key) === shortcut.hintKey,
-            );
             if (hintedShortcut) {
                 const didRun = runShortcut(hintedShortcut, event, "hint");
                 if (didRun) {
@@ -344,10 +363,7 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
                 return;
             }
 
-            const directShortcut = findDirectShortcut(event);
-            if (directShortcut) {
-                runShortcut(directShortcut, event, "direct");
-            }
+            runShortcut(directShortcut, event, "direct");
             return;
         }
 

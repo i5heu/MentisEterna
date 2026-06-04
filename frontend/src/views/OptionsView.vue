@@ -702,7 +702,7 @@ const shortcutDefinitions = computed(() => [
     {
         id: "recalculate-recipe-categories",
         description: "Recalculate all recipe ingredient categories",
-        hintKey: "C",
+        hintKey: "G",
         allowInInput: true,
         enabled: () => !recalculatingRecipeCategories.value,
         handler: () => recalculateRecipeCategories(),
