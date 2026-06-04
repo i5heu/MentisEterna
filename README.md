@@ -66,10 +66,24 @@ Build and run with Docker Compose:
 
 ```bash
 # .env is loaded automatically by Docker Compose
-# Edit it as needed
+# Edit it as needed, especially:
+#   PROXY_BASIC_AUTH_USERNAME
+#   PROXY_BASIC_AUTH_PASSWORD
 
 docker compose up --build
 ```
+
+The published port belongs to a small Caddy reverse proxy that requires a
+username + password *once*. On first successful authentication it sets a
+long-lived `auth_token` session cookie so every subsequent request (even
+across browser restarts) bypasses the password prompt entirely.
+
+You still see a password prompt again when:
+- you clear browser cookies, or
+- you change `PROXY_BASIC_AUTH_USERNAME` / `PROXY_BASIC_AUTH_PASSWORD`.
+
+If you expose the app beyond a trusted local network, put TLS/HTTPS in front
+of it as well.
 
 On first startup with an empty data volume, create the database explicitly:
 
