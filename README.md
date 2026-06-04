@@ -60,6 +60,21 @@ export BACKUP_ENCRYPTION_KEY="your-encryption-key"  # Encryption key for backups
 
 Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
+## Docker Compose
+
+Build and run with Docker Compose:
+
+```bash
+# .env is loaded automatically by Docker Compose
+# Edit it as needed
+
+docker compose up --build
+```
+
+The Compose setup stores the SQLite database and media cache in the named volume `mentis-data` mounted at `/data` inside the container.
+
+If you want AI features to work from inside the container, set `LOCALAI_BASE_URL` in `.env` to a reachable endpoint for your LocalAI instance.
+
 **Models**:  
 `hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M`  
 `hf.co/ggml-org/GLM-OCR-GGUF:Q8_0`

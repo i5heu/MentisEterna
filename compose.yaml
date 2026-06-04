@@ -1,0 +1,33 @@
+services:
+    mentis:
+        build:
+            context: .
+        image: mentisetterna:latest
+        container_name: mentisetterna
+        restart: unless-stopped
+        ports:
+            - "${MENTIS_PORT:-8080}:8080"
+        environment:
+            ADDR: ":8080"
+            DB_PATH: "${DB_PATH:-/data/mentis.db}"
+            VEC_EXT_PATH: "${VEC_EXT_PATH:-/app/lib}"
+            MEDIA_CACHE_DIR: "${MEDIA_CACHE_DIR:-/data/media-cache}"
+            JOB_WORKERS: "${JOB_WORKERS:-10}"
+            RECIPE_CATEGORY_WORKERS: "${RECIPE_CATEGORY_WORKERS:-10}"
+            LOCALAI_BASE_URL: "${LOCALAI_BASE_URL:-}"
+            LOCALAI_EMBEDDING_MODEL: "${LOCALAI_EMBEDDING_MODEL:-}"
+            LOCALAI_CHAT_MODEL: "${LOCALAI_CHAT_MODEL:-}"
+            LOCALAI_OCR_MODEL: "${LOCALAI_OCR_MODEL:-}"
+            LOCALAI_STT_MODEL: "${LOCALAI_STT_MODEL:-}"
+            MEDIA_S3_ENDPOINTS: "${MEDIA_S3_ENDPOINTS:-}"
+            BACKUP_ENCRYPTION_KEY: "${BACKUP_ENCRYPTION_KEY:-}"
+            THERMAL_PRINTER_USB_ID: "${THERMAL_PRINTER_USB_ID:-}"
+            THERMAL_PRINTER_WRITE_CHUNK_BYTES: "${THERMAL_PRINTER_WRITE_CHUNK_BYTES:-}"
+            THERMAL_PRINTER_WRITE_DELAY_MS: "${THERMAL_PRINTER_WRITE_DELAY_MS:-}"
+        volumes:
+            - mentis-data:/data
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+
+volumes:
+    mentis-data:
