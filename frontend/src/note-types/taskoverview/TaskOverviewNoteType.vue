@@ -103,94 +103,104 @@
             </div>
         </div>
 
-        <!-- All Tasks with Filters -->
+        <!-- All Tasks with Filters (collapsible) -->
         <div class="section">
-            <h4>📋 All Tasks</h4>
-            <div class="filters">
-                <select v-model="filterStatus" class="filter-select">
-                    <option value="">All Statuses</option>
-                    <option value="todo">To Do</option>
-                    <option value="in_progress">In Progress</option>
-                    <option value="done">Done</option>
-                </select>
-                <input
-                    v-model="filterText"
-                    type="text"
-                    placeholder="Filter by title..."
-                    class="filter-text"
-                />
-                <label class="sort-label">
-                    Sort:
-                    <select v-model="sortBy" class="filter-select filter-sort">
-                        <option value="priority">Priority</option>
-                        <option value="due_date">Due Date</option>
-                        <option value="difficulty">Difficulty</option>
-                        <option value="fun">Fun</option>
-                        <option value="title">Title</option>
+            <h4 class="collapsible-header" @click="tasksOpen = !tasksOpen">
+                <span class="collapse-arrow">{{ tasksOpen ? "▼" : "▶" }}</span>
+                📋 All Tasks ({{ filteredTasks.length }})
+            </h4>
+            <div v-if="tasksOpen">
+                <div class="filters">
+                    <select v-model="filterStatus" class="filter-select">
+                        <option value="">All Statuses</option>
+                        <option value="todo">To Do</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="done">Done</option>
                     </select>
-                </label>
-            </div>
-            <div v-if="filteredTasks.length === 0" class="empty-hint">
-                No tasks match your filters.
-            </div>
-            <div v-else class="task-list">
-                <div
-                    v-for="t in filteredTasks"
-                    :key="t.note_id"
-                    class="task-row"
-                    @click="$emit('selectNote', t.note_id)"
-                >
-                    <span :class="'status-dot status-' + t.status"></span>
-                    <span class="task-row-title">{{
-                        t.title || "Untitled"
-                    }}</span>
-                    <span class="task-row-meta">
-                        <span>P{{ t.priority }}</span>
-                        <span>D{{ t.difficulty }}</span>
-                        <span
-                            :class="
-                                t.fun > 0
-                                    ? 'fun-positive'
-                                    : t.fun < 0
-                                      ? 'fun-negative'
-                                      : 'fun-neutral'
-                            "
+                    <input
+                        v-model="filterText"
+                        type="text"
+                        placeholder="Filter by title..."
+                        class="filter-text"
+                    />
+                    <label class="sort-label">
+                        Sort:
+                        <select
+                            v-model="sortBy"
+                            class="filter-select filter-sort"
                         >
-                            F{{ t.fun > 0 ? "+" : "" }}{{ t.fun }}
+                            <option value="priority">Priority</option>
+                            <option value="due_date">Due Date</option>
+                            <option value="difficulty">Difficulty</option>
+                            <option value="fun">Fun</option>
+                            <option value="title">Title</option>
+                        </select>
+                    </label>
+                </div>
+                <div v-if="filteredTasks.length === 0" class="empty-hint">
+                    No tasks match your filters.
+                </div>
+                <div v-else class="task-list">
+                    <div
+                        v-for="t in filteredTasks"
+                        :key="t.note_id"
+                        class="task-row"
+                        @click="$emit('selectNote', t.note_id)"
+                    >
+                        <span :class="'status-dot status-' + t.status"></span>
+                        <span class="task-row-title">{{
+                            t.title || "Untitled"
+                        }}</span>
+                        <span class="task-row-meta">
+                            <span>P{{ t.priority }}</span>
+                            <span>D{{ t.difficulty }}</span>
+                            <span
+                                :class="
+                                    t.fun > 0
+                                        ? 'fun-positive'
+                                        : t.fun < 0
+                                          ? 'fun-negative'
+                                          : 'fun-neutral'
+                                "
+                            >
+                                F{{ t.fun > 0 ? "+" : "" }}{{ t.fun }}
+                            </span>
+                            <span v-if="t.due_date" class="task-row-due"
+                                >📅 {{ t.due_date }}</span
+                            >
+                            <span v-if="t.time_estimation"
+                                >⏱ {{ t.time_estimation }}</span
+                            >
                         </span>
-                        <span v-if="t.due_date" class="task-row-due"
-                            >📅 {{ t.due_date }}</span
+                        <span
+                            v-if="t.recurring !== 'none'"
+                            class="recurring-badge"
+                            >🔄 {{ t.recurring }}</span
                         >
-                        <span v-if="t.time_estimation"
-                            >⏱ {{ t.time_estimation }}</span
+                        <span
+                            v-if="t.status !== 'done'"
+                            class="overview-quick-actions"
                         >
-                    </span>
-                    <span v-if="t.recurring !== 'none'" class="recurring-badge"
-                        >🔄 {{ t.recurring }}</span
-                    >
-                    <span
-                        v-if="t.status !== 'done'"
-                        class="overview-quick-actions"
-                    >
-                        <button
-                            class="btn-ghost btn-sm overview-action-btn"
-                            :disabled="statusLoading[t.note_id]"
-                            @click.stop="
-                                quickSetStatus(t.note_id, 'in_progress')
-                            "
-                            title="Set Doing"
-                        >
-                            ▶
-                        </button>
-                        <button
-                            class="btn-ghost btn-sm overview-action-btn"
-                            :disabled="statusLoading[t.note_id]"
-                            @click.stop="quickSetStatus(t.note_id, 'done')"
-                            title="Set Done"
-                        >
-                            ✓
-                        </button>
-                    </span>
+                            <button
+                                class="btn-ghost btn-sm overview-action-btn"
+                                :disabled="statusLoading[t.note_id]"
+                                @click.stop="
+                                    quickSetStatus(t.note_id, 'in_progress')
+                                "
+                                title="Set Doing"
+                            >
+                                ▶
+                            </button>
+                            <button
+                                class="btn-ghost btn-sm overview-action-btn"
+                                :disabled="statusLoading[t.note_id]"
+                                @click.stop="quickSetStatus(t.note_id, 'done')"
+                                title="Set Done"
+                            >
+                                ✓
+                            </button>
+                        </span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -333,6 +343,9 @@ const filteredTasks = computed(() => {
 
 // Daily tasks
 const dailyTasks = computed(() => viewData.value.daily_tasks || []);
+
+// Collapse state
+const tasksOpen = ref(false);
 
 // Daily history
 const dailyHistory = computed(() => viewData.value.daily_history || []);
