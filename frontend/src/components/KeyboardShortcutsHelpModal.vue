@@ -34,7 +34,7 @@ const props = defineProps({
     subtitle: {
         type: String,
         default:
-            "Hold Ctrl and press the shown key. After 2 seconds, normal browser Ctrl shortcuts resume.",
+            "Hold Ctrl and press the shown key. Common browser shortcuts like Ctrl+C and Ctrl+F always stay native.",
     },
     items: {
         type: Array,

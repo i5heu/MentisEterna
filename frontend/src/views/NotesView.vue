@@ -1240,6 +1240,10 @@ const threadAncestors = ref([]);
 const threadReplyTitle = ref("");
 const threadReplyBody = ref("");
 const threadSendingReply = ref(false);
+const DOUBLE_CONTROL_OPEN_MS = 350;
+let threadSidebarCtrlTapArmed = false;
+let lastThreadSidebarCtrlTapAt = 0;
+let threadSidebarCtrlChordUsed = false;
 
 // Reply composer state
 const newReplyTitle = ref("");
@@ -1368,7 +1372,7 @@ const shortcutDefinitions = computed(() => [
     {
         id: "focus-search",
         description: "Focus the search bar",
-        hintKey: "F",
+        hintKey: "/",
         keys: ["Mod+K"],
         allowInInput: true,
         handler: () => focusSearchInput(),
@@ -1405,7 +1409,7 @@ const shortcutDefinitions = computed(() => [
     {
         id: "new-child-note",
         description: "Create a child note",
-        hintKey: "C",
+        hintKey: "J",
         allowInInput: true,
         enabled: () => Boolean(selected.value?.id),
         handler: () => newChildNote(),
@@ -1576,6 +1580,7 @@ const {
     getHintLabel,
     getShortcutLabel,
     isShortcutEnabled,
+    hideHintOverlay,
 } = useKeyboardShortcuts(shortcutDefinitions);
 
 // Edit / View toggle
@@ -2009,6 +2014,63 @@ async function sendThreadReply() {
 function selectThreadChild(child) {
     // Open the child's thread in the sidebar (drill down)
     openThreadSidebar(child);
+}
+
+function resetThreadSidebarCtrlTapState() {
+    threadSidebarCtrlTapArmed = false;
+    lastThreadSidebarCtrlTapAt = 0;
+    threadSidebarCtrlChordUsed = false;
+}
+
+function onThreadSidebarCtrlKeyDown(event) {
+    if (event.key === "Control") {
+        if (
+            event.repeat ||
+            event.altKey ||
+            event.metaKey ||
+            event.shiftKey ||
+            !threadNote.value
+        ) {
+            return;
+        }
+
+        const now = Date.now();
+        if (
+            threadSidebarCtrlTapArmed &&
+            now - lastThreadSidebarCtrlTapAt <= DOUBLE_CONTROL_OPEN_MS
+        ) {
+            hideHintOverlay();
+            resetThreadSidebarCtrlTapState();
+            selectNote(threadNote.value);
+        }
+        return;
+    }
+
+    if (event.ctrlKey) {
+        resetThreadSidebarCtrlTapState();
+        threadSidebarCtrlChordUsed = true;
+    }
+}
+
+function onThreadSidebarCtrlKeyUp(event) {
+    if (event.key !== "Control") return;
+    if (
+        event.altKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        !threadNote.value ||
+        threadSidebarCtrlChordUsed
+    ) {
+        resetThreadSidebarCtrlTapState();
+        return;
+    }
+
+    threadSidebarCtrlTapArmed = true;
+    lastThreadSidebarCtrlTapAt = Date.now();
+}
+
+function onThreadSidebarCtrlBlur() {
+    resetThreadSidebarCtrlTapState();
 }
 
 // --- Tag functions ---
@@ -2518,6 +2580,10 @@ function handleEscapeShortcut(event) {
         showHistory.value = false;
         return;
     }
+    if (threadNote.value) {
+        closeThreadSidebar();
+        return;
+    }
 
     const active = document.activeElement;
     const inSearch = active?.classList.contains("search-input");
@@ -2622,6 +2688,9 @@ onMounted(() => {
     window.addEventListener("click", onClickOutside);
     window.addEventListener("popstate", onPopstate);
     window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("keydown", onThreadSidebarCtrlKeyDown, true);
+    window.addEventListener("keyup", onThreadSidebarCtrlKeyUp, true);
+    window.addEventListener("blur", onThreadSidebarCtrlBlur);
     // Restore state from URL on initial load
     loadFromURL();
 });
@@ -2630,6 +2699,9 @@ onUnmounted(() => {
     window.removeEventListener("click", onClickOutside);
     window.removeEventListener("popstate", onPopstate);
     window.removeEventListener("beforeunload", onBeforeUnload);
+    window.removeEventListener("keydown", onThreadSidebarCtrlKeyDown, true);
+    window.removeEventListener("keyup", onThreadSidebarCtrlKeyUp, true);
+    window.removeEventListener("blur", onThreadSidebarCtrlBlur);
 });
 
 function onClickOutside(e) {
