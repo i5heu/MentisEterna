@@ -250,16 +250,25 @@ const registry = [
         emptyCustomData: () => ({
             tasks: [],
             daily_tasks: [],
+            daily_history: [],
             stats: {},
         }),
         normalizeCustomData(raw, _note) {
             if (!raw || typeof raw !== "object") {
-                return { tasks: [], daily_tasks: [], stats: {} };
+                return {
+                    tasks: [],
+                    daily_tasks: [],
+                    daily_history: [],
+                    stats: {},
+                };
             }
             return {
                 tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
                 daily_tasks: Array.isArray(raw.daily_tasks)
                     ? raw.daily_tasks
+                    : [],
+                daily_history: Array.isArray(raw.daily_history)
+                    ? raw.daily_history
                     : [],
                 stats: raw.stats || {},
             };
