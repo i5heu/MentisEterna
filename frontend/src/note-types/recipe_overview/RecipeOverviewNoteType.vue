@@ -70,7 +70,16 @@
 
         <!-- Recipe selection list -->
         <div class="recipe-selection-section">
-            <h4>Select Recipes</h4>
+            <div class="recipe-selection-header">
+                <h4>Select Recipes ({{ selectedRecipeIds.length }})</h4>
+                <button
+                    v-if="selectedRecipeIds.length > 0"
+                    class="btn-ghost btn-sm"
+                    @click="selectedRecipeIds = []"
+                >
+                    Deselect All
+                </button>
+            </div>
             <p v-if="!selectableRecipes.length" class="empty-hint">
                 No recipe notes found. Create notes with type "recipe" first.
             </p>
@@ -1795,9 +1804,15 @@ function viewRecipeFromModal(recipeNoteId) {
     margin-bottom: 0.75rem;
 }
 
-.recipe-selection-section h4 {
-    font-size: 0.95rem;
+.recipe-selection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     margin-bottom: 0.4rem;
+}
+.recipe-selection-header h4 {
+    font-size: 0.95rem;
+    margin-bottom: 0;
     color: var(--font-color-secondary);
 }
 
