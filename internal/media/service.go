@@ -773,3 +773,77 @@ func sniffMIME(data []byte) string {
 func jsonUnmarshal(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
+
+// DeleteUnknownS3FilesResult is returned by DeleteUnknownS3Files.
+type DeleteUnknownS3FilesResult struct {
+	Deleted    int                    `json:"deleted"`
+	Errors     []string               `json:"errors,omitempty"`
+	ByEndpoint []EndpointDeleteResult `json:"by_endpoint"`
+}
+
+// EndpointDeleteResult reports per-endpoint delete counts.
+type EndpointDeleteResult struct {
+	Endpoint string `json:"endpoint"`
+	Deleted  int    `json:"deleted"`
+	Error    string `json:"error,omitempty"`
+}
+
+// DeleteUnknownS3Files lists all objects under files/ on each configured
+// endpoint, compares them against the active storage_key values in the DB,
+// and permanently deletes objects no longer referenced. Deleted objects are
+// logged and cannot be recovered.
+func (s *Service) DeleteUnknownS3Files(ctx context.Context) (*DeleteUnknownS3FilesResult, error) {
+	// Collect known storage keys (active files not soft-deleted).
+	rows, err := s.DB.Query(`SELECT storage_key FROM files WHERE deleted_at IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("query known files: %w", err)
+	}
+	known := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan known file: %w", err)
+		}
+		known[k] = true
+	}
+	rows.Close()
+
+	var totalDeleted int
+	var allErrors []string
+	result := &DeleteUnknownS3FilesResult{}
+
+	for _, ep := range s.Config.Endpoints {
+		epResult := EndpointDeleteResult{Endpoint: ep.ID}
+
+		keys, err := s.Store.List(ctx, ep, "files/")
+		if err != nil {
+			epResult.Error = err.Error()
+			result.ByEndpoint = append(result.ByEndpoint, epResult)
+			allErrors = append(allErrors, fmt.Sprintf("%s: list error: %v", ep.ID, err))
+			continue
+		}
+
+		for _, key := range keys {
+			if known[key] {
+				continue
+			}
+			if err := s.Store.Delete(ctx, ep, key); err != nil {
+				allErrors = append(allErrors, fmt.Sprintf("%s: delete %s: %v", ep.ID, key, err))
+				continue
+			}
+			epResult.Deleted++
+			totalDeleted++
+			log.Printf("media/cleanup: deleted unknown S3 object %s from %s", key, ep.ID)
+		}
+
+		result.ByEndpoint = append(result.ByEndpoint, epResult)
+	}
+
+	result.Deleted = totalDeleted
+	if len(allErrors) > 0 {
+		result.Errors = allErrors
+	}
+
+	return result, nil
+}

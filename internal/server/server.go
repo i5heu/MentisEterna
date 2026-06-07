@@ -345,6 +345,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/maintenance/reindex-ocr", s.handleReindexOCR)
 	mux.HandleFunc("/maintenance/reindex-stt", s.handleReindexSTT)
 	mux.HandleFunc("/maintenance/recalculate-recipe-categories", s.handleRecalculateRecipeIngredientCategories)
+	mux.HandleFunc("/maintenance/delete-unknown-s3-files", s.handleDeleteUnknownS3Files)
 
 	// System status endpoints
 	mux.HandleFunc("/system/printer-status", s.handlePrinterStatus)
@@ -863,4 +864,25 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func writeErr(w http.ResponseWriter, err error) {
 	log.Printf("error: %v", err)
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+// handleDeleteUnknownS3Files lists all objects under files/ on each configured
+// S3 endpoint, compares them against the active storage_key values in the DB,
+// and deletes any objects that are no longer referenced.
+func (s *Server) handleDeleteUnknownS3Files(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mediaService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media not enabled. Set MEDIA_CACHE_DIR and MEDIA_S3_ENDPOINTS."})
+		return
+	}
+
+	result, err := s.mediaService.DeleteUnknownS3Files(context.Background())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }

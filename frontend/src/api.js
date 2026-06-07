@@ -330,6 +330,13 @@ export async function recalculateRecipeCategories(token) {
     });
 }
 
+export async function deleteUnknownS3Files(token) {
+    return request("/maintenance/delete-unknown-s3-files", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 /**
  * Begin passkey login (discoverable / usernameless).
  */

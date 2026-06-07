@@ -112,7 +112,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] VSS shows no connection in the API test, but this should be integrated in SQLite via the `vss` extension and not be a separate service.
 - [x] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 - [x] Go test bug "no usblp device nodes found at [/dev/usb/lp0 /dev/usb/lp1 /dev/usb/lp2]"
-- [ ] On S3: files that are not in our file list but present in the bucket should be deleted with a button in settings: "Delete Unknown Files"
+- [x] On S3: files that are not in our file list but present in the bucket should be deleted with a button in settings: "Delete Unknown Files"
 - [x] Backups must contain media files from S3.
 - [x] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
 - [x] Grocery List needs to round to 2 decimal places.

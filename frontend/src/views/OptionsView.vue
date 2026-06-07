@@ -534,6 +534,81 @@
                 </div>
             </section>
 
+            <!-- Section: Remove Orphaned S3 Objects -->
+            <section class="options-section">
+                <h2 class="section-title">Remove Orphaned S3 Objects</h2>
+                <p class="section-desc">
+                    Delete S3 objects under <code>files/</code> that are no
+                    longer referenced by the database. This frees storage
+                    without affecting any notes or attachments.
+                </p>
+                <button
+                    class="btn-danger btn-sm shortcut-anchor"
+                    :title="getShortcutLabel('delete-unknown-s3')"
+                    :disabled="deletingUnknownS3"
+                    @click="deleteUnknownS3"
+                >
+                    {{
+                        deletingUnknownS3
+                            ? "Scanning…"
+                            : "Delete Unknown S3 Files"
+                    }}
+                    <ShortcutHint
+                        v-if="
+                            shortcutHintsVisible &&
+                            isShortcutEnabled('delete-unknown-s3')
+                        "
+                        :label="getHintLabel('delete-unknown-s3')"
+                    />
+                </button>
+                <div v-if="deleteUnknownS3Result" class="status-block">
+                    <div class="status-row">
+                        <span class="status-label">Total deleted</span>
+                        <code class="status-value">{{
+                            deleteUnknownS3Result.deleted
+                        }}</code>
+                    </div>
+                    <div
+                        v-for="ep in deleteUnknownS3Result.by_endpoint"
+                        :key="ep.endpoint"
+                        class="status-row"
+                    >
+                        <span class="status-label">{{ ep.endpoint }}</span>
+                        <span
+                            class="status-badge"
+                            :class="ep.error ? 'status-err' : 'status-ok'"
+                        >
+                            {{ ep.error ? "Error" : ep.deleted + " deleted" }}
+                        </span>
+                        <span
+                            v-if="ep.error"
+                            class="status-msg status-err-msg"
+                            >{{ ep.error }}</span
+                        >
+                    </div>
+                    <div
+                        v-if="
+                            deleteUnknownS3Result.errors &&
+                            deleteUnknownS3Result.errors.length
+                        "
+                        class="status-row"
+                    >
+                        <span class="status-label">Errors</span>
+                        <ul class="error-list">
+                            <li
+                                v-for="(e, i) in deleteUnknownS3Result.errors"
+                                :key="i"
+                            >
+                                <code>{{ e }}</code>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                <p v-if="deleteUnknownS3Err" class="msg-error">
+                    {{ deleteUnknownS3Err }}
+                </p>
+            </section>
+
             <!-- Section: Logout -->
             <section class="options-section options-section-logout">
                 <button
@@ -569,6 +644,7 @@ import {
     reindexOCR as apiReindexOCR,
     reindexSTT as apiReindexSTT,
     recalculateRecipeCategories as apiRecalculateRecipeCategories,
+    deleteUnknownS3Files as apiDeleteUnknownS3,
     fetchPrinterStatus,
     fetchAIStatus,
 } from "../api.js";
@@ -613,6 +689,11 @@ const reindexSTTOk = ref("");
 const recalculatingRecipeCategories = ref(false);
 const recalculateRecipeCategoriesErr = ref("");
 const recalculateRecipeCategoriesOk = ref("");
+
+// Delete unknown S3 files
+const deletingUnknownS3 = ref(false);
+const deleteUnknownS3Err = ref("");
+const deleteUnknownS3Result = ref(null);
 
 function goBack() {
     if (showHotkeys.value) {
@@ -706,6 +787,14 @@ const shortcutDefinitions = computed(() => [
         allowInInput: true,
         enabled: () => !recalculatingRecipeCategories.value,
         handler: () => recalculateRecipeCategories(),
+    },
+    {
+        id: "delete-unknown-s3",
+        description: "Delete unknown S3 files",
+        hintKey: "D",
+        allowInInput: true,
+        enabled: () => !deletingUnknownS3.value,
+        handler: () => deleteUnknownS3(),
     },
     {
         id: "logout",
@@ -852,6 +941,20 @@ async function recalculateRecipeCategories() {
             e.message || "Ingredient category recalculation failed";
     } finally {
         recalculatingRecipeCategories.value = false;
+    }
+}
+
+async function deleteUnknownS3() {
+    deleteUnknownS3Err.value = "";
+    deleteUnknownS3Result.value = null;
+    deletingUnknownS3.value = true;
+    try {
+        const res = await apiDeleteUnknownS3(props.token);
+        deleteUnknownS3Result.value = res;
+    } catch (e) {
+        deleteUnknownS3Err.value = e.message || "S3 cleanup failed";
+    } finally {
+        deletingUnknownS3.value = false;
     }
 }
 
@@ -1013,6 +1116,17 @@ function doLogout() {
 /* Job queue embedded in card */
 .job-queue-embed {
     margin-top: 0.5rem;
+}
+
+/* Error list */
+.error-list {
+    margin: 0;
+    padding-left: 1.25rem;
+    font-size: 0.8rem;
+}
+
+.error-list li {
+    margin: 0;
 }
 
 /* Reindex grid */
