@@ -54,7 +54,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		filename = "untitled"
 	}
 
-	rec, results, err := s.mediaService.CreateAttachment(context.Background(), noteID, filename, mime, file)
+	rec, results, err := s.mediaService.CreateAttachment(r.Context(), noteID, filename, mime, file)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -123,7 +123,7 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 		filename = "untitled"
 	}
 
-	rec, results, err := s.mediaService.CreatePendingInline(context.Background(), noteID, filename, mime, file)
+	rec, results, err := s.mediaService.CreatePendingInline(r.Context(), noteID, filename, mime, file)
 	if err != nil {
 		writeErr(w, err)
 		return
