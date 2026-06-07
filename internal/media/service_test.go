@@ -21,27 +21,43 @@ import (
 // --- Fakes ---
 
 type fakeReplicaStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-	etags   map[string]string
-	failPut map[string]bool // endpointID -> fail?
+	mu         sync.Mutex
+	objects    map[string][]byte
+	etags      map[string]string
+	failPut    map[string]bool // endpointID -> fail?
+	blockPut   map[string]bool // endpointID -> block until context canceled
+	putCount   map[string]int  // endpointID -> calls to Put (for assertions)
+	deleteKeys []string        // records all storage keys deleted (for assertions)
 }
 
 func newFakeReplicaStore() *fakeReplicaStore {
 	return &fakeReplicaStore{
-		objects: make(map[string][]byte),
-		etags:   make(map[string]string),
-		failPut: make(map[string]bool),
+		objects:  make(map[string][]byte),
+		etags:    make(map[string]string),
+		failPut:  make(map[string]bool),
+		blockPut: make(map[string]bool),
+		putCount: make(map[string]int),
 	}
 }
 
 func (f *fakeReplicaStore) Put(ctx context.Context, ep EndpointConfig, key string, src io.Reader, size int64) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	if f.blockPut[ep.ID] {
+		f.mu.Unlock()
+		// Block until context is cancelled, then return the context error.
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	if f.failPut[ep.ID] {
+		defer f.mu.Unlock()
 		return "", fmt.Errorf("simulated put failure for %s", ep.ID)
 	}
+	f.putCount[ep.ID]++
+	f.mu.Unlock()
+	// Read outside lock to avoid deadlock with large data
 	data, _ := io.ReadAll(src)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.objects[ep.ID+"/"+key] = data
 	hash := sha256.Sum256(data)
 	etag := hex.EncodeToString(hash[:])
@@ -64,6 +80,7 @@ func (f *fakeReplicaStore) Delete(ctx context.Context, ep EndpointConfig, key st
 	defer f.mu.Unlock()
 	delete(f.objects, ep.ID+"/"+key)
 	delete(f.etags, ep.ID+"/"+key)
+	f.deleteKeys = append(f.deleteKeys, key)
 	return nil
 }
 
@@ -232,6 +249,121 @@ func TestCreateFileMarksPerEndpointStates(t *testing.T) {
 	}
 
 	_ = results
+}
+
+// TestCreateFileAbortedUploadCleansUpDBAndS3 verifies that when the request
+// context is canceled (client disconnect) after DB commit but during S3
+// uploads, the committed DB row is cleaned up and S3 objects are deleted.
+func TestCreateFileAbortedUploadCleansUpDBAndS3(t *testing.T) {
+	svc, store := newTestService(t)
+
+	// Make both endpoints block until context is canceled.
+	store.blockPut["primary"] = true
+	store.blockPut["backup"] = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	plaintext := []byte("hello world")
+
+	// Start the upload in a goroutine. It will block at S3 upload stage.
+	done := make(chan struct{})
+	var createErr error
+	go func() {
+		_, _, createErr = svc.CreateAttachment(ctx, noteID, "abort.txt", "text/plain", bytes.NewReader(plaintext))
+		close(done)
+	}()
+
+	// Allow time for DB commit to complete, then cancel.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	// Wait for CreateAttachment to return.
+	<-done
+
+	if createErr == nil {
+		t.Fatal("expected error from canceled context, got nil")
+	}
+	if !strings.Contains(createErr.Error(), "aborted") {
+		t.Errorf("expected 'aborted' in error, got: %v", createErr)
+	}
+
+	// Verify file is soft-deleted in DB (query by note_id since rec.ID is 0 on failure).
+	var deletedAt sql.NullString
+	err = svc.DB.QueryRow(`SELECT deleted_at FROM files WHERE original_note_id = ? AND filename = ? AND deleted_at IS NOT NULL`,
+		noteID, "abort.txt").Scan(&deletedAt)
+	if err != nil {
+		t.Fatalf("query file: %v", err)
+	}
+	if !deletedAt.Valid {
+		t.Error("expected file to be soft-deleted after aborted upload")
+	}
+
+	// Verify no attachment ref exists for this note.
+	var refCount int
+	err = svc.DB.QueryRow(`SELECT COUNT(*) FROM files_refs WHERE note_id = ?`, noteID).Scan(&refCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refCount != 0 {
+		t.Errorf("expected 0 refs after abort, got %d", refCount)
+	}
+
+	// Verify S3 objects were deleted (not just left hanging).
+	store.mu.Lock()
+	deleteCount := len(store.deleteKeys)
+	store.mu.Unlock()
+	if deleteCount < 2 {
+		t.Errorf("expected S3 deletes for at least 2 endpoints, got %d", deleteCount)
+	}
+}
+
+// TestCleanupFailedUploadDeletesFromS3 verifies that when ALL replicas fail,
+// cleanupFailedUpload deletes S3 objects (not just DB soft-delete).
+func TestCleanupFailedUploadDeletesFromS3(t *testing.T) {
+	svc, store := newTestService(t)
+
+	// Make all endpoints fail.
+	store.failPut["primary"] = true
+	store.failPut["backup"] = true
+
+	ctx := context.Background()
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	plaintext := []byte("hello world")
+	_, _, err = svc.CreateAttachment(ctx, noteID, "test.txt", "text/plain", bytes.NewReader(plaintext))
+	if err == nil {
+		t.Fatal("expected error when all replicas fail")
+	}
+
+	// Verify file is soft-deleted (query by note_id since rec.ID is 0 on failure).
+	var deletedAt2 sql.NullString
+	err = svc.DB.QueryRow(`SELECT deleted_at FROM files WHERE original_note_id = ? AND filename = ? AND deleted_at IS NOT NULL`,
+		noteID, "test.txt").Scan(&deletedAt2)
+	if err != nil {
+		t.Fatalf("query file: %v", err)
+	}
+	if !deletedAt2.Valid {
+		t.Error("expected file to be soft-deleted when all replicas fail")
+	}
+
+	// Verify S3 objects were deleted via cleanupFailedUpload.
+	store.mu.Lock()
+	deleteCount := len(store.deleteKeys)
+	store.mu.Unlock()
+	if deleteCount < 2 {
+		t.Errorf("expected S3 deletes via cleanup, got %d", deleteCount)
+	}
 }
 
 func TestReadFileFromCache(t *testing.T) {

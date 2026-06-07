@@ -167,6 +167,14 @@ func (s *Service) createFile(ctx context.Context, origNoteID int64, pendingAt *t
 	// Upload to all endpoints concurrently (first wave)
 	results := s.uploadToReplicas(ctx, fileID, storageKey, ctData, ctSize)
 
+	// Check for client disconnect before proceeding.
+	// If the request was aborted, the committed DB row is no longer wanted.
+	// Clean up DB + S3 and return an error so no response is sent.
+	if ctx.Err() != nil {
+		s.cleanupFailedUpload(fileID, storageKey)
+		return FileRecord{}, results, fmt.Errorf("upload aborted: %w", ctx.Err())
+	}
+
 	// If ALL replicas failed, clean up and return error
 	allFailed := true
 	for _, r := range results {
@@ -254,13 +262,24 @@ func (s *Service) uploadToReplicas(ctx context.Context, fileID int64, storageKey
 	return results
 }
 
-// cleanupFailedUpload removes DB entries and cached data for a completely failed upload.
+// cleanupFailedUpload removes DB entries, cached data, and S3 objects for a
+// completely failed upload. It runs best-effort (errors are logged, not
+// returned) because this is already on a failure path.
 func (s *Service) cleanupFailedUpload(fileID int64, storageKey string) {
+	// Delete all refs for this file (they were committed in the same tx).
+	s.DB.Exec(`DELETE FROM files_refs WHERE file_id = ?`, fileID)
 	// Soft-delete the file
 	s.DB.Exec(`UPDATE files SET deleted_at = ? WHERE id = ?`,
 		time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), fileID)
 	// Remove cached data
 	s.Cache.Delete(fileID, storageKey)
+	// Delete from S3 replicas (this was missing — previously orphans could
+	// remain if uploads succeeded before the failure was detected).
+	for _, ep := range s.Config.Endpoints {
+		if err := s.Store.Delete(context.Background(), ep, storageKey); err != nil {
+			log.Printf("media: cleanup failed upload %d on %s: %v", fileID, ep.ID, err)
+		}
+	}
 }
 
 // ReadFile reads and decrypts a file, using local cache first then falling back to S3.

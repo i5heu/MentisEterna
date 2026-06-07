@@ -124,6 +124,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] The saving of a recipe takes long becuase the ingredients categoriced but this should happen in a background job and not block the user.
 - [ ] icons and status in settings modal for jobs
 - [x] files with wired MIMES will be uploaded correctly but the upload HTTP request will fail with 502 "STT for file 8 completed with error: unsupported MIME type for STT: image/RAF"
+- [ ] The Pantry ingredients should not be added to the grocery list as default, they must be added manually via the "Add Pantry Staples" button in the recipe overview.
 
 ## TODO Future
 - [x] OCR for images and pdfs
