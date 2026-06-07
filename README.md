@@ -2,7 +2,7 @@
 
 > ☠️🚨⚠️⚠️⚠️ Do not use this. ⚠️⚠️⚠️🚨☠️   
 > This is a terrible generated mess of doom i created for prototyping.  
-> I only use it in a private VPN.   
+> I only use it in a private VPN and behind a reverse proxy with basic auth.   
 > It is absolutly not secure or safe to use.   
 
 

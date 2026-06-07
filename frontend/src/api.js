@@ -1,5 +1,9 @@
 async function request(path, options = {}) {
     const res = await fetch(path, options);
+    if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        throw new Error("unauthorized");
+    }
     if (!res.ok) {
         const text = await res.text();
         throw new Error(text.trim() || `HTTP ${res.status}`);

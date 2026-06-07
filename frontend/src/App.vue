@@ -15,7 +15,7 @@
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
 import OptionsView from "./views/OptionsView.vue";
@@ -34,6 +34,18 @@ function onLogout() {
     localStorage.removeItem("me_token");
     currentView.value = "notes";
 }
+
+function onAuthUnauthorized() {
+    onLogout();
+}
+
+onMounted(() => {
+    window.addEventListener("auth:unauthorized", onAuthUnauthorized);
+});
+
+onUnmounted(() => {
+    window.removeEventListener("auth:unauthorized", onAuthUnauthorized);
+});
 </script>
 
 <style>
