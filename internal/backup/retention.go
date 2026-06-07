@@ -8,20 +8,33 @@ import (
 )
 
 const (
-	backupPrefix = "backups/mentis-"
-	backupSuffix = ".db.enc"
+	backupPrefix       = "backups/mentis-"
+	legacyBackupSuffix = ".db.enc"
+	bundleBackupSuffix = ".bundle.enc"
 )
+
+var backupSuffixes = []string{bundleBackupSuffix, legacyBackupSuffix}
 
 // parseBackupTime extracts the UTC timestamp from a backup S3 key.
 // Keys are expected in the format: backups/mentis-YYYY-MM-DDTHH-MM-SS.db.enc
 func parseBackupTime(key string) (time.Time, error) {
-	s := strings.TrimPrefix(key, backupPrefix)
-	s = strings.TrimSuffix(s, backupSuffix)
-	t, err := time.Parse("2006-01-02T15-04-05", s)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse backup time from %q: %w", key, err)
+	for _, suffix := range backupSuffixes {
+		if !strings.HasSuffix(key, suffix) {
+			continue
+		}
+		s := strings.TrimPrefix(key, backupPrefix)
+		s = strings.TrimSuffix(s, suffix)
+		t, err := time.Parse("2006-01-02T15-04-05", s)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse backup time from %q: %w", key, err)
+		}
+		return t, nil
 	}
-	return t, nil
+	return time.Time{}, fmt.Errorf("parse backup time from %q: unknown backup suffix", key)
+}
+
+func backupObjectKey(t time.Time) string {
+	return fmt.Sprintf("%s%s%s", backupPrefix, t.UTC().Format("2006-01-02T15-04-05"), bundleBackupSuffix)
 }
 
 // RetentionPolicy defines the retention windows for backup cleanup.

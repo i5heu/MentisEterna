@@ -113,7 +113,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 - [x] Go test bug "no usblp device nodes found at [/dev/usb/lp0 /dev/usb/lp1 /dev/usb/lp2]"
 - [ ] On S3: files that are not in our file list but present in the bucket should be deleted with a button in settings: "Delete Unknown Files"
-- [ ] Backups must contain media files.
+- [x] Backups must contain media files from S3.
 - [x] Recepies need a "Print Recipe" button that prints the recipe via the recipe printer.
 - [x] Grocery List needs to round to 2 decimal places.
 - [x] Printed Recipes need to use non-metric if metric is not validated
@@ -122,6 +122,8 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] The Shortcut helper modal is long and needs to be able to scroll.
 - [x] Tables can become quite wide, we need to add a horizontal scroll to the table in the recipe note type. And we need a light zebra effect to make it easier to read.
 - [x] The saving of a recipe takes long becuase the ingredients categoriced but this should happen in a background job and not block the user.
+- [ ] icons and status in settings modal for jobs
+- [ ] files with wired MIMES will be uploaded correctly but the upload HTTP request will fail with 502 "STT for file 8 completed with error: unsupported MIME type for STT: image/RAF"
 
 ## TODO Future
 - [x] OCR for images and pdfs
@@ -134,6 +136,8 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
   - [x] Re Index, OCR and STT failed once, button in UI with counter.
   - [x] Re Index ingridients category
   - [x] Parallelize re-indexing jobs.
+- [ ] Server stats in header above ".editor-header > .editor-actions"
+- [ ] Upload spinner and overview
 - [ ] better search (by title, path and tags)
   - [ ] Include Flieds in search:
     - [ ] embedding should be limited to paragraphs instead of the whole note to make it more accurate. The Avrage match is then calculated which is then used for the search ranking.
@@ -145,7 +149,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
     - [ ] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
     - [ ] Include all note types with '.a'
 - [ ] mobile-app - consider Flutter for UI
-- [ ] add recipie printer function to help note types to print stuff
+- [x] add recipie printer function to help note types to print stuff
 - [ ] UX Improvements
   - [ ] UI General
     - [ ] Drag and Drop for notes 

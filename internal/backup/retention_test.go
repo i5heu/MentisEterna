@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseBackupTime(t *testing.T) {
-	key := "backups/mentis-2026-05-12T03-15-42.db.enc"
+	key := "backups/mentis-2026-05-12T03-15-42.bundle.enc"
 	ts, err := parseBackupTime(key)
 	if err != nil {
 		t.Fatalf("parseBackupTime: %v", err)
@@ -49,9 +49,27 @@ func TestClassifyBackupsSkipsNonMatching(t *testing.T) {
 	}
 }
 
-// makeKey returns a backup S3 key for the given time.
+func TestParseBackupTimeSupportsLegacyAndBundleSuffixes(t *testing.T) {
+	bundleTS, err := parseBackupTime(makeKey(time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatalf("parse bundle backup time: %v", err)
+	}
+	legacyTS, err := parseBackupTime(makeLegacyKey(time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatalf("parse legacy backup time: %v", err)
+	}
+	if !bundleTS.Equal(legacyTS) {
+		t.Fatalf("expected same parsed timestamp, got bundle=%v legacy=%v", bundleTS, legacyTS)
+	}
+}
+
+// makeKey returns the current backup S3 key for the given time.
 func makeKey(t time.Time) string {
-	return fmt.Sprintf("backups/mentis-%s.db.enc", t.UTC().Format("2006-01-02T15-04-05"))
+	return backupObjectKey(t)
+}
+
+func makeLegacyKey(t time.Time) string {
+	return fmt.Sprintf("%s%s%s", backupPrefix, t.UTC().Format("2006-01-02T15-04-05"), legacyBackupSuffix)
 }
 
 func TestClassifyBackupsKeepLast7DaysMax3PerDay(t *testing.T) {

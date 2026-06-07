@@ -49,16 +49,25 @@ func (s *Service) Run(ctx context.Context) (string, error) {
 	}
 	log.Printf("backup: snapshot complete (%d bytes in %v)", len(snapshot), time.Since(start))
 
-	// Step 2: Encrypt with AES-256-GCM.
+	// Step 2: Build a self-contained backup bundle with the DB snapshot plus all
+	// active media ciphertext objects referenced by that snapshot.
+	bundleStart := time.Now()
+	bundle, mediaCount, err := s.buildBundle(ctx, snapshot)
+	if err != nil {
+		return "", fmt.Errorf("bundle: %w", err)
+	}
+	log.Printf("backup: bundled %d media object(s) (%d bytes in %v)", mediaCount, len(bundle), time.Since(bundleStart))
+
+	// Step 3: Encrypt with AES-256-GCM.
 	encStart := time.Now()
-	encrypted, err := Encrypt(snapshot, s.Key)
+	encrypted, err := Encrypt(bundle, s.Key)
 	if err != nil {
 		return "", fmt.Errorf("encrypt: %w", err)
 	}
 	log.Printf("backup: encrypted (%d bytes in %v)", len(encrypted), time.Since(encStart))
 
-	// Step 3: Upload to each configured S3 endpoint.
-	remoteKey := fmt.Sprintf("backups/mentis-%s.db.enc", time.Now().UTC().Format("2006-01-02T15-04-05"))
+	// Step 4: Upload to each configured S3 endpoint.
+	remoteKey := backupObjectKey(time.Now().UTC())
 	uploaded := 0
 	for _, ep := range s.Endpoints {
 		upStart := time.Now()
