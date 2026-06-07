@@ -1,6 +1,6 @@
 # Backups
 
-MentisEterna backs up the SQLite database using AES-256-GCM encryption and stores encrypted snapshots in S3-compatible object storage. Backups run automatically every 12 hours and are safe to take while the database is being written to (WAL mode).
+MentisEterna backs up the SQLite database **and all active media ciphertext blobs stored in S3** using AES-256-GCM encryption and stores the resulting encrypted bundle in S3-compatible object storage. Backups run automatically every 12 hours and are safe to take while the database is being written to (WAL mode).
 
 ## Table of Contents
 
@@ -62,7 +62,7 @@ func Decrypt(data []byte, key []byte) ([]byte, error)
 
 ## Snapshot Mechanism
 
-Backups use **SQLite's Online Backup API** (`sqlite3_backup_init` → `step(-1)` → `finish` via `go-sqlite3`) rather than a raw file copy. This is the same mechanism used by the `sqlite3` CLI's `.backup` command.
+Backups use **SQLite's Online Backup API** (`sqlite3_backup_init` → `step(-1)` → `finish` via `go-sqlite3`) rather than a raw file copy. This is the same mechanism used by the `sqlite3` CLI's `.backup` command. After the database snapshot is taken, MentisEterna reads the active `files` rows from that snapshot and bundles the corresponding encrypted S3 media objects alongside the database so the backup is self-contained.
 
 ### Why This Matters
 
@@ -95,7 +95,13 @@ The snapshot is created as a temporary file, read into memory, and the temp file
 
 ## S3 Object Naming
 
-Backups are stored as:
+Current backups are stored as:
+
+```
+backups/mentis-YYYY-MM-DDTHH-MM-SS.bundle.enc
+```
+
+Legacy backups used the older database-only format:
 
 ```
 backups/mentis-YYYY-MM-DDTHH-MM-SS.db.enc
@@ -106,18 +112,17 @@ The timestamp is UTC (`time.Now().UTC().Format("2006-01-02T15-04-05")`).
 Examples:
 
 ```
-backups/mentis-2026-07-22T03-00-05.db.enc
-backups/mentis-2026-07-22T15-00-03.db.enc
+backups/mentis-2026-07-22T03-00-05.bundle.enc
+backups/mentis-2026-07-22T15-00-03.bundle.enc
 ```
 
-The `backups/` prefix is used by the purger to list and classify objects. Anything outside the `backups/mentis-*.db.enc` pattern (with the exact timestamp format) is silently skipped during retention cleanup — it will never be deleted.
+The `backups/` prefix is used by the purger to list and classify objects. Anything outside the `backups/mentis-*.(bundle|db).enc` patterns (with the exact timestamp format) is silently skipped during retention cleanup — it will never be deleted.
 
 ### Code Reference
 
 ```go
-// internal/backup/backup.go
-remoteKey := fmt.Sprintf("backups/mentis-%s.db.enc",
-    time.Now().UTC().Format("2006-01-02T15-04-05"))
+// internal/backup/retention.go
+remoteKey := backupObjectKey(time.Now().UTC())
 
 // internal/backup/retention.go
 func parseBackupTime(key string) (time.Time, error) {
@@ -151,7 +156,7 @@ Backups are processed **newest-first**. Each time bucket greedily keeps the newe
 3. For backups within the last 5 years (but older than 3 months): bucket by calendar month (`2006-01`). Keep 1 per month.
 4. Everything older than 5 years: deleted.
 
-Because the algorithm iterates newest-first, the newest backup in each bucket is always the one kept. Keys that don't match the `backups/mentis-YYYY-MM-DDTHH-MM-SS.db.enc` naming pattern are silently skipped (they are not ours to delete).
+Because the algorithm iterates newest-first, the newest backup in each bucket is always the one kept. Keys that don't match the `backups/mentis-YYYY-MM-DDTHH-MM-SS.(bundle|db).enc` naming patterns are silently skipped (they are not ours to delete).
 
 ### Purge Scope
 
@@ -168,20 +173,33 @@ Purge lists objects under the `backups/` prefix on **each configured S3 endpoint
 
 ## On-Disk Format Summary (Restoration Guide)
 
-A single `.db.enc` file in your S3 bucket contains:
+A current `.bundle.enc` file in your S3 bucket contains:
 
 ```
  Byte 0..11   : 12-byte random nonce (not secret, must be unique per backup)
- Byte 12..N-17: AES-256-GCM ciphertext (same size as original SQLite database)
+ Byte 12..N-17: AES-256-GCM ciphertext
  Byte N-16..N : 16-byte GCM authentication tag
 ```
 
+After decryption, the plaintext is a MentisEterna bundle with this structure:
+
+```
+MENTISETERNA-BACKUP-BUNDLE\n
+TAR:
+  manifest.json          # bundle version + media manifest
+  db.sqlite3             # SQLite snapshot
+  media/files/...        # encrypted media blobs exactly as stored in S3
+```
+
+Legacy `.db.enc` backups decrypt directly to a raw SQLite database and are still supported by the restore tool.
+
 To restore manually (without the CLI tool):
 
-1. Download the `.db.enc` file from S3
+1. Download the `.bundle.enc` or legacy `.db.enc` file from S3
 2. Split: `nonce = data[0:12]`, `ciphertext = data[12:]`
 3. Decrypt with AES-256-GCM using the 32-byte key and the extracted nonce
-4. Write the resulting plaintext to a `.db` file
+4. If the plaintext begins with `MENTISETERNA-BACKUP-BUNDLE\n`, treat the remaining bytes as a TAR archive containing `db.sqlite3` plus `media/...`
+5. Otherwise, treat the plaintext as a legacy SQLite database
 
 The built-in `restore` tool does this automatically:
 
@@ -190,14 +208,14 @@ The built-in `restore` tool does this automatically:
 export BACKUP_ENCRYPTION_KEY="<64-character hex key>"
 export MEDIA_S3_ENDPOINTS='[{"id":"primary","bucket":"...","endpoint":"...",...}]'
 
-# Download + decrypt + write
-go run ./cmd/restore/ backup-object-key.db.enc mentis_restored.db
+# Download + decrypt + restore DB + re-upload media to configured endpoints
+go run ./cmd/restore/ backup-object-key.bundle.enc mentis_restored.db
 
 # Or with a pre-built binary:
-./restore backups/mentis-2026-07-22T03-00-05.db.enc mentis_restored.db
+./restore backups/mentis-2026-07-22T03-00-05.bundle.enc mentis_restored.db
 ```
 
-The restore tool tries each configured S3 endpoint in order until one succeeds. The resulting `.db` file is a standard SQLite database ready to use with `DB_PATH=mentis_restored.db`.
+The restore tool tries each configured S3 endpoint in order until one succeeds. For current bundle backups it also re-uploads every bundled media object to each configured endpoint and rewrites `file_s3` rows in the restored database to match those endpoints. The resulting `.db` file is then ready to use with `DB_PATH=mentis_restored.db`.
 
 ### Code Reference
 
@@ -297,7 +315,7 @@ go run ./cmd/restore/ <s3-backup-key> <output.db>
 Example:
 
 ```bash
-go run ./cmd/restore/ backups/mentis-2026-07-22T03-00-05.db.enc mentis_restored.db
+go run ./cmd/restore/ backups/mentis-2026-07-22T03-00-05.bundle.enc mentis_restored.db
 ```
 
 The tool:
@@ -306,7 +324,8 @@ The tool:
 2. Tries each configured S3 endpoint in order
 3. Downloads the encrypted backup from the first endpoint that responds
 4. Decrypts with AES-256-GCM (fails if the key is wrong or data is corrupted)
-5. Writes the plaintext SQLite database to the output path
+5. Restores the SQLite database to the output path
+6. For bundle backups, re-uploads each bundled media object to every configured endpoint and rewrites `file_s3` rows accordingly
 
 Then you can start MentisEterna with `DB_PATH=mentis_restored.db`.
 
@@ -330,8 +349,9 @@ Then you can start MentisEterna with `DB_PATH=mentis_restored.db`.
 │                                                      │
 │  Service.Run():                                      │
 │    1. snapshot() → SQLite Backup API → []byte        │
-│    2. Encrypt(plaintext, key) → []byte               │
-│    3. Store.Put(endpoint, key, encrypted)            │
+│    2. buildBundle() → DB + active S3 media → []byte  │
+│    3. Encrypt(bundle, key) → []byte                  │
+│    4. Store.Put(endpoint, key, encrypted)            │
 │                                                      │
 │  Service.Purge():                                    │
 │    1. Store.List(endpoint, "backups/") → keys        │
@@ -353,8 +373,8 @@ Then you can start MentisEterna with `DB_PATH=mentis_restored.db`.
 │                cmd/restore/main.go                   │
 │                                                      │
 │  1. Store.Get(endpoint, remoteKey) → encrypted       │
-│  2. Decrypt(encrypted, key) → plaintext SQLite DB    │
-│  3. os.WriteFile(outputPath, plaintext)              │
+│  2. Decrypt(encrypted, key) → plaintext bundle/db    │
+│  3. RestorePayload(...) → db write + media re-upload │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -364,9 +384,10 @@ Then you can start MentisEterna with `DB_PATH=mentis_restored.db`.
 |---|---|
 | `internal/backup/crypto.go` | `Encrypt`, `Decrypt`, `KeyFromHex`, `GenerateKey` |
 | `internal/backup/crypto_test.go` | 10 tests: round-trip, corruption, wrong key, nonce uniqueness, large data |
-| `internal/backup/backup.go` | `Service.Run()` (snapshot + encrypt + upload), `Service.Purge()` (retention cleanup), `snapshot()` (SQLite Backup API) |
-| `internal/backup/retention.go` | `ClassifyBackups`, `DefaultRetentionPolicy`, `parseBackupTime` |
-| `internal/backup/retention_test.go` | 11 tests: keep-last-7-days, one-per-week, one-per-month, delete-beyond-5y, newest-per-bucket, boundaries, determinism |
+| `internal/backup/backup.go` | `Service.Run()` (snapshot + bundle + encrypt + upload), `Service.Purge()` (retention cleanup), `snapshot()` (SQLite Backup API) |
+| `internal/backup/bundle.go` | Bundle format, media inclusion, `RestorePayload`, `file_s3` normalization on restore |
+| `internal/backup/retention.go` | `ClassifyBackups`, `DefaultRetentionPolicy`, `parseBackupTime`, `backupObjectKey` |
+| `internal/backup/retention_test.go` | Retention tests for bundle + legacy backup key formats |
 | `internal/server/server.go` | `handleBackupTrigger`, `handleBackupPurge` handlers, cron job registration |
 | `internal/server/notes.go` | `backupTask`, `purgeTask` job handlers |
 | `internal/media/s3.go` | `ReplicaStore` interface + `S3Store` implementation (`Put`, `Get`, `Delete`, `List`) |
@@ -380,7 +401,8 @@ Then you can start MentisEterna with `DB_PATH=mentis_restored.db`.
 
 - **AES-256-GCM** with random 96-bit nonces — authenticated encryption, no nonce reuse
 - **Tamper detection**: GCM authentication tag is verified before any plaintext is returned; corrupted or tampered backups fail to decrypt with an explicit error
-- **Safe snapshots**: SQLite Online Backup API guarantees consistent point-in-time state, even under concurrent writes in WAL mode
+- **Safe snapshots**: SQLite Online Backup API guarantees consistent point-in-time database state, even under concurrent writes in WAL mode
+- **Self-contained restores**: current backups include active encrypted media blobs, so a restored database is not left pointing at missing S3 objects
 - **S3 transport**: SigV4-signed HTTPS requests with configurable endpoints
 - **Multi-endpoint redundancy**: Each backup is uploaded to every configured S3 endpoint; a single endpoint failure doesn't block backups on the others
 
@@ -388,5 +410,5 @@ Then you can start MentisEterna with `DB_PATH=mentis_restored.db`.
 
 - **Key in environment variable**: The encryption key lives in `BACKUP_ENCRYPTION_KEY`. Anyone with access to the environment (shell history, `.profile`, systemd unit file, `docker inspect`) can read it. For a personal app this is acceptable; for multi-tenant deployments, use a secrets manager.
 - **No key rotation**: There is no mechanism to rotate keys or re-encrypt existing backups. If the key is compromised, all historical backups are compromised.
-- **Memory-based processing**: The entire database snapshot, encrypted blob, and S3 payload all live in memory simultaneously. For a multi-GB database, this would require adjusting the approach (streaming encryption, buffered uploads).
+- **Memory-based processing**: The database snapshot, backup bundle, encrypted blob, and any fetched media objects all pass through memory during backup/restore. For a multi-GB library, this would require adjusting the approach (streaming archive/encryption, buffered uploads).
 - **No client-side key derivation**: The key is raw bytes from a hex string. There is no PBKDF2/Argon2 stretching against a passphrase. The 64-char hex key **is** the key material.

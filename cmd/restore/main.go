@@ -1,4 +1,4 @@
-// restore is a standalone CLI tool to download and decrypt a database backup.
+// restore is a standalone CLI tool to download and decrypt a backup.
 //
 // Usage:
 //
@@ -11,7 +11,7 @@
 //
 // Example:
 //
-//	restore backups/mentis-2026-05-12T03-00-00.db.enc mentis_restored.db
+//	restore backups/mentis-2026-05-12T03-00-00.bundle.enc mentis_restored.db
 package main
 
 import (
@@ -48,7 +48,7 @@ func main() {
 	}
 
 	// Load S3 endpoint configuration.
-	cfg, err := media.LoadConfigFromEnv()
+	endpoints, err := media.LoadEndpointsFromEnv()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: loading S3 config: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Set MEDIA_S3_ENDPOINTS to a JSON array of endpoint configs.\n")
@@ -59,7 +59,7 @@ func main() {
 	ctx := context.Background()
 
 	// Try each configured endpoint until one succeeds.
-	for _, ep := range cfg.Endpoints {
+	for _, ep := range endpoints {
 		fmt.Printf("Trying endpoint %s...\n", ep.ID)
 
 		rc, err := store.Get(ctx, ep, remoteKey)
@@ -84,13 +84,14 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Write output.
-		if err := os.WriteFile(outputPath, plaintext, 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: writing output: %v\n", err)
+		result, err := backup.RestorePayload(ctx, plaintext, outputPath, store, endpoints)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: restore failed: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("Successfully restored %d bytes to %s\n", len(plaintext), outputPath)
+		fmt.Printf("Successfully restored %s (%d DB bytes, %d media file(s), %d media upload(s)) to %s\n",
+			result.Format, result.DBBytes, result.MediaFiles, result.MediaCopies, outputPath)
 		return
 	}
 
