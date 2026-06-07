@@ -31,8 +31,9 @@ type S3Store struct {
 }
 
 // NewS3Store creates a new S3Store with a default HTTP client.
+// The 10-minute timeout accommodates large file uploads over slow connections.
 func NewS3Store() *S3Store {
-	return &S3Store{client: &http.Client{Timeout: 30 * time.Second}}
+	return &S3Store{client: &http.Client{Timeout: 10 * time.Minute}}
 }
 
 // SetClient allows overriding the HTTP client (useful for tests).

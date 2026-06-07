@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/i5heu/MentisEterna/internal/media"
 )
@@ -36,6 +37,9 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "note not found", http.StatusNotFound)
 		return
 	}
+
+	// Lifted write deadline: large file uploads can take minutes (encrypt + S3).
+	s.setLongWriteDeadline(w)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -102,6 +106,9 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "note not found", http.StatusNotFound)
 		return
 	}
+
+	// Lifted write deadline: large file uploads can take minutes (encrypt + S3).
+	s.setLongWriteDeadline(w)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -331,6 +338,15 @@ func extractNoteAndFileID(path string) (int64, int64, bool) {
 		return 0, 0, false
 	}
 	return noteID, fileID, true
+}
+
+// setLongWriteDeadline lifts the http.Server.WriteTimeout for the duration of
+// this handler. Large file uploads (encrypt + multi-S3 replica) can take
+// minutes; without this, the global 10s WriteTimeout closes the connection
+// prematurely.
+func (s *Server) setLongWriteDeadline(w http.ResponseWriter) {
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Time{})
 }
 
 // extractFileIDFromPath extracts the file ID from "/file/:noteID/:fileID"
