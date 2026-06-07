@@ -572,3 +572,262 @@ func TestConfigValidation(t *testing.T) {
 	}
 	t.Logf("config validation: %v", err)
 }
+
+// --- DeleteUnknownS3Files tests ---
+
+// putFakeS3Object injects a raw object into the fake store without using the
+// media service, simulating a pre-existing object that might be orphaned.
+func putFakeS3Object(t *testing.T, store *fakeReplicaStore, epID, key string, data []byte) {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.objects[epID+"/"+key] = data
+}
+
+// knownKeysFromDB returns the set of storage_key values in the files table.
+func knownKeysFromDB(t *testing.T, db *db.DB) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT storage_key FROM files WHERE deleted_at IS NULL`)
+	if err != nil {
+		t.Fatalf("query known keys: %v", err)
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatalf("scan known key: %v", err)
+		}
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func TestDeleteUnknownS3FilesKeepsKnownObjects(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	// Create a real attachment — the DB and S3 both have it.
+	res, _ := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('keep-test')`)
+	noteID, _ := res.LastInsertId()
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "keep.txt", "text/plain", bytes.NewReader([]byte("keep me")))
+	if err != nil {
+		t.Fatalf("CreateAttachment: %v", err)
+	}
+
+	saved, ok := store.objects["primary/"+rec.StorageKey]
+	if !ok {
+		t.Fatal("expected primary copy of attachment to exist in fake store")
+	}
+
+	// Run cleanup.
+	result, err := svc.DeleteUnknownS3Files(ctx)
+	if err != nil {
+		t.Fatalf("DeleteUnknownS3Files: %v", err)
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("expected 0 deletions when no orphans exist, got %d", result.Deleted)
+	}
+
+	// The known object must still be present on every endpoint.
+	for _, ep := range svc.Config.Endpoints {
+		got, ok := store.objects[ep.ID+"/"+rec.StorageKey]
+		if !ok {
+			t.Fatalf("known object %s was deleted from endpoint %s", rec.StorageKey, ep.ID)
+		}
+		if !bytes.Equal(got, saved) {
+			t.Fatalf("known object %s content changed on endpoint %s", rec.StorageKey, ep.ID)
+		}
+	}
+}
+
+func TestDeleteUnknownS3FilesRemovesOrphanedObjects(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	// Create one known object through the normal path.
+	res, _ := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('known note')`)
+	noteID, _ := res.LastInsertId()
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "known.txt", "text/plain", bytes.NewReader([]byte("known")))
+	if err != nil {
+		t.Fatalf("CreateAttachment: %v", err)
+	}
+
+	// Plant orphan objects that are NOT in the DB.
+	orphanKey := "files/2026/01/01/deadbeef00000000000000000000000000000000000000000000000000000000"
+	orphan2Key := "files/2025/06/01/aaaaaaaa00000000000000000000000000000000000000000000000000000000"
+	putFakeS3Object(t, store, "primary", orphanKey, []byte("orphan A"))
+	putFakeS3Object(t, store, "primary", orphan2Key, []byte("orphan B"))
+	putFakeS3Object(t, store, "backup", orphanKey, []byte("orphan A on backup"))
+
+	result, err := svc.DeleteUnknownS3Files(ctx)
+	if err != nil {
+		t.Fatalf("DeleteUnknownS3Files: %v", err)
+	}
+
+	// Known object preserved.
+	if _, ok := store.objects["primary/"+rec.StorageKey]; !ok {
+		t.Fatalf("known object %s was deleted", rec.StorageKey)
+	}
+
+	// Orphan A deleted on PRIMARY.
+	if _, ok := store.objects["primary/"+orphanKey]; ok {
+		t.Fatalf("orphan %s was not deleted on primary", orphanKey)
+	}
+	// Orphan B deleted on PRIMARY.
+	if _, ok := store.objects["primary/"+orphan2Key]; ok {
+		t.Fatalf("orphan %s was not deleted on primary", orphan2Key)
+	}
+	// Orphan A deleted on BACKUP (even though content differs from primary).
+	if _, ok := store.objects["backup/"+orphanKey]; ok {
+		t.Fatalf("orphan %s was not deleted on backup", orphanKey)
+	}
+
+	if result.Deleted != 3 {
+		t.Fatalf("expected 3 total deletions, got %d (by_endpoint=%+v)", result.Deleted, result.ByEndpoint)
+	}
+
+	// Check per-endpoint breakdown.
+	byEP := map[string]int{}
+	for _, epr := range result.ByEndpoint {
+		byEP[epr.Endpoint] = epr.Deleted
+		if epr.Error != "" {
+			t.Errorf("unexpected error on %s: %s", epr.Endpoint, epr.Error)
+		}
+	}
+	if byEP["primary"] != 2 {
+		t.Errorf("expected 2 deletions on primary, got %d", byEP["primary"])
+	}
+	if byEP["backup"] != 1 {
+		t.Errorf("expected 1 deletion on backup, got %d", byEP["backup"])
+	}
+}
+
+func TestDeleteUnknownS3FilesDeletesSoftDeletedObjects(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	// Create an attachment, then soft-delete it.
+	res, _ := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('soft-delete test')`)
+	noteID, _ := res.LastInsertId()
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "soft.txt", "text/plain", bytes.NewReader([]byte("soft-deleted")))
+	if err != nil {
+		t.Fatalf("CreateAttachment: %v", err)
+	}
+
+	// Soft-delete: mark deleted_at and clear refs.
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	if _, err := svc.DB.Exec(`DELETE FROM files_refs WHERE file_id = ?`, rec.ID); err != nil {
+		t.Fatalf("delete refs: %v", err)
+	}
+	if _, err := svc.DB.Exec(`UPDATE files SET deleted_at = ? WHERE id = ?`, now, rec.ID); err != nil {
+		t.Fatalf("soft-delete file: %v", err)
+	}
+
+	// Run cleanup. Soft-deleted files are treated as unknown → deleted.
+	result, err := svc.DeleteUnknownS3Files(ctx)
+	if err != nil {
+		t.Fatalf("DeleteUnknownS3Files: %v", err)
+	}
+
+	// Verify the S3 objects are gone.
+	for _, ep := range svc.Config.Endpoints {
+		if _, ok := store.objects[ep.ID+"/"+rec.StorageKey]; ok {
+			t.Fatalf("soft-deleted object %s should have been deleted from %s", rec.StorageKey, ep.ID)
+		}
+	}
+
+	if result.Deleted != 2 {
+		t.Fatalf("expected 2 deletions (one per endpoint), got %d", result.Deleted)
+	}
+}
+
+func TestDeleteUnknownS3FilesNoOpWhenClean(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	// No files at all — DB and fake store are both empty.
+	result, err := svc.DeleteUnknownS3Files(ctx)
+	if err != nil {
+		t.Fatalf("DeleteUnknownS3Files: %v", err)
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("expected 0 deletions, got %d", result.Deleted)
+	}
+	for _, epr := range result.ByEndpoint {
+		if epr.Deleted != 0 || epr.Error != "" {
+			t.Fatalf("unexpected result for %s: %+v", epr.Endpoint, epr)
+		}
+	}
+	_ = store
+}
+
+func TestDeleteUnknownS3FilesOrphansOutsideFilesPrefixAreIgnored(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	// Plant an object outside the files/ prefix (like a backup object).
+	backupKey := "backups/mentis-2026-01-01T00-00-00.bundle.enc"
+	putFakeS3Object(t, store, "primary", backupKey, []byte("backup data"))
+	putFakeS3Object(t, store, "backup", backupKey, []byte("backup data"))
+
+	result, err := svc.DeleteUnknownS3Files(ctx)
+	if err != nil {
+		t.Fatalf("DeleteUnknownS3Files: %v", err)
+	}
+
+	// The backup object must be untouched.
+	for _, ep := range svc.Config.Endpoints {
+		if _, ok := store.objects[ep.ID+"/"+backupKey]; !ok {
+			t.Fatalf("backup object %s was deleted from %s", backupKey, ep.ID)
+		}
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("expected 0 deletions, got %d", result.Deleted)
+	}
+}
+
+func TestDeleteUnknownS3FilesMultipleAttachmentsAllPreserved(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	// Create multiple attachments, each from a different note.
+	var storageKeys []string
+	for i := 0; i < 5; i++ {
+		res, _ := svc.DB.Exec(`INSERT INTO notes (title) VALUES (?)`, fmt.Sprintf("note %d", i))
+		noteID, _ := res.LastInsertId()
+		rec, _, err := svc.CreateAttachment(ctx, noteID, fmt.Sprintf("file%d.txt", i), "text/plain", bytes.NewReader([]byte(fmt.Sprintf("content %d", i))))
+		if err != nil {
+			t.Fatalf("CreateAttachment %d: %v", i, err)
+		}
+		storageKeys = append(storageKeys, rec.StorageKey)
+	}
+
+	// Plant one orphan.
+	orphanKey := "files/2024/12/31/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	putFakeS3Object(t, store, "primary", orphanKey, []byte("orphan"))
+
+	result, err := svc.DeleteUnknownS3Files(ctx)
+	if err != nil {
+		t.Fatalf("DeleteUnknownS3Files: %v", err)
+	}
+
+	// All 5 known objects preserved on both endpoints.
+	for _, ep := range svc.Config.Endpoints {
+		for _, sk := range storageKeys {
+			if _, ok := store.objects[ep.ID+"/"+sk]; !ok {
+				t.Fatalf("known object %s was deleted from %s", sk, ep.ID)
+			}
+		}
+	}
+
+	// Orphan deleted on primary.
+	if _, ok := store.objects["primary/"+orphanKey]; ok {
+		t.Fatalf("orphan %s was not deleted on primary", orphanKey)
+	}
+
+	// Only one deletion (backup didn't have the orphan).
+	if result.Deleted != 1 {
+		t.Fatalf("expected 1 deletion (orphan only), got %d", result.Deleted)
+	}
+}
