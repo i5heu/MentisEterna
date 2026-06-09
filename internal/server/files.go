@@ -1,7 +1,7 @@
 package server
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -40,21 +40,26 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 
 	// Lifted write deadline: large file uploads can take minutes (encrypt + S3).
 	s.setLongWriteDeadline(w)
+	limitUploadBody(w, r, s.cfg.MaxUploadBytes)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "upload exceeds configured size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "missing file in form field 'file'", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
-	mime := header.Header.Get("Content-Type")
 	filename := header.Filename
 	if filename == "" {
 		filename = "untitled"
 	}
 
-	rec, results, err := s.mediaService.CreateAttachment(r.Context(), noteID, filename, mime, file)
+	rec, results, err := s.mediaService.CreateAttachment(r.Context(), noteID, filename, "", file)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -109,21 +114,26 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 
 	// Lifted write deadline: large file uploads can take minutes (encrypt + S3).
 	s.setLongWriteDeadline(w)
+	limitUploadBody(w, r, s.cfg.MaxInlineUploadBytes)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "upload exceeds configured size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "missing file in form field 'file'", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
-	mime := header.Header.Get("Content-Type")
 	filename := header.Filename
 	if filename == "" {
 		filename = "untitled"
 	}
 
-	rec, results, err := s.mediaService.CreatePendingInline(r.Context(), noteID, filename, mime, file)
+	rec, results, err := s.mediaService.CreatePendingInline(r.Context(), noteID, filename, "", file)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -138,7 +148,7 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 
 	// Build the markdown insertion string
 	var markdown string
-	if media.IsImage(rec.MimeType) {
+	if media.AllowsInline(rec.MimeType) && media.IsImage(rec.MimeType) {
 		markdown = fmt.Sprintf("![%s](%s)", rec.Filename, url)
 	} else {
 		markdown = fmt.Sprintf("[%s](%s)", rec.Filename, url)
@@ -178,7 +188,7 @@ func (s *Server) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.mediaService.RemoveAttachment(context.Background(), noteID, fileID); err != nil {
+	if err := s.mediaService.RemoveAttachment(r.Context(), noteID, fileID); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -286,20 +296,26 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 
 	// Load file record for content-type detection
 	var mimeType, filename string
-	err := s.db.QueryRow(`SELECT mime_type, filename FROM files WHERE id = ? AND deleted_at IS NULL`, fileID).Scan(&mimeType, &filename)
+	var sizeBytes int64
+	err := s.db.QueryRow(`SELECT mime_type, filename, size_bytes FROM files WHERE id = ? AND deleted_at IS NULL`, fileID).Scan(&mimeType, &filename, &sizeBytes)
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 
-	// Set headers
-	w.Header().Set("Content-Type", mimeType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
+	if _, err := s.mediaService.CanReadFile(r.Context(), fileID); err != nil {
+		http.Error(w, "file unavailable", http.StatusBadGateway)
+		return
+	}
 
-	// Decrypt and serve directly to response
-	rec, err := s.mediaService.ReadFile(context.Background(), fileID, w)
+	applyFileResponseHeaders(w, mimeType, filename, sizeBytes)
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	rec, err := s.mediaService.ReadFile(r.Context(), fileID, w)
 	if err != nil {
-		// If headers were already written, we can't change the status
 		log.Printf("media: serve file %d: %v", fileID, err)
 		return
 	}

@@ -37,9 +37,11 @@ func newTestServerWithMedia(t *testing.T) (*Server, *db.DB) {
 	svc.Store = newFakeMediaStore()
 
 	s := &Server{
-		db:           d,
-		addr:         ":0",
-		mediaService: svc,
+		db:            d,
+		addr:          ":0",
+		cfg:           serverConfig{MaxUploadBytes: 8 << 20, MaxInlineUploadBytes: 8 << 20},
+		loginThrottle: newLoginThrottle(),
+		mediaService:  svc,
 	}
 	return s, d
 }
@@ -478,5 +480,254 @@ func TestIsAPIPathIncludesFilesRoute(t *testing.T) {
 	}
 	if !isAPIPath("/files/1") {
 		t.Error("expected /files/1 to be an API path")
+	}
+}
+
+func TestServeFileUnsafeHTMLIsForcedToDownload(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	noteID, token := createTestNoteWithSession(t, s)
+
+	html := []byte("<!doctype html><html><body><script>alert(1)</script></body></html>")
+	ct, body := multipartBody("file", "evil.html", "text/plain", html)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload failed: %d: %s", w.Code, w.Body.String())
+	}
+
+	var fileID int64
+	var mimeType string
+	if err := d.QueryRow(`SELECT id, mime_type FROM files WHERE filename = 'evil.html'`).Scan(&fileID, &mimeType); err != nil {
+		t.Fatalf("query uploaded file: %v", err)
+	}
+	if mimeType != "text/html" {
+		t.Fatalf("expected detected MIME text/html, got %q", mimeType)
+	}
+
+	serveReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/file/%d/%d", noteID, fileID), nil)
+	serveW := httptest.NewRecorder()
+	s.serveFile(serveW, serveReq)
+	if serveW.Code != http.StatusOK {
+		t.Fatalf("serve file: expected 200, got %d", serveW.Code)
+	}
+	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
+		t.Fatalf("expected attachment disposition, got %q", got)
+	}
+	if got := serveW.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("expected nosniff, got %q", got)
+	}
+	if got := serveW.Header().Get("Content-Security-Policy"); got != fileContentSecurityPolicy {
+		t.Fatalf("expected restrictive file CSP, got %q", got)
+	}
+	if body := serveW.Body.String(); body != string(html) {
+		t.Fatalf("unexpected served body: %q", body)
+	}
+}
+
+func TestServeFileSVGIsForcedToDownload(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	noteID, token := createTestNoteWithSession(t, s)
+
+	svg := []byte(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
+	ct, body := multipartBody("file", "vector.svg", "image/svg+xml", svg)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload failed: %d: %s", w.Code, w.Body.String())
+	}
+
+	var fileID int64
+	var mimeType string
+	if err := d.QueryRow(`SELECT id, mime_type FROM files WHERE filename = 'vector.svg'`).Scan(&fileID, &mimeType); err != nil {
+		t.Fatalf("query uploaded file: %v", err)
+	}
+	if mimeType != "image/svg+xml" {
+		t.Fatalf("expected image/svg+xml, got %q", mimeType)
+	}
+
+	serveReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/file/%d/%d", noteID, fileID), nil)
+	serveW := httptest.NewRecorder()
+	s.serveFile(serveW, serveReq)
+	if serveW.Code != http.StatusOK {
+		t.Fatalf("serve file: expected 200, got %d", serveW.Code)
+	}
+	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
+		t.Fatalf("expected attachment disposition, got %q", got)
+	}
+}
+
+func TestServeFileSafePNGStaysInline(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	noteID, token := createTestNoteWithSession(t, s)
+
+	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0}
+	ct, body := multipartBody("file", "photo.png", "application/octet-stream", png)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload failed: %d: %s", w.Code, w.Body.String())
+	}
+
+	var fileID int64
+	if err := d.QueryRow(`SELECT id FROM files WHERE filename = 'photo.png'`).Scan(&fileID); err != nil {
+		t.Fatalf("query uploaded file: %v", err)
+	}
+
+	serveReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/file/%d/%d", noteID, fileID), nil)
+	serveW := httptest.NewRecorder()
+	s.serveFile(serveW, serveReq)
+	if serveW.Code != http.StatusOK {
+		t.Fatalf("serve file: expected 200, got %d", serveW.Code)
+	}
+	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "inline") {
+		t.Fatalf("expected inline disposition, got %q", got)
+	}
+	if got := serveW.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("expected image/png, got %q", got)
+	}
+}
+
+func TestServeFilePDFIsForcedToDownload(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	noteID, token := createTestNoteWithSession(t, s)
+
+	pdf := []byte("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n")
+	ct, body := multipartBody("file", "doc.pdf", "application/pdf", pdf)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload failed: %d: %s", w.Code, w.Body.String())
+	}
+
+	var fileID int64
+	if err := d.QueryRow(`SELECT id FROM files WHERE filename = 'doc.pdf'`).Scan(&fileID); err != nil {
+		t.Fatalf("query uploaded file: %v", err)
+	}
+
+	serveReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/file/%d/%d", noteID, fileID), nil)
+	serveW := httptest.NewRecorder()
+	s.serveFile(serveW, serveReq)
+	if serveW.Code != http.StatusOK {
+		t.Fatalf("serve file: expected 200, got %d", serveW.Code)
+	}
+	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
+		t.Fatalf("expected attachment disposition, got %q", got)
+	}
+}
+
+func TestServeFileAudioRemainsInline(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	noteID, token := createTestNoteWithSession(t, s)
+
+	wav := []byte{'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' '}
+	ct, body := multipartBody("file", "sound.wav", "application/octet-stream", wav)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload failed: %d: %s", w.Code, w.Body.String())
+	}
+
+	var fileID int64
+	var mimeType string
+	if err := d.QueryRow(`SELECT id, mime_type FROM files WHERE filename = 'sound.wav'`).Scan(&fileID, &mimeType); err != nil {
+		t.Fatalf("query uploaded file: %v", err)
+	}
+	if mimeType != "audio/wav" {
+		t.Fatalf("expected audio/wav, got %q", mimeType)
+	}
+
+	serveReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/file/%d/%d", noteID, fileID), nil)
+	serveW := httptest.NewRecorder()
+	s.serveFile(serveW, serveReq)
+	if serveW.Code != http.StatusOK {
+		t.Fatalf("serve file: expected 200, got %d", serveW.Code)
+	}
+	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "inline") {
+		t.Fatalf("expected inline disposition, got %q", got)
+	}
+}
+
+func TestUploadInlineUnsafeHTMLReturnsLinkMarkdown(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	noteID, token := createTestNoteWithSession(t, s)
+
+	html := []byte("<html><body>xss</body></html>")
+	ct, body := multipartBody("file", "inline.html", "text/html", html)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files/inline", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadInlineFile(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload failed: %d: %s", w.Code, w.Body.String())
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte(`"markdown":"![`)) {
+		t.Fatalf("expected unsafe HTML inline upload to return link markdown, got %s", w.Body.String())
+	}
+}
+
+func TestUploadAttachmentRejectsOversizedBodies(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	s.cfg.MaxUploadBytes = 128
+	noteID, token := createTestNoteWithSession(t, s)
+
+	payload := bytes.Repeat([]byte("A"), 2048)
+	ct, body := multipartBody("file", "too-big.bin", "application/octet-stream", payload)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestServeFileHEADSkipsBodyAndSetsLength(t *testing.T) {
+	s, d := newTestServerWithMedia(t)
+	noteID, token := createTestNoteWithSession(t, s)
+
+	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0}
+	ct, body := multipartBody("file", "head.png", "application/octet-stream", png)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/files", noteID), body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	s.uploadAttachment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload failed: %d: %s", w.Code, w.Body.String())
+	}
+
+	var fileID int64
+	if err := d.QueryRow(`SELECT id FROM files WHERE filename = 'head.png'`).Scan(&fileID); err != nil {
+		t.Fatalf("query uploaded file: %v", err)
+	}
+
+	headReq := httptest.NewRequest(http.MethodHead, fmt.Sprintf("/file/%d/%d", noteID, fileID), nil)
+	headW := httptest.NewRecorder()
+	s.serveFile(headW, headReq)
+	if headW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", headW.Code)
+	}
+	if headW.Body.Len() != 0 {
+		t.Fatalf("expected empty HEAD body, got %d bytes", headW.Body.Len())
+	}
+	if got := headW.Header().Get("Content-Length"); got != "12" {
+		t.Fatalf("expected Content-Length 12, got %q", got)
 	}
 }

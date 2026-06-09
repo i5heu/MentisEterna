@@ -296,8 +296,7 @@ async function submitWithPassword() {
     error.value = "";
     loading.value = true;
     try {
-        const data = await login(username.value, password.value);
-        localStorage.setItem("me_token", data.token);
+        await login(username.value, password.value);
         mode.value = "registerPasskey";
         passkeyError.value = "";
     } catch (e) {
@@ -308,15 +307,15 @@ async function submitWithPassword() {
 }
 
 function skipToApp() {
-    emit("logged-in", localStorage.getItem("me_token") || "");
+    emit("logged-in");
 }
 
 async function loginWithPasskey() {
     passkeyError.value = "";
     passkeyLoading.value = true;
     try {
-        const data = await beginPasskeyLogin();
-        emit("logged-in", data.token);
+        await beginPasskeyLogin();
+        emit("logged-in");
     } catch (e) {
         if (e.name === "NotAllowedError" || e.message?.includes("NotAllowed")) {
             passkeyError.value =
@@ -334,9 +333,8 @@ async function registerPasskey() {
     passkeyError.value = "";
     passkeyLoading.value = true;
     try {
-        const token = localStorage.getItem("me_token");
-        await beginPasskeyRegistration(token);
-        emit("logged-in", token);
+        await beginPasskeyRegistration();
+        emit("logged-in");
     } catch (e) {
         if (e.name === "NotAllowedError" || e.message?.includes("NotAllowed")) {
             passkeyError.value = "Passkey registration cancelled.";

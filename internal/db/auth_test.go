@@ -1,6 +1,9 @@
 package db
 
 import (
+	"crypto/sha512"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,6 +30,14 @@ func TestSetAdminPassword(t *testing.T) {
 	}
 	if !has {
 		t.Error("expected admin password to exist after SetAdminPassword")
+	}
+
+	var stored string
+	if err := d.QueryRow(`SELECT password_hash FROM auth WHERE username = 'admin'`).Scan(&stored); err != nil {
+		t.Fatalf("read stored hash: %v", err)
+	}
+	if !strings.HasPrefix(stored, "$argon2id$") {
+		t.Fatalf("expected argon2id hash, got %q", stored)
 	}
 }
 
@@ -113,6 +124,10 @@ func TestCreateSessionUnique(t *testing.T) {
 	if t1 == t2 {
 		t.Error("expected unique tokens for consecutive sessions")
 	}
+
+	if _, err := d.ValidateSession(t1); err != ErrNotFound {
+		t.Fatalf("expected prior session to be revoked, got %v", err)
+	}
 }
 
 func TestValidateSessionValid(t *testing.T) {
@@ -164,5 +179,44 @@ func TestValidateSessionExpiredCleansUp(t *testing.T) {
 	}
 	if count != 0 {
 		t.Error("expected expired session to be deleted after validation")
+	}
+}
+
+func TestCheckPasswordUpgradesLegacySHA512Hash(t *testing.T) {
+	d := openTestDB(t)
+	legacySum := sha512.Sum512([]byte("legacy-pass"))
+	legacyHash := fmt.Sprintf("%x", legacySum)
+	if _, err := d.Exec(`INSERT INTO auth (username, password_hash) VALUES ('admin', ?)`, legacyHash); err != nil {
+		t.Fatalf("insert legacy hash: %v", err)
+	}
+
+	ok, err := d.CheckPassword("admin", "legacy-pass")
+	if err != nil {
+		t.Fatalf("CheckPassword: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected legacy password to validate")
+	}
+
+	var stored string
+	if err := d.QueryRow(`SELECT password_hash FROM auth WHERE username = 'admin'`).Scan(&stored); err != nil {
+		t.Fatalf("read upgraded hash: %v", err)
+	}
+	if !strings.HasPrefix(stored, "$argon2id$") {
+		t.Fatalf("expected legacy hash to be upgraded, got %q", stored)
+	}
+}
+
+func TestDeleteSession(t *testing.T) {
+	d := openTestDB(t)
+	token, _, err := d.CreateSession("admin")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := d.DeleteSession(token); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := d.ValidateSession(token); err != ErrNotFound {
+		t.Fatalf("expected deleted session to be gone, got %v", err)
 	}
 }

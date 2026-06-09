@@ -79,45 +79,59 @@ func (s *Service) createFile(ctx context.Context, origNoteID int64, pendingAt *t
 		return FileRecord{}, nil, err
 	}
 
-	// Read plaintext into memory
-	plaintext, err := io.ReadAll(src)
+	plainTmp, err := os.CreateTemp("", "media-plain-*")
 	if err != nil {
+		return FileRecord{}, nil, fmt.Errorf("create plaintext temp: %w", err)
+	}
+	plainTmpPath := plainTmp.Name()
+	defer os.Remove(plainTmpPath)
+
+	ptHasher := sha256.New()
+	ptSize, err := io.Copy(io.MultiWriter(plainTmp, ptHasher), src)
+	if err != nil {
+		plainTmp.Close()
 		return FileRecord{}, nil, fmt.Errorf("read upload: %w", err)
 	}
-	ptSize := int64(len(plaintext))
-
-	// Compute plaintext SHA-256
-	ptHash := sha256.Sum256(plaintext)
-	ptSHA256 := hex.EncodeToString(ptHash[:])
-
-	// Encrypt to temp file
-	tmpFile, err := os.CreateTemp("", "media-enc-*")
-	if err != nil {
-		return FileRecord{}, nil, fmt.Errorf("create temp: %w", err)
+	if err := plainTmp.Close(); err != nil {
+		return FileRecord{}, nil, fmt.Errorf("close plaintext temp: %w", err)
 	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	ptSHA256 := hex.EncodeToString(ptHasher.Sum(nil))
 
-	ctSHA256, _, ctSize, err := EncryptToFile(bytes.NewReader(plaintext), tmpFile, aesKey, baseNonce)
+	sampleReader, err := os.Open(plainTmpPath)
 	if err != nil {
-		tmpFile.Close()
+		return FileRecord{}, nil, fmt.Errorf("open plaintext temp for sniffing: %w", err)
+	}
+	sample := make([]byte, 512)
+	n, readErr := sampleReader.Read(sample)
+	sampleReader.Close()
+	if readErr != nil && readErr != io.EOF {
+		return FileRecord{}, nil, fmt.Errorf("read plaintext sample: %w", readErr)
+	}
+	mime = DetectMIME(sample[:n])
+
+	cipherTmp, err := os.CreateTemp("", "media-enc-*")
+	if err != nil {
+		return FileRecord{}, nil, fmt.Errorf("create ciphertext temp: %w", err)
+	}
+	cipherTmpPath := cipherTmp.Name()
+	defer os.Remove(cipherTmpPath)
+
+	plainReader, err := os.Open(plainTmpPath)
+	if err != nil {
+		cipherTmp.Close()
+		return FileRecord{}, nil, fmt.Errorf("open plaintext temp for encryption: %w", err)
+	}
+	ctSHA256, _, ctSize, err := EncryptToFile(plainReader, cipherTmp, aesKey, baseNonce)
+	plainReader.Close()
+	if err != nil {
+		cipherTmp.Close()
 		return FileRecord{}, nil, fmt.Errorf("encrypt: %w", err)
 	}
-	tmpFile.Close()
+	if err := cipherTmp.Close(); err != nil {
+		return FileRecord{}, nil, fmt.Errorf("close ciphertext temp: %w", err)
+	}
 
-	// Generate storage key
 	storageKey := fmt.Sprintf("files/%s/%s", time.Now().UTC().Format("2006/01/02"), ctSHA256)
-
-	// Sniff MIME if not provided
-	if mime == "" || mime == "application/octet-stream" {
-		mime = sniffMIME(plaintext)
-	}
-
-	// Read encrypted file for upload
-	ctData, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return FileRecord{}, nil, fmt.Errorf("read encrypted: %w", err)
-	}
 
 	// Begin transaction
 	tx, err := s.DB.Begin()
@@ -164,18 +178,13 @@ func (s *Service) createFile(ctx context.Context, origNoteID int64, pendingAt *t
 		return FileRecord{}, nil, err
 	}
 
-	// Upload to all endpoints concurrently (first wave)
-	results := s.uploadToReplicas(ctx, fileID, storageKey, ctData, ctSize)
+	results := s.uploadToReplicasFromFile(ctx, fileID, storageKey, cipherTmpPath, ctSize)
 
-	// Check for client disconnect before proceeding.
-	// If the request was aborted, the committed DB row is no longer wanted.
-	// Clean up DB + S3 and return an error so no response is sent.
 	if ctx.Err() != nil {
 		s.cleanupFailedUpload(fileID, storageKey)
 		return FileRecord{}, results, fmt.Errorf("upload aborted: %w", ctx.Err())
 	}
 
-	// If ALL replicas failed, clean up and return error
 	allFailed := true
 	for _, r := range results {
 		if r.State == ReplicaStateUploaded {
@@ -184,21 +193,24 @@ func (s *Service) createFile(ctx context.Context, origNoteID int64, pendingAt *t
 		}
 	}
 	if allFailed {
-		// Clean up: soft-delete the file and remote garbage
 		s.cleanupFailedUpload(fileID, storageKey)
 		return FileRecord{}, results, fmt.Errorf("all %d replica uploads failed", len(results))
 	}
 
-	// Enqueue repair jobs for failed replicas (after commit)
 	for _, r := range results {
 		if r.State == ReplicaStateUploadFailed {
 			s.enqueueRepair(fileID, r.EndpointID, storageKey, ctSize)
 		}
 	}
 
-	// Cache encrypted bytes locally
-	if err := s.Cache.Put(fileID, ctSHA256, bytes.NewReader(ctData)); err != nil {
-		log.Printf("media: cache put file %d: %v", fileID, err)
+	ctReader, err := os.Open(cipherTmpPath)
+	if err != nil {
+		log.Printf("media: open ciphertext temp for cache put file %d: %v", fileID, err)
+	} else {
+		if err := s.Cache.Put(fileID, ctSHA256, ctReader); err != nil {
+			log.Printf("media: cache put file %d: %v", fileID, err)
+		}
+		ctReader.Close()
 	}
 
 	rec := FileRecord{
@@ -217,8 +229,8 @@ func (s *Service) createFile(ctx context.Context, origNoteID int64, pendingAt *t
 	return rec, results, nil
 }
 
-// uploadToReplicas uploads encrypted data to all configured endpoints concurrently.
-func (s *Service) uploadToReplicas(ctx context.Context, fileID int64, storageKey string, data []byte, size int64) []ReplicaResult {
+// uploadToReplicasFromFile uploads encrypted data to all configured endpoints concurrently.
+func (s *Service) uploadToReplicasFromFile(ctx context.Context, fileID int64, storageKey, ciphertextPath string, size int64) []ReplicaResult {
 	var wg sync.WaitGroup
 	results := make([]ReplicaResult, len(s.Config.Endpoints))
 
@@ -226,8 +238,23 @@ func (s *Service) uploadToReplicas(ctx context.Context, fileID int64, storageKey
 		wg.Add(1)
 		go func(idx int, endpoint EndpointConfig) {
 			defer wg.Done()
-			etag, err := s.Store.Put(ctx, endpoint, storageKey, bytes.NewReader(data), size)
+			file, openErr := os.Open(ciphertextPath)
 			now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+			if openErr != nil {
+				results[idx] = ReplicaResult{EndpointID: endpoint.ID, State: ReplicaStateUploadFailed, Error: openErr.Error()}
+				s.DB.Exec(`
+					UPDATE file_s3 SET state = ?, last_error = ?, last_attempt_at = ?, retry_count = retry_count + 1,
+					                  next_retry_at = ?, updated_at = ?
+					WHERE file_id = ? AND endpoint_id = ?`,
+					string(ReplicaStateUploadFailed), openErr.Error(), now,
+					time.Now().UTC().Add(1*time.Minute).Format("2006-01-02T15:04:05.000Z"), now,
+					fileID, endpoint.ID,
+				)
+				return
+			}
+			defer file.Close()
+
+			etag, err := s.Store.Put(ctx, endpoint, storageKey, file, size)
 			if err != nil {
 				results[idx] = ReplicaResult{
 					EndpointID: endpoint.ID,
@@ -282,6 +309,26 @@ func (s *Service) cleanupFailedUpload(fileID int64, storageKey string) {
 	}
 }
 
+// CanReadFile checks whether the encrypted source is available from cache or a replica.
+func (s *Service) CanReadFile(ctx context.Context, fileID int64) (FileRecord, error) {
+	rec, err := s.loadFileRecord(fileID)
+	if err != nil {
+		return FileRecord{}, err
+	}
+	if ctReader, cacheErr := s.Cache.Open(fileID, rec.CiphertextSHA256); cacheErr == nil {
+		ctReader.Close()
+		return rec, nil
+	}
+	for _, ep := range s.Config.Endpoints {
+		body, err := s.Store.Get(ctx, ep, rec.StorageKey)
+		if err == nil {
+			body.Close()
+			return rec, nil
+		}
+	}
+	return rec, fmt.Errorf("media: file %d unavailable from any replica", fileID)
+}
+
 // ReadFile reads and decrypts a file, using local cache first then falling back to S3.
 func (s *Service) ReadFile(ctx context.Context, fileID int64, w io.Writer) (FileRecord, error) {
 	rec, err := s.loadFileRecord(fileID)
@@ -289,7 +336,6 @@ func (s *Service) ReadFile(ctx context.Context, fileID int64, w io.Writer) (File
 		return FileRecord{}, err
 	}
 
-	// Try local cache first
 	ctReader, cacheErr := s.Cache.Open(fileID, rec.CiphertextSHA256)
 	if cacheErr == nil {
 		defer ctReader.Close()
@@ -299,28 +345,46 @@ func (s *Service) ReadFile(ctx context.Context, fileID int64, w io.Writer) (File
 		return rec, nil
 	}
 
-	// Cache miss: fetch from a healthy replica
 	for _, ep := range s.Config.Endpoints {
 		body, err := s.Store.Get(ctx, ep, rec.StorageKey)
 		if err != nil {
 			continue
 		}
-		defer body.Close()
 
-		// Read encrypted bytes
-		ctData, err := io.ReadAll(body)
+		tmpFile, err := os.CreateTemp("", "media-fetch-*")
 		if err != nil {
+			body.Close()
+			return rec, fmt.Errorf("create temp fetch file: %w", err)
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+
+		if _, err := io.Copy(tmpFile, body); err != nil {
+			body.Close()
+			tmpFile.Close()
+			continue
+		}
+		body.Close()
+		if err := tmpFile.Close(); err != nil {
 			continue
 		}
 
-		// Cache encrypted bytes
-		if cacheErr := s.Cache.Put(fileID, rec.CiphertextSHA256, bytes.NewReader(ctData)); cacheErr != nil {
-			log.Printf("media: cache put after fetch file %d: %v", fileID, cacheErr)
+		cacheReader, err := os.Open(tmpPath)
+		if err == nil {
+			if cacheErr := s.Cache.Put(fileID, rec.CiphertextSHA256, cacheReader); cacheErr != nil {
+				log.Printf("media: cache put after fetch file %d: %v", fileID, cacheErr)
+			}
+			cacheReader.Close()
 		}
 
-		// Decrypt
-		if err := DecryptToWriter(bytes.NewReader(ctData), w, rec.AESKey, rec.AESNonce); err != nil {
-			return rec, fmt.Errorf("decrypt replica: %w", err)
+		serveReader, err := os.Open(tmpPath)
+		if err != nil {
+			continue
+		}
+		decryptErr := DecryptToWriter(serveReader, w, rec.AESKey, rec.AESNonce)
+		serveReader.Close()
+		if decryptErr != nil {
+			return rec, fmt.Errorf("decrypt replica: %w", decryptErr)
 		}
 		return rec, nil
 	}

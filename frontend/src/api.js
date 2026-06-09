@@ -1,5 +1,8 @@
 async function request(path, options = {}) {
-    const res = await fetch(path, options);
+    const res = await fetch(path, {
+        credentials: "include",
+        ...options,
+    });
     if (res.status === 401) {
         window.dispatchEvent(new CustomEvent("auth:unauthorized"));
         throw new Error("unauthorized");
@@ -12,15 +15,14 @@ async function request(path, options = {}) {
     return res.json();
 }
 
-function authHeaders(token) {
+function authHeaders(_token) {
     return {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
     };
 }
 
-function authOnlyHeaders(token) {
-    return { Authorization: `Bearer ${token}` };
+function authOnlyHeaders(_token) {
+    return {};
 }
 
 export async function login(username, password) {
@@ -28,6 +30,16 @@ export async function login(username, password) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
+    });
+}
+
+export async function fetchSession() {
+    return request("/session");
+}
+
+export async function logout() {
+    return request("/logout", {
+        method: "POST",
     });
 }
 
@@ -256,7 +268,7 @@ function encodeAssertionResponse(response) {
 }
 
 /**
- * Begin passkey registration. Requires an existing session (Bearer token).
+ * Begin passkey registration. Requires an existing session cookie.
  */
 export async function beginPasskeyRegistration(token) {
     const pubKeyOpts = await request("/webauthn/register/begin", {
@@ -271,7 +283,6 @@ export async function beginPasskeyRegistration(token) {
         method: "POST",
         headers: { ...authHeaders(token), "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        credentials: "include",
     });
 }
 
@@ -361,6 +372,5 @@ export async function beginPasskeyLogin() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        credentials: "include",
     });
 }
