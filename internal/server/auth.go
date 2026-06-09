@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -20,16 +21,28 @@ const pwChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 // (so that embedded resource requests like <img> can be authenticated).
 const authCookieName = "auth_token"
 
-// setAuthCookie sets the auth_token cookie on the response.
-func setAuthCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+func (s *Server) setAuthCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     authCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   s.cfg.CookieSecure,
 		SameSite: http.SameSiteStrictMode,
 		Expires:  expiresAt,
+	})
+}
+
+func (s *Server) clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   s.cfg.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
 	})
 }
 
@@ -80,8 +93,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(in.Username) == "" || in.Password == "" {
+	in.Username = strings.TrimSpace(in.Username)
+	if in.Username == "" || in.Password == "" {
 		http.Error(w, "username and password required", http.StatusBadRequest)
+		return
+	}
+
+	usernameKey := throttleKeyUsername(strings.ToLower(in.Username))
+	ipKey := throttleKeyIP(clientIPFromRequest(r))
+	if wait, allowed := s.loginThrottle.allow(usernameKey, ipKey); !allowed {
+		w.Header().Set("Retry-After", formatRetryAfter(wait))
+		http.Error(w, "invalid credentials", http.StatusTooManyRequests)
 		return
 	}
 
@@ -91,24 +113,61 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		s.loginThrottle.recordFailure(usernameKey, ipKey)
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
+	s.loginThrottle.recordSuccess(usernameKey, ipKey)
 	token, expiresAt, err := s.db.CreateSession(in.Username)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	setAuthCookie(w, token, expiresAt)
+	s.setAuthCookie(w, token, expiresAt)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"token":      token,
 		"expires_at": expiresAt.Format("2006-01-02T15:04:05Z"),
 	})
 }
 
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if token := sessionTokenFromRequest(r); token != "" {
+		if err := s.db.DeleteSession(token); err != nil && !errors.Is(err, db.ErrNotFound) {
+			writeErr(w, err)
+			return
+		}
+	}
+	s.clearAuthCookie(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	username, _, err := s.sessionUsername(r)
+	if errors.Is(err, db.ErrNotFound) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"authenticated": true,
+		"username":      username,
+	})
+}
+
 func isAPIPath(p string) bool {
-	return p == "/health" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
+	return p == "/health" || p == "/session" || p == "/logout" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
 		p == "/note-types" ||
 		p == "/jobs" || strings.HasPrefix(p, "/jobs/") ||
 		strings.HasPrefix(p, "/webauthn/") || strings.HasPrefix(p, "/file/") ||
@@ -119,25 +178,13 @@ func isAPIPath(p string) bool {
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// WebAuthn endpoints handle their own auth (or are public for login).
-		if r.URL.Path == "/login" || r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/webauthn/") || !isAPIPath(r.URL.Path) {
+		// These endpoints handle their own auth (or are public for login/bootstrap).
+		if r.URL.Path == "/login" || r.URL.Path == "/logout" || r.URL.Path == "/session" || r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/webauthn/") || !isAPIPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		token := extractBearerToken(r)
-		if token == "" {
-			// Fall back to cookie for browser-embedded requests (img, video, etc.)
-			if c, err := r.Cookie(authCookieName); err == nil {
-				token = c.Value
-			}
-		}
-		if token == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		_, err := s.db.ValidateSession(token)
+		_, _, err := s.sessionUsername(r)
 		if errors.Is(err, db.ErrNotFound) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -149,4 +196,47 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func sessionTokenFromRequest(r *http.Request) string {
+	token := extractBearerToken(r)
+	if token != "" {
+		return token
+	}
+	if c, err := r.Cookie(authCookieName); err == nil {
+		return c.Value
+	}
+	return ""
+}
+
+func (s *Server) sessionUsername(r *http.Request) (string, string, error) {
+	token := sessionTokenFromRequest(r)
+	if token == "" {
+		return "", "", db.ErrNotFound
+	}
+	username, err := s.db.ValidateSession(token)
+	if err != nil {
+		return "", token, err
+	}
+	return username, token, nil
+}
+
+func (s *Server) authenticateSession(r *http.Request) string {
+	username, _, err := s.sessionUsername(r)
+	if errors.Is(err, db.ErrNotFound) {
+		return ""
+	}
+	if err != nil {
+		log.Printf("auth session: %v", err)
+		return ""
+	}
+	return username
+}
+
+func clientIPFromRequest(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }

@@ -619,7 +619,7 @@ func TestIsImage(t *testing.T) {
 		{"image/png", true},
 		{"image/gif", true},
 		{"image/webp", true},
-		{"image/svg+xml", true},
+		{"image/svg+xml", false},
 		{"text/plain", false},
 		{"application/pdf", false},
 		{"application/octet-stream", false},
