@@ -114,16 +114,7 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 
 	token := generateWebAuthnToken()
 	s.sessionStore.Set(token, *sessionData)
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     webAuthnSessionCookie,
-		Value:    token,
-		Path:     "/webauthn/",
-		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   300,
-	})
+	s.setWebAuthnSessionCookie(w, token)
 
 	writeJSON(w, http.StatusOK, creation.Response)
 }
@@ -196,16 +187,7 @@ func (s *Server) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Request
 
 	token := generateWebAuthnToken()
 	s.sessionStore.Set(token, *sessionData)
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     webAuthnSessionCookie,
-		Value:    token,
-		Path:     "/webauthn/",
-		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   300,
-	})
+	s.setWebAuthnSessionCookie(w, token)
 
 	writeJSON(w, http.StatusOK, assertion.Response)
 }
@@ -265,27 +247,23 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	setAuthCookie(w, token, expiresAt)
+	s.setAuthCookie(w, token, expiresAt)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"token":      token,
 		"expires_at": expiresAt.Format("2006-01-02T15:04:05Z"),
 	})
 }
 
-func (s *Server) authenticateSession(r *http.Request) string {
-	token := extractBearerToken(r)
-	if token == "" {
-		return ""
-	}
-	username, err := s.db.ValidateSession(token)
-	if errors.Is(err, db.ErrNotFound) {
-		return ""
-	}
-	if err != nil {
-		log.Printf("auth session: %v", err)
-		return ""
-	}
-	return username
+func (s *Server) setWebAuthnSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     webAuthnSessionCookie,
+		Value:    token,
+		Path:     "/webauthn/",
+		HttpOnly: true,
+		Secure:   s.cfg.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   300,
+	})
 }
 
 func extractBearerToken(r *http.Request) string {

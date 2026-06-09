@@ -43,6 +43,11 @@ export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
 export LOCALAI_STT_MODEL="voxtral-mini-4b-realtime"  # Whisper-compatible model for speech-to-text
 export JOB_WORKERS="10"  # Concurrent background jobs (reindexing, OCR, STT, etc.)
 export RECIPE_CATEGORY_WORKERS="10"  # Parallel ingredient-category embedding requests
+export PUBLIC_BASE_URL="http://localhost:8080"  # Local browser URL; use https://... for non-localhost deployments
+export WEBAUTHN_RPID="notes.example.com"  # Optional override for the WebAuthn RP ID
+export WEBAUTHN_RP_ORIGINS="https://notes.example.com"  # Optional comma-separated WebAuthn origins
+export MAX_UPLOAD_BYTES="67108864"  # Max upload size in bytes
+export MAX_INLINE_UPLOAD_BYTES="16777216"  # Max inline-upload size in bytes
 export MEDIA_CACHE_DIR="/var/mentis/cache"  # Local directory for encrypted file cache
 export MEDIA_S3_ENDPOINTS='[
   {
@@ -60,6 +65,8 @@ export BACKUP_ENCRYPTION_KEY="your-encryption-key"  # Encryption key for backups
 
 Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
 
+Security review checklist: [`docs/SecurityChecklist.md`](docs/SecurityChecklist.md)
+
 ## Docker Compose
 
 Build and run with Docker Compose:
@@ -67,23 +74,26 @@ Build and run with Docker Compose:
 ```bash
 # .env is loaded automatically by Docker Compose
 # Edit it as needed, especially:
+#   For local use: PUBLIC_BASE_URL=http://localhost:8080
+#   For non-localhost deployments: PUBLIC_BASE_URL=https://notes.example.com
 #   PROXY_BASIC_AUTH_USERNAME
 #   PROXY_BASIC_AUTH_PASSWORD
 
 docker compose up --build
 ```
 
-The published port belongs to a small Caddy reverse proxy that requires a
-username + password *once*. On first successful authentication it sets a
-long-lived `auth_token` session cookie so every subsequent request (even
-across browser restarts) bypasses the password prompt entirely.
+By default, local Compose publishes the app at `http://localhost:8080`.
+For non-localhost deployments, set `PUBLIC_BASE_URL` to an `https://...` URL;
+that enables HTTPS termination in Caddy and preserves the backend's `Secure`
+cookies end-to-end. The proxy requires HTTP basic auth as an outer layer, but
+it no longer issues a replayable bypass cookie.
 
-You still see a password prompt again when:
-- you clear browser cookies, or
-- you change `PROXY_BASIC_AUTH_USERNAME` / `PROXY_BASIC_AUTH_PASSWORD`.
-
-If you expose the app beyond a trusted local network, put TLS/HTTPS in front
-of it as well.
+Notes:
+- Browser auth is cookie-only; the SPA no longer stores session tokens in
+  `localStorage`.
+- The server derives cookie security and default WebAuthn RP settings from
+  `PUBLIC_BASE_URL`.
+- TLS is required for supported non-localhost deployments.
 
 On first startup with an empty data volume, create the database explicitly:
 
@@ -93,7 +103,10 @@ docker compose run --rm mentis --create-db
 
 After that, normal `docker compose up` works without the flag.
 
-The Compose setup stores the SQLite database and media cache in the named volume `mentis-data` mounted at `/data` inside the container.
+The Compose setup stores the SQLite database and media cache in the bind-mounted host directory `./mentis-data`, mounted at `/data` inside the container.
+Caddy certificate and config state are persisted in the `mentis-caddy-data` and
+`mentis-caddy-config` volumes. In the default local HTTP mode, the HTTPS port
+mapping is unused unless you explicitly switch `PUBLIC_BASE_URL` to `https://...`.
 
 If you want AI features to work from inside the container, set `LOCALAI_BASE_URL` in `.env` to a reachable endpoint for your LocalAI instance.
 
@@ -268,8 +281,12 @@ MentisEterna supports encrypted file attachments stored on any S3-compatible obj
 |---|---|---|
 | `MEDIA_CACHE_DIR` | Yes | Writable directory for local encrypted file cache (e.g. `/var/mentis/cache`) |
 | `MEDIA_S3_ENDPOINTS` | Yes | JSON array of endpoint configurations (see format below) |
+| `MAX_UPLOAD_BYTES` | No | App and proxy upload limit in bytes. Defaults to `67108864` (64 MiB). |
+| `MAX_INLINE_UPLOAD_BYTES` | No | Max inline-upload size in bytes. Defaults to `16777216` (16 MiB) in Compose. |
 
 If these variables are not set, the media subsystem is disabled and a warning is logged at startup. The server still runs — file upload/download endpoints simply return `503 Service Unavailable`.
+Uploaded files are classified server-side from their bytes. Only a small allowlist
+of image/audio types is rendered inline; everything else is served as a download.
 
 ### `MEDIA_S3_ENDPOINTS` Format
 

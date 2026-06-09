@@ -74,14 +74,9 @@ type ReplicaResult struct {
 	Error      string
 }
 
-// IsImage checks if the MIME type represents an image.
+// IsImage reports whether the file is safe to render inline as an image.
 func IsImage(mimeType string) bool {
-	switch mimeType {
-	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/tiff":
-		return true
-	default:
-		return false
-	}
+	return IsSafeInlineImage(mimeType)
 }
 
 // IsAudio checks if the MIME type represents an audio file.

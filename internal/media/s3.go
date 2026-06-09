@@ -1,7 +1,6 @@
 package media
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -11,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -44,24 +44,31 @@ func (s *S3Store) objectURL(ep EndpointConfig, key string) string {
 	if ep.ForcePathStyle {
 		return fmt.Sprintf("%s/%s/%s", base, ep.Bucket, key)
 	}
-	return fmt.Sprintf("%s/%s/%s", base, ep.Bucket, key)
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Host == "" {
+		return fmt.Sprintf("%s/%s/%s", base, ep.Bucket, key)
+	}
+	parsed.Host = ep.Bucket + "." + parsed.Host
+	parsed.Path = "/" + strings.TrimLeft(key, "/")
+	return parsed.String()
 }
 
 // Put uploads an object. Returns the ETag (without quotes).
 func (s *S3Store) Put(ctx context.Context, ep EndpointConfig, key string, src io.Reader, size int64) (string, error) {
-	body, err := io.ReadAll(src)
+	payload, payloadHash, cleanup, err := preparePayload(src)
 	if err != nil {
-		return "", fmt.Errorf("read body: %w", err)
+		return "", fmt.Errorf("prepare payload: %w", err)
 	}
+	defer cleanup()
 
 	u := s.objectURL(ep, key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, payload)
 	if err != nil {
 		return "", err
 	}
-	req.ContentLength = int64(len(body))
+	req.ContentLength = size
 
-	if err := s.signRequest(req, ep, body); err != nil {
+	if err := s.signRequest(req, ep, payloadHash); err != nil {
 		return "", fmt.Errorf("sign: %w", err)
 	}
 
@@ -86,7 +93,7 @@ func (s *S3Store) Get(ctx context.Context, ep EndpointConfig, key string) (io.Re
 		return nil, err
 	}
 
-	if err := s.signRequest(req, ep, nil); err != nil {
+	if err := s.signRequest(req, ep, sha256Hex(nil)); err != nil {
 		return nil, fmt.Errorf("sign: %w", err)
 	}
 
@@ -115,7 +122,7 @@ func (s *S3Store) Delete(ctx context.Context, ep EndpointConfig, key string) err
 		return err
 	}
 
-	if err := s.signRequest(req, ep, nil); err != nil {
+	if err := s.signRequest(req, ep, sha256Hex(nil)); err != nil {
 		return fmt.Errorf("sign: %w", err)
 	}
 
@@ -175,7 +182,7 @@ func (s *S3Store) List(ctx context.Context, ep EndpointConfig, prefix string) ([
 			return nil, err
 		}
 
-		if err := s.signRequest(req, ep, nil); err != nil {
+		if err := s.signRequest(req, ep, sha256Hex(nil)); err != nil {
 			return nil, fmt.Errorf("sign list: %w", err)
 		}
 
@@ -217,7 +224,7 @@ func (s *S3Store) List(ctx context.Context, ep EndpointConfig, prefix string) ([
 }
 
 // signRequest adds AWS Signature V4 authentication headers to the request.
-func (s *S3Store) signRequest(req *http.Request, ep EndpointConfig, body []byte) error {
+func (s *S3Store) signRequest(req *http.Request, ep EndpointConfig, payloadHash string) error {
 	t := time.Now().UTC()
 	region := ep.Region
 	if region == "" {
@@ -226,8 +233,7 @@ func (s *S3Store) signRequest(req *http.Request, ep EndpointConfig, body []byte)
 	service := "s3"
 
 	// Task 1: Create a canonical request
-	canonicalHeaders, signedHeaders := s.buildCanonicalHeaders(req, t, ep, body)
-	payloadHash := sha256Hex(body)
+	canonicalHeaders, signedHeaders := s.buildCanonicalHeaders(req, t, payloadHash)
 	canonicalRequest := strings.Join([]string{
 		req.Method,
 		s.urlEncodePath(req.URL.Path),
@@ -260,11 +266,11 @@ func (s *S3Store) signRequest(req *http.Request, ep EndpointConfig, body []byte)
 	return nil
 }
 
-func (s *S3Store) buildCanonicalHeaders(req *http.Request, t time.Time, ep EndpointConfig, body []byte) (string, string) {
+func (s *S3Store) buildCanonicalHeaders(req *http.Request, t time.Time, payloadHash string) (string, string) {
 	// Set required headers
 	req.Header.Set("Host", req.URL.Host)
 	req.Header.Set("X-Amz-Date", t.Format("20060102T150405Z"))
-	req.Header.Set("X-Amz-Content-SHA256", sha256Hex(body))
+	req.Header.Set("X-Amz-Content-SHA256", payloadHash)
 
 	// Collect and sort header names
 	var names []string
@@ -327,6 +333,54 @@ func (s *S3Store) deriveSigningKey(secret, date, region, service string) []byte 
 	kRegion := hmacSHA256(kDate, []byte(region))
 	kService := hmacSHA256(kRegion, []byte(service))
 	return hmacSHA256(kService, []byte("aws4_request"))
+}
+
+func preparePayload(src io.Reader) (io.ReadSeeker, string, func(), error) {
+	if src == nil {
+		empty := strings.NewReader("")
+		return empty, sha256Hex(nil), func() {}, nil
+	}
+	if seeker, ok := src.(io.ReadSeeker); ok {
+		hash, err := hashReadSeeker(seeker)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		return seeker, hash, func() {}, nil
+	}
+
+	tmpFile, err := os.CreateTemp("", "mentis-s3-put-*")
+	if err != nil {
+		return nil, "", nil, err
+	}
+	cleanup := func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+	}
+
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmpFile, hasher), src); err != nil {
+		cleanup()
+		return nil, "", nil, err
+	}
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, "", nil, err
+	}
+	return tmpFile, hex.EncodeToString(hasher.Sum(nil)), cleanup, nil
+}
+
+func hashReadSeeker(src io.ReadSeeker) (string, error) {
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, src); err != nil {
+		return "", err
+	}
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func sha256Hex(data []byte) string {

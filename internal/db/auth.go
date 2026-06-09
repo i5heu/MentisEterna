@@ -2,7 +2,6 @@ package db
 
 import (
 	"crypto/rand"
-	"crypto/sha512"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -23,11 +22,13 @@ func (d *DB) HasAdminPassword() (bool, error) {
 	return hash != "", nil
 }
 
-// SetAdminPassword stores the SHA-512 hex digest of plaintext for 'admin'.
+// SetAdminPassword stores a modern password hash for 'admin'.
 func (d *DB) SetAdminPassword(plaintext string) error {
-	sum := sha512.Sum512([]byte(plaintext))
-	hash := fmt.Sprintf("%x", sum)
-	_, err := d.Exec(`
+	hash, err := hashPassword(plaintext)
+	if err != nil {
+		return err
+	}
+	_, err = d.Exec(`
 		INSERT INTO auth (username, password_hash) VALUES ('admin', ?)
 		ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash`,
 		hash,
@@ -35,7 +36,8 @@ func (d *DB) SetAdminPassword(plaintext string) error {
 	return err
 }
 
-// CheckPassword returns true if plaintext matches the stored SHA-512 hash for username.
+// CheckPassword returns true if plaintext matches the stored password hash for username.
+// Legacy SHA-512 hashes are upgraded in-place after a successful login.
 func (d *DB) CheckPassword(username, plaintext string) (bool, error) {
 	var stored string
 	err := d.QueryRow(`SELECT password_hash FROM auth WHERE username = ?`, username).Scan(&stored)
@@ -45,11 +47,29 @@ func (d *DB) CheckPassword(username, plaintext string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	sum := sha512.Sum512([]byte(plaintext))
-	return fmt.Sprintf("%x", sum) == stored, nil
+	ok, legacy, err := verifyPasswordHash(stored, plaintext)
+	if err != nil {
+		return false, err
+	}
+	if ok && legacy {
+		if err := d.rehashPassword(username, plaintext); err != nil {
+			return false, err
+		}
+	}
+	return ok, nil
 }
 
-// CreateSession generates a secure random token, persists it, and returns it with its expiry.
+func (d *DB) rehashPassword(username, plaintext string) error {
+	hash, err := hashPassword(plaintext)
+	if err != nil {
+		return fmt.Errorf("rehash password: %w", err)
+	}
+	_, err = d.Exec(`UPDATE auth SET password_hash = ? WHERE username = ?`, hash, username)
+	return err
+}
+
+// CreateSession generates a secure random token, rotates prior sessions for the
+// user, persists the new session, and returns it with its expiry.
 func (d *DB) CreateSession(username string) (token string, expiresAt time.Time, err error) {
 	raw := make([]byte, 32)
 	if _, err = rand.Read(raw); err != nil {
@@ -58,14 +78,40 @@ func (d *DB) CreateSession(username string) (token string, expiresAt time.Time, 
 	token = hex.EncodeToString(raw)
 	expiresAt = time.Now().UTC().Add(24 * time.Hour)
 
-	_, err = d.Exec(
+	tx, err := d.Begin()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	defer tx.Rollback()
+
+	if _, err = tx.Exec(`DELETE FROM sessions WHERE username = ?`, username); err != nil {
+		return "", time.Time{}, fmt.Errorf("delete prior sessions: %w", err)
+	}
+	if _, err = tx.Exec(
 		`INSERT INTO sessions (token, username, expires_at) VALUES (?, ?, ?)`,
 		token, username, expiresAt.Format(time.RFC3339),
-	)
-	if err != nil {
+	); err != nil {
 		return "", time.Time{}, fmt.Errorf("insert session: %w", err)
 	}
+	if err = tx.Commit(); err != nil {
+		return "", time.Time{}, err
+	}
 	return token, expiresAt, nil
+}
+
+func (d *DB) DeleteSession(token string) error {
+	res, err := d.Exec(`DELETE FROM sessions WHERE token = ?`, token)
+	if err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete session rows affected: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // GetUserID returns the id for a given username.

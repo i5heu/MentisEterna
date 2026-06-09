@@ -27,22 +27,25 @@ import (
 type Server struct {
 	db            *db.DB
 	addr          string
+	cfg           serverConfig
 	llm           llm.Embedder
 	chatClient    llm.Generator
 	ocrClient     llm.OCRer
 	sttClient     llm.STTer
 	webauthn      *webauthn.WebAuthn
 	sessionStore  *webAuthnSessionStore
+	loginThrottle *loginThrottle
 	jobManager    *jobs.Manager
 	mediaService  *media.Service
 	backupService *backup.Service
 }
 
 func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
+	cfg := loadServerConfig()
 	wconfig := &webauthn.Config{
-		RPID:                  "localhost",
+		RPID:                  cfg.WebAuthnRPID,
 		RPDisplayName:         "MentisEterna",
-		RPOrigins:             []string{"http://localhost:8080", "https://localhost:8080"},
+		RPOrigins:             cfg.WebAuthnOrigins,
 		AttestationPreference: "none",
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
 			AuthenticatorAttachment: "platform",
@@ -101,12 +104,14 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 	return &Server{
 		db:            d,
 		addr:          addr,
+		cfg:           cfg,
 		llm:           embeddingClient,
 		chatClient:    chatClient,
 		ocrClient:     ocrClient,
 		sttClient:     sttClient,
 		webauthn:      w,
 		sessionStore:  newWebAuthnSessionStore(),
+		loginThrottle: newLoginThrottle(),
 		jobManager:    jobMgr,
 		mediaService:  mediaSvc,
 		backupService: backupSvc,
@@ -235,6 +240,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		s.handleLogin(w, r)
 	})
+	mux.HandleFunc("/logout", s.handleLogout)
+	mux.HandleFunc("/session", s.handleSession)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/notes", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -366,7 +373,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr:         s.addr,
-		Handler:      s.requireAuth(mux),
+		Handler:      s.withSecurityHeaders(s.requireAuth(mux)),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
