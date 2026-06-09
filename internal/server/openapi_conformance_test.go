@@ -585,6 +585,8 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		s.handleLogin(w, r)
 	})
+	mux.HandleFunc("/logout", s.handleLogout)
+	mux.HandleFunc("/session", s.handleSession)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/notes", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

@@ -639,6 +639,7 @@ import ShortcutHint from "../components/ShortcutHint.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
 import {
     beginPasskeyRegistration,
+    logout as apiLogout,
     triggerBackup as apiTriggerBackup,
     reindexNotes as apiReindexNotes,
     reindexOCR as apiReindexOCR,
@@ -958,8 +959,12 @@ async function deleteUnknownS3() {
     }
 }
 
-function doLogout() {
-    emit("logout");
+async function doLogout() {
+    try {
+        await apiLogout();
+    } finally {
+        emit("logout");
+    }
 }
 </script>
 

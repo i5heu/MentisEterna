@@ -1,5 +1,6 @@
 <template>
-    <LoginView v-if="!token" @logged-in="onLogin" />
+    <div v-if="!authReady" class="app-loading">Loading…</div>
+    <LoginView v-else-if="!token" @logged-in="onLogin" />
     <OptionsView
         v-else-if="currentView === 'options'"
         :token="token"
@@ -16,22 +17,23 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
+import { fetchSession } from "./api.js";
 import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
 import OptionsView from "./views/OptionsView.vue";
 
-const token = ref(localStorage.getItem("me_token") || "");
+const token = ref("");
+const authReady = ref(false);
 const currentView = ref("notes");
 
-function onLogin(t) {
-    token.value = t;
-    localStorage.setItem("me_token", t);
+function onLogin() {
+    token.value = "cookie-auth";
     currentView.value = "notes";
 }
 
 function onLogout() {
     token.value = "";
-    localStorage.removeItem("me_token");
+    authReady.value = true;
     currentView.value = "notes";
 }
 
@@ -39,8 +41,21 @@ function onAuthUnauthorized() {
     onLogout();
 }
 
+async function bootstrapSession() {
+    authReady.value = false;
+    try {
+        await fetchSession();
+        token.value = "cookie-auth";
+    } catch (e) {
+        token.value = "";
+    } finally {
+        authReady.value = true;
+    }
+}
+
 onMounted(() => {
     window.addEventListener("auth:unauthorized", onAuthUnauthorized);
+    bootstrapSession();
 });
 
 onUnmounted(() => {
@@ -55,6 +70,13 @@ onUnmounted(() => {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
+}
+
+.app-loading {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    color: var(--font-color, #e0e8e4);
 }
 
 :root {
