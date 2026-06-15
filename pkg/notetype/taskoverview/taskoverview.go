@@ -113,7 +113,7 @@ func (p *TaskOverviewPlugin) Manifest() notetype.Manifest {
 			{
 				ID:              "daily_tasks",
 				Label:           "Get Daily Tasks",
-				Description:     "Get 3 random non-done tasks for today's focus",
+				Description:     "Get 3 tasks for today's focus (in-progress tasks prioritized)",
 				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"count":{"type":"integer"}}}`),
 				Dangerous:       false,
 				RefreshStrategy: "reload_view",
@@ -541,27 +541,29 @@ func trimSpace(s string) string {
 }
 
 func pickRandomTasks(tasks []TaskSummary, count int) []TaskSummary {
-	// Filter to non-done tasks.
-	var candidates []TaskSummary
+	var inProgress, candidates []TaskSummary
 	for _, t := range tasks {
-		if t.Status != "done" {
+		switch t.Status {
+		case "in_progress":
+			inProgress = append(inProgress, t)
+		case "done":
+			// skip
+		default:
 			candidates = append(candidates, t)
 		}
 	}
 
-	if len(candidates) == 0 {
-		return []TaskSummary{}
-	}
-
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	rng.Shuffle(len(candidates), func(i, j int) {
-		candidates[i], candidates[j] = candidates[j], candidates[i]
-	})
+	rng.Shuffle(len(inProgress), func(i, j int) { inProgress[i], inProgress[j] = inProgress[j], inProgress[i] })
+	rng.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
 
-	if count > len(candidates) {
-		count = len(candidates)
+	result := make([]TaskSummary, 0, count)
+	result = append(result, inProgress...)
+	result = append(result, candidates...)
+	if len(result) > count {
+		result = result[:count]
 	}
-	return candidates[:count]
+	return result
 }
 
 func handleDailyTasks(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
