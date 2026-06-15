@@ -372,11 +372,13 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 
 	srv := &http.Server{
-		Addr:         s.addr,
-		Handler:      s.withSecurityHeaders(s.requireAuth(mux)),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              s.addr,
+		Handler:           s.withSecurityHeaders(s.requireTrustedRequest(s.requireAuth(mux))),
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {
