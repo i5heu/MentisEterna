@@ -76,24 +76,24 @@ Build and run with Docker Compose:
 # Edit it as needed, especially:
 #   For local use: PUBLIC_BASE_URL=http://localhost:8080
 #   For non-localhost deployments: PUBLIC_BASE_URL=https://notes.example.com
-#   PROXY_BASIC_AUTH_USERNAME
-#   PROXY_BASIC_AUTH_PASSWORD
 
 docker compose up --build
 ```
 
-By default, local Compose publishes the app at `http://localhost:8080`.
-For non-localhost deployments, set `PUBLIC_BASE_URL` to an `https://...` URL;
-that enables HTTPS termination in Caddy and preserves the backend's `Secure`
-cookies end-to-end. The proxy requires HTTP basic auth as an outer layer, but
-it no longer issues a replayable bypass cookie.
+By default, Compose publishes the app directly at `http://localhost:8080`.
+The bundled Caddy auth proxy has been removed; the Go server now performs its
+own request hardening.
 
 Notes:
 - Browser auth is cookie-only; the SPA no longer stores session tokens in
   `localStorage`.
-- The server derives cookie security and default WebAuthn RP settings from
-  `PUBLIC_BASE_URL`.
-- TLS is required for supported non-localhost deployments.
+- The server derives cookie security, trusted origin checks, and default
+  WebAuthn RP settings from `PUBLIC_BASE_URL`.
+- Non-localhost deployments must set `PUBLIC_BASE_URL` to an `https://...`
+  URL; the server now refuses to start otherwise.
+- If you deploy behind your own TLS terminator or reverse proxy, make sure it
+  preserves the original `Host` header so the server's trusted-host checks keep
+  working.
 
 On first startup with an empty data volume, create the database explicitly:
 
@@ -104,9 +104,8 @@ docker compose run --rm mentis --create-db
 After that, normal `docker compose up` works without the flag.
 
 The Compose setup stores the SQLite database and media cache in the bind-mounted host directory `./mentis-data`, mounted at `/data` inside the container.
-Caddy certificate and config state are persisted in the `mentis-caddy-data` and
-`mentis-caddy-config` volumes. In the default local HTTP mode, the HTTPS port
-mapping is unused unless you explicitly switch `PUBLIC_BASE_URL` to `https://...`.
+For remote deployments, terminate TLS in your own ingress/reverse proxy and set
+`PUBLIC_BASE_URL` to the external `https://...` origin that browsers use.
 
 If you want AI features to work from inside the container, set `LOCALAI_BASE_URL` in `.env` to a reachable endpoint for your LocalAI instance.
 
@@ -138,7 +137,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [ ] icons and status in settings modal for jobs
 - [x] files with wired MIMES will be uploaded correctly but the upload HTTP request will fail with 502 "STT for file 8 completed with error: unsupported MIME type for STT: image/RAF"
 - [x] The Pantry ingredients should not be added to the grocery list as default, they must be added manually via the "Add Pantry Staples" button in the recipe overview.
-- [ ] Get rid of the auth proxy, rather harden code
+- [x] Get rid of the auth proxy, rather harden code
 
 ## TODO Future
 - [ ] Setup building pipeline

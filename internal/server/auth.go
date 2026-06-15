@@ -2,7 +2,6 @@ package server
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -89,8 +88,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !s.decodeJSONBody(w, r, &in) {
 		return
 	}
 	in.Username = strings.TrimSpace(in.Username)

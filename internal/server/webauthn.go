@@ -127,6 +127,8 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxJSONBodyBytes())
+
 	username := s.authenticateSession(r)
 	if username == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -199,6 +201,8 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxJSONBodyBytes())
 
 	cookie, err := r.Cookie(webAuthnSessionCookie)
 	if err != nil {

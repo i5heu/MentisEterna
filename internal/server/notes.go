@@ -263,8 +263,7 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		CustomData json.RawMessage `json:"custom_data"`
 		Tags       []string        `json:"tags"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !s.decodeJSONBody(w, r, &in) {
 		return
 	}
 	userProvidedTitle := strings.TrimSpace(in.Title) != ""
@@ -397,8 +396,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		CustomData json.RawMessage `json:"custom_data"`
 		Tags       []string        `json:"tags"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !s.decodeJSONBody(w, r, &in) {
 		return
 	}
 	userProvidedTitle := strings.TrimSpace(in.Title) != ""
@@ -552,8 +550,7 @@ func (s *Server) setNotePin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Pinned bool `json:"pinned"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !s.decodeJSONBody(w, r, &in) {
 		return
 	}
 
@@ -737,8 +734,7 @@ func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 		Action string          `json:"action"`
 		Params json.RawMessage `json:"params"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !s.decodeJSONBody(w, r, &in) {
 		return
 	}
 
@@ -763,7 +759,9 @@ func (s *Server) handlePluginActionV2(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Params json.RawMessage `json:"params"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&in)
+		if !s.decodeOptionalJSONBody(w, r, &in) {
+			return
+		}
 		params = in.Params
 	}
 
