@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	stdpath "path"
 	"strings"
 	"time"
 
@@ -164,24 +165,37 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func cleanRequestPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return stdpath.Clean(p)
+}
+
 func isAPIPath(p string) bool {
+	p = cleanRequestPath(p)
 	return p == "/health" || p == "/session" || p == "/logout" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
 		p == "/note-types" ||
 		p == "/jobs" || strings.HasPrefix(p, "/jobs/") ||
 		strings.HasPrefix(p, "/webauthn/") || strings.HasPrefix(p, "/file/") ||
-		strings.HasPrefix(p, "/files/") ||
+		p == "/files" || strings.HasPrefix(p, "/files/") ||
 		strings.HasPrefix(p, "/system/") || strings.HasPrefix(p, "/backup/") || strings.HasPrefix(p, "/maintenance/") ||
 		p == "/tags" || strings.HasPrefix(p, "/tags?")
 }
 
+func isSensitivePath(p string) bool {
+	p = cleanRequestPath(p)
+	return p == "/login" || strings.HasPrefix(p, "/webauthn/") || isAPIPath(p)
+}
+
+// requireAuth enforces a valid session for the wrapped handler.
+// Public routes should be registered without this middleware.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// These endpoints handle their own auth (or are public for login/bootstrap).
-		if r.URL.Path == "/login" || r.URL.Path == "/logout" || r.URL.Path == "/session" || r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/webauthn/") || !isAPIPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		_, _, err := s.sessionUsername(r)
 		if errors.Is(err, db.ErrNotFound) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

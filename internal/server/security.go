@@ -17,6 +17,7 @@ const (
 
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cleanedPath := cleanRequestPath(r.URL.Path)
 		h := w.Header()
 		if h.Get("X-Content-Type-Options") == "" {
 			h.Set("X-Content-Type-Options", "nosniff")
@@ -36,10 +37,10 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 		if s.cfg.CookieSecure && h.Get("Strict-Transport-Security") == "" {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
-		if isAPIPath(r.URL.Path) && h.Get("Cache-Control") == "" {
+		if isSensitivePath(cleanedPath) && h.Get("Cache-Control") == "" {
 			h.Set("Cache-Control", "no-store")
 		}
-		if !strings.HasPrefix(r.URL.Path, "/file/") && h.Get("Content-Security-Policy") == "" {
+		if !strings.HasPrefix(cleanedPath, "/file/") && h.Get("Content-Security-Policy") == "" {
 			h.Set("Content-Security-Policy", appContentSecurityPolicy)
 		}
 		next.ServeHTTP(w, r)
@@ -74,16 +75,17 @@ func (s *Server) requiresTrustedOrigin(r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 		return false
 	}
-	if isLoginRoute(r.URL.Path) {
-		return false
-	}
-	if !(isAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/webauthn/")) {
+	cleanedPath := cleanRequestPath(r.URL.Path)
+	if isLoginRoute(cleanedPath) {
 		return false
 	}
 	if usesAuthCookie(r) || usesWebAuthnSessionCookie(r) {
 		return true
 	}
 	if extractBearerToken(r) != "" {
+		return false
+	}
+	if !isSensitivePath(cleanedPath) {
 		return false
 	}
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
@@ -133,6 +135,7 @@ func usesWebAuthnSessionCookie(r *http.Request) bool {
 }
 
 func isLoginRoute(path string) bool {
+	path = cleanRequestPath(path)
 	return path == "/login" || strings.HasPrefix(path, "/webauthn/login/")
 }
 

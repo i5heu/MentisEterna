@@ -33,11 +33,10 @@ func TestOpenAPI_Conformance(t *testing.T) {
 		}
 	}
 
-	// Build the mux once, wrapped in auth middleware.
+	// Build the mux once with the same public/protected split as the real server.
 	mux := s.getMuxForTest()
-	authMux := s.requireAuth(mux)
 
-	// Helper: send a request through the auth-wrapped mux.
+	// Helper: send a request through the mux.
 	do := func(method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 		var req *http.Request
 		if body != "" {
@@ -52,7 +51,7 @@ func TestOpenAPI_Conformance(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		w := httptest.NewRecorder()
-		authMux.ServeHTTP(w, req)
+		mux.ServeHTTP(w, req)
 		return w
 	}
 
@@ -582,13 +581,17 @@ type Manifest = notetype.Manifest
 // We build a fresh one for tests so route registration matches.
 func (s *Server) getMuxForTest() *http.ServeMux {
 	mux := http.NewServeMux()
+	protected := func(h http.HandlerFunc) http.Handler {
+		return s.requireAuth(h)
+	}
+
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		s.handleLogin(w, r)
 	})
 	mux.HandleFunc("/logout", s.handleLogout)
-	mux.HandleFunc("/session", s.handleSession)
+	mux.Handle("/session", protected(s.handleSession))
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/notes", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/notes", protected(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			s.listNotes(w, r)
@@ -597,22 +600,22 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/note-types", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.Handle("/note-types", protected(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			s.handleNoteTypes(w, r)
 		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/notes/search", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.Handle("/notes/search", protected(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			s.searchNotes(w, r)
 		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/notes/", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.Handle("/notes/", protected(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/history") {
 			if r.Method == http.MethodGet {
 				s.getNoteHistory(w, r)
@@ -659,12 +662,12 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/tags", s.handleTags)
-	mux.HandleFunc("/jobs", s.handleJobs)
-	mux.HandleFunc("/jobs/", s.handleJobByID)
-	mux.HandleFunc("/backup/trigger", s.handleBackupTrigger)
-	mux.HandleFunc("/backup/purge", s.handleBackupPurge)
+	}))
+	mux.Handle("/tags", protected(s.handleTags))
+	mux.Handle("/jobs", protected(s.handleJobs))
+	mux.Handle("/jobs/", protected(s.handleJobByID))
+	mux.Handle("/backup/trigger", protected(s.handleBackupTrigger))
+	mux.Handle("/backup/purge", protected(s.handleBackupPurge))
 	return mux
 }
 

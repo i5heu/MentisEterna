@@ -237,13 +237,17 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	mux := http.NewServeMux()
+	protected := func(h http.HandlerFunc) http.Handler {
+		return s.requireAuth(h)
+	}
+
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		s.handleLogin(w, r)
 	})
 	mux.HandleFunc("/logout", s.handleLogout)
-	mux.HandleFunc("/session", s.handleSession)
+	mux.Handle("/session", protected(s.handleSession))
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/notes", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/notes", protected(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			s.listNotes(w, r)
@@ -252,22 +256,22 @@ func (s *Server) Start(ctx context.Context) error {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/note-types", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.Handle("/note-types", protected(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			s.handleNoteTypes(w, r)
 		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/notes/search", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.Handle("/notes/search", protected(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			s.searchNotes(w, r)
 		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/notes/", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.Handle("/notes/", protected(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/history") {
 			if r.Method == http.MethodGet {
 				s.getNoteHistory(w, r)
@@ -328,52 +332,52 @@ func (s *Server) Start(ctx context.Context) error {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
+	}))
 
 	// WebAuthn routes
-	mux.HandleFunc("/webauthn/register/begin", s.handleWebAuthnRegisterBegin)
-	mux.HandleFunc("/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
+	mux.Handle("/webauthn/register/begin", protected(s.handleWebAuthnRegisterBegin))
+	mux.Handle("/webauthn/register/finish", protected(s.handleWebAuthnRegisterFinish))
 	mux.HandleFunc("/webauthn/login/begin", s.handleWebAuthnLoginBegin)
 	mux.HandleFunc("/webauthn/login/finish", s.handleWebAuthnLoginFinish)
 
 	// Tag autocomplete
-	mux.HandleFunc("/tags", s.handleTags)
+	mux.Handle("/tags", protected(s.handleTags))
 
 	// Job routes
-	mux.HandleFunc("/jobs", s.handleJobs)
-	mux.HandleFunc("/jobs/", s.handleJobByID)
+	mux.Handle("/jobs", protected(s.handleJobs))
+	mux.Handle("/jobs/", protected(s.handleJobByID))
 
 	// On-demand backup trigger
-	mux.HandleFunc("/backup/trigger", s.handleBackupTrigger)
-	mux.HandleFunc("/backup/purge", s.handleBackupPurge)
+	mux.Handle("/backup/trigger", protected(s.handleBackupTrigger))
+	mux.Handle("/backup/purge", protected(s.handleBackupPurge))
 
 	// Maintenance reindex endpoints
-	mux.HandleFunc("/maintenance/reindex", s.handleReindexNotes)
-	mux.HandleFunc("/maintenance/reindex-ocr", s.handleReindexOCR)
-	mux.HandleFunc("/maintenance/reindex-stt", s.handleReindexSTT)
-	mux.HandleFunc("/maintenance/recalculate-recipe-categories", s.handleRecalculateRecipeIngredientCategories)
-	mux.HandleFunc("/maintenance/delete-unknown-s3-files", s.handleDeleteUnknownS3Files)
+	mux.Handle("/maintenance/reindex", protected(s.handleReindexNotes))
+	mux.Handle("/maintenance/reindex-ocr", protected(s.handleReindexOCR))
+	mux.Handle("/maintenance/reindex-stt", protected(s.handleReindexSTT))
+	mux.Handle("/maintenance/recalculate-recipe-categories", protected(s.handleRecalculateRecipeIngredientCategories))
+	mux.Handle("/maintenance/delete-unknown-s3-files", protected(s.handleDeleteUnknownS3Files))
 
 	// System status endpoints
-	mux.HandleFunc("/system/printer-status", s.handlePrinterStatus)
-	mux.HandleFunc("/system/ai-status", s.handleAIStatus)
+	mux.Handle("/system/printer-status", protected(s.handlePrinterStatus))
+	mux.Handle("/system/ai-status", protected(s.handleAIStatus))
 
-	mux.HandleFunc("/file/", s.serveFile)
+	mux.Handle("/file/", protected(s.serveFile))
 
 	// Files routes: OCR and STT results
-	mux.HandleFunc("/files/", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/files/", protected(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/stt") {
 			s.handleFileSTT(w, r)
 			return
 		}
 		s.handleFileOCR(w, r)
-	})
+	}))
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 
 	srv := &http.Server{
 		Addr:              s.addr,
-		Handler:           s.withSecurityHeaders(s.requireTrustedRequest(s.requireAuth(mux))),
+		Handler:           s.withSecurityHeaders(s.requireTrustedRequest(mux)),
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,

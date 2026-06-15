@@ -158,29 +158,16 @@ func TestHandleLoginWrongMethod(t *testing.T) {
 	}
 }
 
-func TestRequireAuthLoginPassthrough(t *testing.T) {
+func TestRequireAuthProtectsWrappedArbitraryPath(t *testing.T) {
 	s := newTestServer(t)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	handler := s.requireAuth(inner)
 
-	r := httptest.NewRequest(http.MethodPost, "/login", nil)
+	r := httptest.NewRequest(http.MethodGet, "/exports/full", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
-	if w.Code != http.StatusOK {
-		t.Errorf("/login: expected 200, got %d", w.Code)
-	}
-}
-
-func TestRequireAuthNonAPIPassthrough(t *testing.T) {
-	s := newTestServer(t)
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler := s.requireAuth(inner)
-
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
-	if w.Code != http.StatusOK {
-		t.Errorf("/: expected 200, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrapped arbitrary path: expected 401, got %d", w.Code)
 	}
 }
 
