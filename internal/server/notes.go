@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/i5heu/MentisEterna/internal/llm"
+	"github.com/i5heu/MentisEterna/internal/searchindex"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
@@ -350,8 +350,8 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	}
 	s.enrichDetail(&n)
 	n.Attachments, _ = s.loadNoteAttachments(n.ID)
-	// Async VSS embedding sync via job queue
-	s.enqueueVSSIndex(id, in.Title, in.Body)
+	// Async search embedding sync via job queue.
+	s.enqueueVSSIndex(id)
 	// Async title generation (only if the user didn't provide one)
 	if !userProvidedTitle {
 		s.enqueueTitleGeneration(id, in.Body)
@@ -486,8 +486,8 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	}
 	s.enrichDetail(&n)
 	n.Attachments, _ = s.loadNoteAttachments(n.ID)
-	// Async VSS embedding sync via job queue
-	s.enqueueVSSIndex(id, in.Title, in.Body)
+	// Async search embedding sync via job queue.
+	s.enqueueVSSIndex(id)
 	// Async title generation (only if the user didn't provide one)
 	if !userProvidedTitle {
 		s.enqueueTitleGeneration(id, in.Body)
@@ -511,6 +511,12 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.db.VSSAvailable() {
+		if err := searchindex.DeleteNoteIndex(s.db.DB, id); err != nil {
+			log.Printf("search: delete index for note %d: %v", id, err)
+		}
+	}
+
 	res, err := s.db.Exec(`DELETE FROM notes WHERE id = ?`, id)
 	if err != nil {
 		writeErr(w, err)
@@ -521,7 +527,7 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remove VSS embedding
+	// Clean up any legacy whole-note vector row.
 	if s.db.VSSAvailable() {
 		_, _ = s.db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, id)
 	}
@@ -847,45 +853,44 @@ func noteIDAndAction(w http.ResponseWriter, r *http.Request) (int64, string, boo
 }
 
 // syncEmbeddingTask is the job task handler for vector embedding generation.
-// It accepts a JSON payload with "note_id", "title", and "body" fields.
+// It re-reads the current note state so title/path/tag changes are indexed too.
 func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
+	if s.llm == nil {
+		return "", fmt.Errorf("vss_index: no embedding client configured")
+	}
 	var p struct {
-		NoteID int64  `json:"note_id"`
-		Title  string `json:"title"`
-		Body   string `json:"body"`
+		NoteID int64 `json:"note_id"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return "", fmt.Errorf("vss_index: invalid payload: %w", err)
 	}
+	if p.NoteID <= 0 {
+		return "", fmt.Errorf("vss_index: invalid note_id")
+	}
 
-	text := llm.CombineTitleBody(p.Title, p.Body)
-	text = llm.TruncateForEmbedding(text)
-	vec, err := s.llm.GenerateEmbedding(text)
+	doc, err := searchindex.LoadDocument(db, p.NoteID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Sprintf("Skipped note %d: deleted before indexing", p.NoteID), nil
+	}
 	if err != nil {
-		return "", fmt.Errorf("generate embedding: %w", err)
+		return "", fmt.Errorf("load note document: %w", err)
 	}
-	vecJSON := llm.EmbeddingToJSON(vec)
-	if _, err := db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.NoteID); err != nil {
-		return "", fmt.Errorf("delete old embedding: %w", err)
+	chunkCount, err := searchindex.ReplaceNoteIndex(db, s.llm, doc)
+	if err != nil {
+		return "", fmt.Errorf("replace note search index: %w", err)
 	}
-	if _, err := db.Exec(
-		`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
-		p.NoteID, vecJSON,
-	); err != nil {
-		return "", fmt.Errorf("insert embedding: %w", err)
-	}
-	return fmt.Sprintf("Indexed note %d (%d chars)", p.NoteID, len(p.Body)), nil
+	// Clean up any legacy whole-note vector row.
+	_, _ = db.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.NoteID)
+	return fmt.Sprintf("Indexed note %d (%d search chunks)", p.NoteID, chunkCount), nil
 }
 
 // enqueueVSSIndex enqueues a vss_index job for the given note.
-func (s *Server) enqueueVSSIndex(noteID int64, title, body string) {
+func (s *Server) enqueueVSSIndex(noteID int64) {
 	if s.jobManager == nil {
 		return
 	}
 	payload, _ := json.Marshal(map[string]interface{}{
 		"note_id": noteID,
-		"title":   title,
-		"body":    body,
 	})
 	if _, err := s.jobManager.Enqueue("_system", "vss_index", payload); err != nil {
 		log.Printf("vss: enqueue index for note %d: %v", noteID, err)
@@ -922,6 +927,7 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 	if _, err := db.Exec(`UPDATE notes SET title = ? WHERE id = ?`, title, p.NoteID); err != nil {
 		return "", fmt.Errorf("update title: %w", err)
 	}
+	s.enqueueVSSIndex(p.NoteID)
 	return fmt.Sprintf("Generated title for note %d: %q", p.NoteID, title), nil
 }
 
@@ -1163,287 +1169,6 @@ func (s *Server) handleNoteTypes(w http.ResponseWriter, r *http.Request) {
 	catalog = append(catalog, notetype.ListManifests()...)
 
 	writeJSON(w, http.StatusOK, catalog)
-}
-
-// SearchResult extends NoteSummary with a distance field for ranked search results.
-type SearchResult struct {
-	NoteSummary
-	Distance float64 `json:"distance"`
-}
-
-// searchNotes performs a semantic search over notes using sqlite-vec.
-// GET /notes/search?q=your+query
-func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if query == "" {
-		http.Error(w, "query parameter 'q' is required", http.StatusBadRequest)
-		return
-	}
-
-	if !s.db.VSSAvailable() {
-		log.Printf("semantic search unavailable: sqlite-vec is not loaded")
-		http.Error(w, "semantic search system error", http.StatusInternalServerError)
-		return
-	}
-	if s.llm == nil {
-		log.Printf("semantic search unavailable: embedding client is not configured")
-		http.Error(w, "semantic search system error", http.StatusInternalServerError)
-		return
-	}
-
-	query = llm.TruncateForEmbedding(query)
-	vec, err := s.llm.GenerateEmbedding(query)
-	if err != nil {
-		log.Printf("semantic search embedding error: %v", err)
-		http.Error(w, "semantic search system error", http.StatusInternalServerError)
-		return
-	}
-	vecJSON := llm.EmbeddingToJSON(vec)
-
-	// Fast path: skip the notes vector query if there are no indexed note embeddings.
-	var vssCount int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_notes`).Scan(&vssCount); err != nil {
-		writeErr(w, err)
-		return
-	}
-
-	// Collect distances by note ID from vss_notes, vss_files_ocr, and vss_files_stt.
-	distByID := make(map[int64]float64)
-
-	if vssCount > 0 {
-		// Step 1a: Search vss_notes (note body embeddings).
-		vssRows, err := s.db.Query(`
-			SELECT rowid, distance
-			FROM vss_notes
-			WHERE body_embedding MATCH ? AND k = 10
-			ORDER BY distance ASC
-		`, vecJSON)
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		for vssRows.Next() {
-			var rowid int64
-			var dist float64
-			if err := vssRows.Scan(&rowid, &dist); err != nil {
-				vssRows.Close()
-				writeErr(w, err)
-				return
-			}
-			distByID[rowid] = dist
-		}
-		vssRows.Close()
-	}
-
-	// Step 1b: Search vss_files_ocr (OCR text embeddings) and resolve to notes.
-	// Check if the OCR VSS table exists and has data.
-	var ocrVSSExists bool
-	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='vss_files_ocr')`).Scan(&ocrVSSExists)
-	if ocrVSSExists {
-		var ocrCount int
-		s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_ocr`).Scan(&ocrCount)
-		if ocrCount > 0 {
-			ocrRows, err := s.db.Query(`
-				SELECT rowid, distance
-				FROM vss_files_ocr
-				WHERE ocr_embedding MATCH ? AND k = 20
-				ORDER BY distance ASC
-			`, vecJSON)
-			if err == nil {
-				// Collect file IDs from OCR hits.
-				ocrDistByFile := map[int64]float64{}
-				for ocrRows.Next() {
-					var fileID int64
-					var dist float64
-					if err := ocrRows.Scan(&fileID, &dist); err != nil {
-						ocrRows.Close()
-						writeErr(w, err)
-						return
-					}
-					ocrDistByFile[fileID] = dist
-				}
-				ocrRows.Close()
-
-				// Resolve file IDs to note IDs via files_refs.
-				if len(ocrDistByFile) > 0 {
-					fileIDs := make([]int64, 0, len(ocrDistByFile))
-					for fid := range ocrDistByFile {
-						fileIDs = append(fileIDs, fid)
-					}
-					// Build IN clause.
-					filePlaceholders := make([]string, len(fileIDs))
-					fileArgs := make([]any, len(fileIDs))
-					for i, fid := range fileIDs {
-						filePlaceholders[i] = "?"
-						fileArgs[i] = fid
-					}
-					refRows, err := s.db.Query(`
-							SELECT DISTINCT fr.note_id, fr.file_id
-							FROM files_refs fr
-							JOIN files f ON f.id = fr.file_id
-							WHERE fr.file_id IN (`+strings.Join(filePlaceholders, ",")+`)
-							  AND f.deleted_at IS NULL
-						`, fileArgs...)
-					if err == nil {
-						for refRows.Next() {
-							var noteID, fileID int64
-							if err := refRows.Scan(&noteID, &fileID); err != nil {
-								refRows.Close()
-								writeErr(w, err)
-								return
-							}
-							dist := ocrDistByFile[fileID]
-							// Merge: keep the best (minimum) distance per note.
-							if existing, ok := distByID[noteID]; !ok || dist < existing {
-								distByID[noteID] = dist
-							}
-						}
-						refRows.Close()
-					}
-				}
-			}
-		}
-	}
-
-	// Step 1c: Search vss_files_stt (STT text embeddings) and resolve to notes.
-	// Check if the STT VSS table exists and has data.
-	var sttVSSExists bool
-	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='vss_files_stt')`).Scan(&sttVSSExists)
-	if sttVSSExists {
-		var sttCount int
-		s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_stt`).Scan(&sttCount)
-		if sttCount > 0 {
-			sttRows, err := s.db.Query(`
-				SELECT rowid, distance
-				FROM vss_files_stt
-				WHERE stt_embedding MATCH ? AND k = 20
-				ORDER BY distance ASC
-			`, vecJSON)
-			if err == nil {
-				// Collect file IDs from STT hits.
-				sttDistByFile := map[int64]float64{}
-				for sttRows.Next() {
-					var fileID int64
-					var dist float64
-					if err := sttRows.Scan(&fileID, &dist); err != nil {
-						sttRows.Close()
-						writeErr(w, err)
-						return
-					}
-					sttDistByFile[fileID] = dist
-				}
-				sttRows.Close()
-
-				// Resolve file IDs to note IDs via files_refs.
-				if len(sttDistByFile) > 0 {
-					fileIDs := make([]int64, 0, len(sttDistByFile))
-					for fid := range sttDistByFile {
-						fileIDs = append(fileIDs, fid)
-					}
-					// Build IN clause.
-					filePlaceholders := make([]string, len(fileIDs))
-					fileArgs := make([]any, len(fileIDs))
-					for i, fid := range fileIDs {
-						filePlaceholders[i] = "?"
-						fileArgs[i] = fid
-					}
-					refRows, err := s.db.Query(`
-							SELECT DISTINCT fr.note_id, fr.file_id
-							FROM files_refs fr
-							JOIN files f ON f.id = fr.file_id
-							WHERE fr.file_id IN (`+strings.Join(filePlaceholders, ",")+`)
-							  AND f.deleted_at IS NULL
-						`, fileArgs...)
-					if err == nil {
-						for refRows.Next() {
-							var noteID, fileID int64
-							if err := refRows.Scan(&noteID, &fileID); err != nil {
-								refRows.Close()
-								writeErr(w, err)
-								return
-							}
-							dist := sttDistByFile[fileID]
-							// Merge: keep the best (minimum) distance per note.
-							if existing, ok := distByID[noteID]; !ok || dist < existing {
-								distByID[noteID] = dist
-							}
-						}
-						refRows.Close()
-					}
-				}
-			}
-		}
-	}
-
-	if len(distByID) == 0 {
-		writeJSON(w, http.StatusOK, []SearchResult{})
-		return
-	}
-
-	// Collect top N (up to 10) note IDs sorted by distance.
-	type idDist struct {
-		id   int64
-		dist float64
-	}
-	sorted := make([]idDist, 0, len(distByID))
-	for id, dist := range distByID {
-		sorted = append(sorted, idDist{id, dist})
-	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].dist < sorted[j].dist })
-	limit := 10
-	if len(sorted) < limit {
-		limit = len(sorted)
-	}
-	sorted = sorted[:limit]
-
-	// Collect IDs in order for the IN clause.
-	ids := make([]any, len(sorted))
-	placeholders := make([]string, len(sorted))
-	for i, h := range sorted {
-		ids[i] = h.id
-		placeholders[i] = "?"
-	}
-
-	noteRows, err := s.db.Query(`
-		SELECT n.id, n.title, n.parent_id, n.type, n.pinned, n.created_at,
-		       COALESCE(u.body, '') AS body,
-		       COALESCE(u.created_at, n.created_at) AS updated_at
-		FROM notes n
-		LEFT JOIN updates u ON u.id = (
-			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
-		)
-		WHERE n.id IN (`+strings.Join(placeholders, ",")+`)
-	`, ids...)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	defer noteRows.Close()
-
-	results := []SearchResult{}
-	for noteRows.Next() {
-		sum, err := scanSummary(noteRows)
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		sr := SearchResult{
-			NoteSummary: sum,
-			Distance:    distByID[sum.ID],
-		}
-		results = append(results, sr)
-	}
-	if err := noteRows.Err(); err != nil {
-		writeErr(w, err)
-		return
-	}
-
-	// Re-sort by distance since IN clause doesn't preserve order.
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Distance < results[j].Distance
-	})
-
-	writeJSON(w, http.StatusOK, results)
 }
 
 // handleTags returns known tags filtered by an optional ?q= prefix query.

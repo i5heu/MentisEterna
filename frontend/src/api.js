@@ -117,8 +117,19 @@ export async function fetchAncestors(token, id) {
     return request(`/notes/${id}/ancestors`, { headers: authHeaders(token) });
 }
 
-export async function searchNotes(token, query) {
-    return request(`/notes/search?q=${encodeURIComponent(query)}`, {
+export async function searchNotes(token, query, options = {}) {
+    const params = new URLSearchParams({ q: query });
+    const types = Array.isArray(options.types)
+        ? [
+              ...new Set(
+                  options.types.map((t) => String(t).trim()).filter(Boolean),
+              ),
+          ]
+        : null;
+    if (types && types.length > 0) {
+        params.set("types", types.join(","));
+    }
+    return request(`/notes/search?${params.toString()}`, {
         headers: authHeaders(token),
     });
 }

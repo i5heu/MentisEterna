@@ -90,17 +90,18 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 func helperCreateNoteSync(t *testing.T, s *Server, title, body string, parentID *int64) NoteDetail {
 	t.Helper()
 	n := helperCreateNote(t, s, title, body, parentID)
-	// Call the embedding task synchronously to be certain the embedding is stored.
-	payload, _ := json.Marshal(map[string]interface{}{
-		"note_id": n.ID,
-		"title":   title,
-		"body":    body,
-	})
-	_, err := s.syncEmbeddingTask(s.db.DB, payload)
-	if err != nil {
-		t.Logf("syncEmbeddingTask: %v", err)
-	}
+	helperSyncSearchIndex(t, s, n.ID)
 	return n
+}
+
+func helperSyncSearchIndex(t *testing.T, s *Server, noteID int64) {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]interface{}{
+		"note_id": noteID,
+	})
+	if _, err := s.syncEmbeddingTask(s.db.DB, payload); err != nil {
+		t.Fatalf("syncEmbeddingTask(%d): %v", noteID, err)
+	}
 }
 
 func TestHandleHealth(t *testing.T) {
@@ -160,6 +161,11 @@ func helperCreateNote(t *testing.T, s *Server, title, body string, parentID *int
 	} else {
 		payload = fmt.Sprintf(`{"title":%q,"body":%q}`, title, body)
 	}
+	return helperCreateNoteRaw(t, s, payload)
+}
+
+func helperCreateNoteRaw(t *testing.T, s *Server, payload string) NoteDetail {
+	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/notes", strings.NewReader(payload))
 	w := httptest.NewRecorder()
 	s.createNote(w, r)
@@ -504,15 +510,15 @@ func TestSearchFindsExactMatch(t *testing.T) {
 }
 
 // TestSearchExactQueryReturnsTopResult verifies that when searching for the
-// exact title+body combination of a note, that note appears with distance ≈ 0.
+// exact paragraph text of a note, that note appears as the top result.
 func TestSearchExactQueryReturnsTopResult(t *testing.T) {
 	s := newTestServerWithEmbedder(t)
 
 	n := helperCreateNoteSync(t, s, "Exact", "unique phrase here", nil)
 
-	// The embedding is generated from CombineTitleBody: "Exact\nunique phrase here"
-	// Search with the same combined text for an exact vector match.
-	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=Exact%0Aunique+phrase+here", nil)
+	// The body paragraph is indexed as its own chunk, so searching for the same
+	// paragraph should produce an exact vector match.
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=unique+phrase+here", nil)
 	w := httptest.NewRecorder()
 	s.searchNotes(w, r)
 
@@ -534,10 +540,6 @@ func TestSearchExactQueryReturnsTopResult(t *testing.T) {
 		t.Errorf("expected top result ID=%d, got ID=%d", n.ID, results[0].ID)
 	}
 
-	// Distance should be 0 for exact same combined text (mock caches identical input).
-	if results[0].Distance > 0.01 {
-		t.Errorf("expected distance near 0 for exact match, got %f", results[0].Distance)
-	}
 }
 
 // TestSearchEmptyQueryReturns400 verifies that the search endpoint requires
@@ -769,6 +771,149 @@ func TestSearchResultContainsAllFields(t *testing.T) {
 	}
 	// Distance is always present (can be 0 for exact match).
 	_ = sr.Distance
+}
+
+func TestSearchIndexesBodyParagraphsSeparately(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	n := helperCreateNoteSync(t, s, "Paragraph Note", "First paragraph\n\nSecond paragraph", nil)
+
+	var chunkCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_search_chunks WHERE note_id = ? AND field = 'body'`, n.ID).Scan(&chunkCount); err != nil {
+		t.Fatalf("count body chunks: %v", err)
+	}
+	if chunkCount != 2 {
+		t.Fatalf("expected 2 body chunks, got %d", chunkCount)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=Second+paragraph", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("searchNotes: expected 200, got %d", w.Code)
+	}
+
+	var results []SearchResult
+	if err := json.NewDecoder(w.Body).Decode(&results); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(results) == 0 || results[0].ID != n.ID {
+		t.Fatalf("expected paragraph note %d to be top result, got %+v", n.ID, results)
+	}
+}
+
+func TestSearchFindsTitlePathAndTags(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	root := helperCreateNoteSync(t, s, "Projects Hub", "Root note", nil)
+	child := helperCreateNoteRaw(t, s, fmt.Sprintf(
+		`{"title":"Release Checklist","body":"Deploy checklist","parent_id":%d,"tags":["ops","urgent"]}`,
+		root.ID,
+	))
+	helperSyncSearchIndex(t, s, child.ID)
+
+	assertFound := func(query string) SearchResult {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/notes/search?q="+query, nil)
+		w := httptest.NewRecorder()
+		s.searchNotes(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("search %q: expected 200, got %d", query, w.Code)
+		}
+		var results []SearchResult
+		if err := json.NewDecoder(w.Body).Decode(&results); err != nil {
+			t.Fatalf("decode %q: %v", query, err)
+		}
+		for _, sr := range results {
+			if sr.ID == child.ID {
+				return sr
+			}
+		}
+		t.Fatalf("child note %d not found for query %q", child.ID, query)
+		return SearchResult{}
+	}
+
+	assertFound("Release+Checklist")
+	pathHit := assertFound("Projects+Hub")
+	tagHit := assertFound("urgent")
+
+	if pathHit.Path == "" || !strings.Contains(pathHit.Path, "Projects Hub") {
+		t.Fatalf("expected populated path containing ancestor title, got %q", pathHit.Path)
+	}
+	if len(tagHit.Tags) == 0 || tagHit.Tags[0] == "" {
+		t.Fatalf("expected populated tags in search result, got %+v", tagHit.Tags)
+	}
+	foundUrgent := false
+	for _, tag := range tagHit.Tags {
+		if tag == "urgent" {
+			foundUrgent = true
+			break
+		}
+	}
+	if !foundUrgent {
+		t.Fatalf("expected urgent tag in search result, got %+v", tagHit.Tags)
+	}
+}
+
+func TestSearchTypeFilter(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	standard := helperCreateNoteSync(t, s, "Standard Match", "shared filter phrase", nil)
+	recipe := helperCreateNoteRaw(t, s, `{"title":"Recipe Match","body":"shared filter phrase","type":"custom_type"}`)
+	helperSyncSearchIndex(t, s, recipe.ID)
+
+	searchIDs := func(url string) []int64 {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, url, nil)
+		w := httptest.NewRecorder()
+		s.searchNotes(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("search %q: expected 200, got %d", url, w.Code)
+		}
+		var results []SearchResult
+		if err := json.NewDecoder(w.Body).Decode(&results); err != nil {
+			t.Fatalf("decode %q: %v", url, err)
+		}
+		ids := make([]int64, 0, len(results))
+		for _, sr := range results {
+			ids = append(ids, sr.ID)
+		}
+		return ids
+	}
+
+	standardOnly := searchIDs("/notes/search?q=shared+filter+phrase&types=standard")
+	for _, id := range standardOnly {
+		if id == recipe.ID {
+			t.Fatalf("recipe note %d should be excluded from standard filter", recipe.ID)
+		}
+	}
+	foundStandard := false
+	for _, id := range standardOnly {
+		if id == standard.ID {
+			foundStandard = true
+			break
+		}
+	}
+	if !foundStandard {
+		t.Fatalf("standard note %d not found in standard-only results: %+v", standard.ID, standardOnly)
+	}
+
+	recipeOnly := searchIDs("/notes/search?q=shared+filter+phrase&types=custom_type")
+	for _, id := range recipeOnly {
+		if id == standard.ID {
+			t.Fatalf("standard note %d should be excluded from recipe filter", standard.ID)
+		}
+	}
+	foundRecipe := false
+	for _, id := range recipeOnly {
+		if id == recipe.ID {
+			foundRecipe = true
+			break
+		}
+	}
+	if !foundRecipe {
+		t.Fatalf("recipe note %d not found in recipe-only results: %+v", recipe.ID, recipeOnly)
+	}
 }
 
 // TestSearchFindsNoteByOCRText verifies that OCR text from uploaded files

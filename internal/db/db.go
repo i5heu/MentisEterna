@@ -272,7 +272,19 @@ func (d *DB) migrateNotes() error {
 			body       TEXT    NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
-		)
+		);
+
+		CREATE TABLE IF NOT EXISTS note_search_chunks (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			note_id    INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+			field      TEXT    NOT NULL,
+			ordinal    INTEGER NOT NULL DEFAULT 0,
+			content    TEXT    NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_note_search_chunks_note_id ON note_search_chunks(note_id);
+		CREATE INDEX IF NOT EXISTS idx_note_search_chunks_field ON note_search_chunks(field);
 	`)
 	if err != nil {
 		return err
@@ -283,6 +295,9 @@ func (d *DB) migrateNotes() error {
 	if d.vssAvailable {
 		if err := d.ensureVSSDimension(2560); err != nil {
 			return fmt.Errorf("vss_notes: %w", err)
+		}
+		if err := d.ensureVSSNoteSearchDimension(2560); err != nil {
+			return fmt.Errorf("vss_note_search: %w", err)
 		}
 		if err := d.ensureVSSFilesOCR(2560); err != nil {
 			return fmt.Errorf("vss_files_ocr: %w", err)
@@ -433,6 +448,13 @@ func (d *DB) ensureOCRTables() error {
 // and recreated (embeddings then need to be regenerated via backfill).
 func (d *DB) ensureVSSDimension(expectedDim int) error {
 	return d.ensureVecTable("vss_notes", "body_embedding", expectedDim)
+}
+
+// ensureVSSNoteSearchDimension ensures the vss_note_search virtual table exists
+// with the expected sqlite-vec schema and embedding dimension. rowid =
+// note_search_chunks.id for paragraph/title/path/tag embeddings.
+func (d *DB) ensureVSSNoteSearchDimension(expectedDim int) error {
+	return d.ensureVecTable("vss_note_search", "embedding", expectedDim)
 }
 
 // ensureVSSFilesOCR ensures the vss_files_ocr virtual table exists with the

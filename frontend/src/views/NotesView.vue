@@ -41,15 +41,60 @@
                 />
             </button>
             <div class="search-box shortcut-anchor">
-                <input
-                    v-model="searchQuery"
-                    type="text"
-                    placeholder="Semantic search…"
-                    class="search-input"
-                    :title="getShortcutLabel('focus-search')"
-                    @input="onSearchInput"
-                />
-                <span v-if="searching" class="search-spinner">⟳</span>
+                <div class="search-input-row">
+                    <input
+                        v-model="searchQuery"
+                        type="text"
+                        placeholder="Search notes… (.i filters, .a all)"
+                        class="search-input"
+                        :title="getShortcutLabel('focus-search')"
+                        @input="onSearchInput"
+                    />
+                    <span v-if="searching" class="search-spinner">⟳</span>
+                </div>
+                <div v-if="searchFilterSummary" class="search-filter-summary">
+                    {{ searchFilterSummary }}
+                </div>
+                <div v-if="searchTypePickerVisible" class="search-type-panel">
+                    <div class="search-type-panel-header">
+                        <span class="search-type-panel-title"
+                            >Include note types</span
+                        >
+                        <div class="search-type-panel-actions">
+                            <button
+                                type="button"
+                                class="btn-ghost btn-sm search-type-action"
+                                @click="setSearchTypes(['standard'])"
+                            >
+                                Standard
+                            </button>
+                            <button
+                                type="button"
+                                class="btn-ghost btn-sm search-type-action"
+                                @click="setSearchTypes(allSearchTypeValues)"
+                            >
+                                All
+                            </button>
+                        </div>
+                    </div>
+                    <label
+                        v-for="opt in typeOptions"
+                        :key="opt.value"
+                        class="search-type-option"
+                    >
+                        <input
+                            type="checkbox"
+                            :checked="searchSelectedTypes.includes(opt.value)"
+                            @change="
+                                toggleSearchType(
+                                    opt.value,
+                                    $event.target.checked,
+                                )
+                            "
+                        />
+                        <span>{{ opt.label }}</span>
+                    </label>
+                </div>
                 <ShortcutHint
                     v-if="shortcutHintsVisible"
                     :label="getHintLabel('focus-search')"
@@ -79,9 +124,25 @@
                         }"
                         @click="selectSearchResult(sr)"
                     >
-                        <span class="note-title">{{
-                            sr.title || "Untitled"
+                        <span class="note-title-row">
+                            <span class="note-title">{{
+                                sr.title || "Untitled"
+                            }}</span>
+                            <span
+                                v-if="sr.type && sr.type !== 'standard'"
+                                class="search-result-type"
+                            >
+                                {{ noteTypeLabel(sr.type) }}
+                            </span>
+                        </span>
+                        <span v-if="sr.path" class="search-result-path">{{
+                            sr.path
                         }}</span>
+                        <span
+                            v-if="sr.tags && sr.tags.length"
+                            class="search-result-tags"
+                            >{{ formatSearchTags(sr.tags) }}</span
+                        >
                         <span class="note-date"
                             >{{ fmtDate(sr.updated_at) }} —
                             {{ relevancePct(sr.distance) }}</span
@@ -1222,6 +1283,7 @@ const searchResults = ref([]);
 const searchError = ref("");
 const searching = ref(false);
 const highlightedIndex = ref(-1);
+const searchSelectedTypes = ref(["standard"]);
 let searchTimeout = null;
 
 // [[ Link search state
@@ -1319,6 +1381,97 @@ const rootNotes = computed(() =>
 const sidebarList = computed(() =>
     searchQuery.value.trim() ? searchResults.value : rootNotes.value,
 );
+
+const allSearchTypeValues = computed(() => typeOptions.map((opt) => opt.value));
+const searchMode = computed(() => parseSearchMode(searchQuery.value));
+const searchTypePickerVisible = computed(() => searchMode.value.useTypePicker);
+const searchFilterSummary = computed(() => {
+    if (!searchQuery.value.trim()) return "";
+    if (searchMode.value.includeAllTypes) {
+        return "Including all note types.";
+    }
+    if (searchMode.value.useTypePicker) {
+        const labels = searchMode.value.types.map(noteTypeLabel);
+        if (labels.length <= 3) {
+            return `Including: ${labels.join(", ")}`;
+        }
+        return `Including ${labels.length} note types.`;
+    }
+    return "Searching standard notes only. Add .i to choose note types or .a for all.";
+});
+
+watch(searchTypePickerVisible, (visible) => {
+    if (visible && searchSelectedTypes.value.length === 0) {
+        searchSelectedTypes.value = ["standard"];
+    }
+});
+
+function normalizeSearchTypes(types) {
+    const normalized = [
+        ...new Set((types || []).map((t) => String(t).trim())),
+    ].filter(Boolean);
+    return normalized.length > 0 ? normalized : ["standard"];
+}
+
+function parseSearchMode(rawQuery) {
+    const tokens = String(rawQuery || "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+    const cleaned = [];
+    let includeAllTypes = false;
+    let useTypePicker = false;
+
+    for (const token of tokens) {
+        if (token === ".a") {
+            includeAllTypes = true;
+            continue;
+        }
+        if (token === ".i") {
+            useTypePicker = true;
+            continue;
+        }
+        cleaned.push(token);
+    }
+
+    return {
+        query: cleaned.join(" ").trim(),
+        includeAllTypes,
+        useTypePicker: useTypePicker && !includeAllTypes,
+        types: includeAllTypes
+            ? null
+            : useTypePicker
+              ? normalizeSearchTypes(searchSelectedTypes.value)
+              : ["standard"],
+    };
+}
+
+function setSearchTypes(types) {
+    searchSelectedTypes.value = normalizeSearchTypes(types);
+    onSearchInput();
+}
+
+function toggleSearchType(type, enabled) {
+    const next = new Set(searchSelectedTypes.value);
+    if (enabled) {
+        next.add(type);
+    } else {
+        next.delete(type);
+    }
+    searchSelectedTypes.value = Array.from(next);
+    if (searchSelectedTypes.value.length === 0) {
+        searchSelectedTypes.value = ["standard"];
+    }
+    onSearchInput();
+}
+
+function noteTypeLabel(type) {
+    return typeOptions.find((opt) => opt.value === type)?.label || type;
+}
+
+function formatSearchTags(tags) {
+    return tags.map((tag) => `#${tag}`).join(" ");
+}
 
 function hasUnsavedSelectedChanges() {
     return Boolean(selected.value) && dirty.value;
@@ -2421,7 +2574,8 @@ function onSearchInput() {
 }
 
 async function doSearch() {
-    const q = searchQuery.value.trim();
+    const mode = searchMode.value;
+    const q = mode.query;
     if (!q) {
         searchResults.value = [];
         searchError.value = "";
@@ -2431,7 +2585,9 @@ async function doSearch() {
     searching.value = true;
     searchError.value = "";
     try {
-        searchResults.value = await searchNotes(props.token, q);
+        searchResults.value = await searchNotes(props.token, q, {
+            types: mode.types,
+        });
         searchError.value = "";
         highlightedIndex.value = searchResults.value.length > 0 ? 0 : -1;
     } catch (e) {
@@ -3021,16 +3177,70 @@ function onPopstate() {
 
 .search-box {
     display: flex;
-    align-items: center;
-    gap: 0.3rem;
+    flex-direction: column;
+    gap: 0.45rem;
     padding: 0.5rem 0.75rem;
     border-bottom: 1px solid var(--border-color);
+}
+
+.search-input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
 }
 
 .search-input {
     flex: 1;
     font-size: 0.82rem;
     padding: 0.35rem 0.6rem;
+}
+
+.search-filter-summary {
+    font-size: 0.72rem;
+    color: var(--date-color);
+    line-height: 1.35;
+}
+
+.search-type-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    width: 100%;
+    padding: 0.55rem 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--raised-bg);
+}
+
+.search-type-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.search-type-panel-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--font-color);
+}
+
+.search-type-panel-actions {
+    display: flex;
+    gap: 0.3rem;
+}
+
+.search-type-action {
+    padding: 0.15rem 0.45rem;
+}
+
+.search-type-option {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.78rem;
+    color: var(--font-color);
 }
 
 .search-spinner {
@@ -3085,9 +3295,38 @@ function onPopstate() {
     border-left-color: var(--tag-bg-color);
 }
 
+.note-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
 .note-title {
     font-size: 0.9rem;
     color: var(--font-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 1;
+}
+
+.search-result-type {
+    flex-shrink: 0;
+    font-size: 0.63rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent-teal);
+    background: rgba(109, 148, 132, 0.15);
+    padding: 0.12rem 0.45rem;
+    border-radius: 999px;
+}
+
+.search-result-path,
+.search-result-tags {
+    font-size: 0.72rem;
+    color: var(--date-color);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

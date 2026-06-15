@@ -11,12 +11,13 @@ import (
 
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/llm"
+	"github.com/i5heu/MentisEterna/internal/searchindex"
 )
 
 // Usage: go run ./cmd/backfill/ [--db mentis.db] [--batch 5] [--sleep 500ms]
 func main() {
 	dbPath := flag.String("db", "mentis.db", "path to the SQLite database")
-	batchSize := flag.Int("batch", 5, "how many embeddings to generate before sleeping")
+	batchSize := flag.Int("batch", 5, "how many notes to index before sleeping")
 	sleepDur := flag.Duration("sleep", 500*time.Millisecond, "sleep duration between batches")
 	flag.Parse()
 
@@ -33,14 +34,12 @@ func main() {
 
 	client := llm.NewEmbeddingClient()
 
-	// Find all notes that have no embedding yet.
 	rows, err := database.Query(`
-		SELECT n.id, n.title, COALESCE(u.body, '') AS body
+		SELECT n.id
 		FROM notes n
-		LEFT JOIN updates u ON u.id = (
-			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		WHERE NOT EXISTS (
+			SELECT 1 FROM note_search_chunks c WHERE c.note_id = n.id
 		)
-		WHERE n.id NOT IN (SELECT rowid FROM vss_notes)
 		ORDER BY n.id ASC
 	`)
 	if err != nil {
@@ -48,51 +47,41 @@ func main() {
 	}
 	defer rows.Close()
 
-	type pending struct {
-		id    int64
-		title string
-		body  string
-	}
-
-	var all []pending
+	var noteIDs []int64
 	for rows.Next() {
-		var p pending
-		if err := rows.Scan(&p.id, &p.title, &p.body); err != nil {
-			log.Fatalf("scan note: %v", err)
+		var noteID int64
+		if err := rows.Scan(&noteID); err != nil {
+			log.Fatalf("scan note id: %v", err)
 		}
-		all = append(all, p)
+		noteIDs = append(noteIDs, noteID)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatalf("iterate note ids: %v", err)
 	}
 
-	if len(all) == 0 {
-		fmt.Println("All notes already have embeddings. Nothing to do.")
+	if len(noteIDs) == 0 {
+		fmt.Println("All notes already have search embeddings. Nothing to do.")
 		return
 	}
 
-	fmt.Printf("Generating embeddings for %d notes (batch size %d, sleep %s)...\n",
-		len(all), *batchSize, *sleepDur)
+	fmt.Printf("Generating search embeddings for %d notes (batch size %d, sleep %s)...\n",
+		len(noteIDs), *batchSize, *sleepDur)
 
-	for i, p := range all {
-		text := llm.CombineTitleBody(p.title, p.body)
-		text = llm.TruncateForEmbedding(text)
-		vec, err := client.GenerateEmbedding(text)
+	for i, noteID := range noteIDs {
+		doc, err := searchindex.LoadDocument(database.DB, noteID)
 		if err != nil {
-			log.Printf("ERROR note %d: %v", p.id, err)
+			log.Printf("ERROR load note %d: %v", noteID, err)
 			continue
 		}
-		vecJSON := llm.EmbeddingToJSON(vec)
-		database.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, p.id)
-		_, err = database.Exec(
-			`INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?)`,
-			p.id, vecJSON,
-		)
+		chunkCount, err := searchindex.ReplaceNoteIndex(database.DB, client, doc)
 		if err != nil {
-			log.Printf("ERROR upsert note %d: %v", p.id, err)
+			log.Printf("ERROR reindex note %d: %v", noteID, err)
 			continue
 		}
-		fmt.Printf("[%d/%d] Embedded note %d: %q\n", i+1, len(all), p.id, p.title)
+		_, _ = database.Exec(`DELETE FROM vss_notes WHERE rowid = ?`, noteID)
+		fmt.Printf("[%d/%d] Indexed note %d: %q (%d search chunks)\n", i+1, len(noteIDs), noteID, doc.Title, chunkCount)
 
-		// Batch throttle
-		if (i+1)%*batchSize == 0 && i+1 < len(all) {
+		if (i+1)%*batchSize == 0 && i+1 < len(noteIDs) {
 			time.Sleep(*sleepDur)
 		}
 	}
