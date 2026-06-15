@@ -41,7 +41,7 @@ type Server struct {
 }
 
 func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
-	cfg := loadServerConfig()
+	cfg := loadServerConfig(addr)
 	wconfig := &webauthn.Config{
 		RPID:                  cfg.WebAuthnRPID,
 		RPDisplayName:         "MentisEterna",
@@ -391,11 +391,35 @@ func (s *Server) Start(ctx context.Context) error {
 		s.jobManager.Stop()
 	}()
 
-	log.Printf("listening on http://localhost%s", s.addr)
+	listenURL := listenerURL(s.addr, s.cfg.TLSEnabled())
+	if s.cfg.TLSEnabled() {
+		log.Printf("listening on %s using TLS cert=%s key=%s", listenURL, s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+		if err := srv.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile); !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
+
+	log.Printf("listening on %s", listenURL)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+func listenerURL(addr string, tlsEnabled bool) string {
+	scheme := "http"
+	if tlsEnabled {
+		scheme = "https"
+	}
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return scheme + "://localhost"
+	}
+	if strings.HasPrefix(addr, ":") {
+		return scheme + "://localhost" + addr
+	}
+	return scheme + "://" + addr
 }
 
 // --- Job Handlers ---

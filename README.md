@@ -43,7 +43,9 @@ export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
 export LOCALAI_STT_MODEL="voxtral-mini-4b-realtime"  # Whisper-compatible model for speech-to-text
 export JOB_WORKERS="10"  # Concurrent background jobs (reindexing, OCR, STT, etc.)
 export RECIPE_CATEGORY_WORKERS="10"  # Parallel ingredient-category embedding requests
-export PUBLIC_BASE_URL="http://localhost:8080"  # Local browser URL; use https://... for non-localhost deployments
+export PUBLIC_BASE_URL="http://localhost:8080"  # Browser URL; set https://... when serving TLS or deploying remotely
+export TLS_CERT_FILE="/path/to/server.crt"  # Optional: when set together with TLS_KEY_FILE, Go serves HTTPS directly
+export TLS_KEY_FILE="/path/to/server.key"  # Optional: private key matching TLS_CERT_FILE
 export WEBAUTHN_RPID="notes.example.com"  # Optional override for the WebAuthn RP ID
 export WEBAUTHN_RP_ORIGINS="https://notes.example.com"  # Optional comma-separated WebAuthn origins
 export MAX_UPLOAD_BYTES="67108864"  # Max upload size in bytes
@@ -84,6 +86,10 @@ By default, Compose publishes the app directly at `http://localhost:8080`.
 The bundled Caddy auth proxy has been removed; the Go server now performs its
 own request hardening.
 
+If you want the Go process itself to serve HTTPS, mount your certificate and
+key into the container, then set `TLS_CERT_FILE`, `TLS_KEY_FILE`, and a matching
+`PUBLIC_BASE_URL=https://...`.
+
 Notes:
 - Browser auth is cookie-only; the SPA no longer stores session tokens in
   `localStorage`.
@@ -91,6 +97,8 @@ Notes:
   WebAuthn RP settings from `PUBLIC_BASE_URL`.
 - Non-localhost deployments must set `PUBLIC_BASE_URL` to an `https://...`
   URL; the server now refuses to start otherwise.
+- Setting both `TLS_CERT_FILE` and `TLS_KEY_FILE` makes the Go server switch to
+  HTTPS via `ListenAndServeTLS` on `ADDR`.
 - If you deploy behind your own TLS terminator or reverse proxy, make sure it
   preserves the original `Host` header so the server's trusted-host checks keep
   working.
@@ -104,7 +112,8 @@ docker compose run --rm mentis --create-db
 After that, normal `docker compose up` works without the flag.
 
 The Compose setup stores the SQLite database and media cache in the bind-mounted host directory `./mentis-data`, mounted at `/data` inside the container.
-For remote deployments, terminate TLS in your own ingress/reverse proxy and set
+For remote deployments, either terminate TLS in your own ingress/reverse proxy
+or provide `TLS_CERT_FILE` + `TLS_KEY_FILE` to the Go server directly, and set
 `PUBLIC_BASE_URL` to the external `https://...` origin that browsers use.
 
 If you want AI features to work from inside the container, set `LOCALAI_BASE_URL` in `.env` to a reachable endpoint for your LocalAI instance.
