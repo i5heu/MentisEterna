@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	defaultPublicBaseURL    = "http://localhost:8080"
-	defaultMaxUploadBytes   = 64 << 20
-	defaultMaxInlineUploads = 64 << 20
-	defaultMaxJSONBodyBytes = 1 << 20
+	defaultPublicHTTPBaseURL  = "http://localhost:8080"
+	defaultPublicHTTPSBaseURL = "https://localhost:8080"
+	defaultMaxUploadBytes     = 64 << 20
+	defaultMaxInlineUploads   = 64 << 20
+	defaultMaxJSONBodyBytes   = 1 << 20
 )
 
 type serverConfig struct {
@@ -27,19 +28,24 @@ type serverConfig struct {
 	MaxUploadBytes       int64
 	MaxInlineUploadBytes int64
 	MaxJSONBodyBytes     int64
+	TLSCertFile          string
+	TLSKeyFile           string
 }
 
-func loadServerConfig() serverConfig {
+func loadServerConfig(addr string) serverConfig {
+	certFile, keyFile, tlsEnabled := loadTLSConfigFromEnv()
+
 	baseURL := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL"))
 	if baseURL == "" {
-		baseURL = defaultPublicBaseURL
+		baseURL = defaultPublicBaseURL(addr, tlsEnabled)
 	}
 
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		log.Printf("server: invalid PUBLIC_BASE_URL=%q, falling back to %s", baseURL, defaultPublicBaseURL)
-		parsed, _ = url.Parse(defaultPublicBaseURL)
-		baseURL = defaultPublicBaseURL
+		fallbackBaseURL := defaultPublicBaseURL(addr, tlsEnabled)
+		log.Printf("server: invalid PUBLIC_BASE_URL=%q, falling back to %s", baseURL, fallbackBaseURL)
+		parsed, _ = url.Parse(fallbackBaseURL)
+		baseURL = fallbackBaseURL
 	}
 	parsed.Path = ""
 	parsed.RawPath = ""
@@ -85,7 +91,75 @@ func loadServerConfig() serverConfig {
 		MaxUploadBytes:       maxUploadBytes,
 		MaxInlineUploadBytes: maxInlineUploadBytes,
 		MaxJSONBodyBytes:     maxJSONBodyBytes,
+		TLSCertFile:          certFile,
+		TLSKeyFile:           keyFile,
 	}
+}
+
+func loadTLSConfigFromEnv() (certFile, keyFile string, tlsEnabled bool) {
+	certFile = strings.TrimSpace(os.Getenv("TLS_CERT_FILE"))
+	keyFile = strings.TrimSpace(os.Getenv("TLS_KEY_FILE"))
+	switch {
+	case certFile == "" && keyFile == "":
+		return "", "", false
+	case certFile == "" || keyFile == "":
+		log.Fatalf("server: TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable HTTPS")
+	default:
+		return certFile, keyFile, true
+	}
+	return "", "", false
+}
+
+func defaultPublicBaseURL(addr string, tlsEnabled bool) string {
+	fallbackBaseURL := defaultPublicHTTPBaseURL
+	scheme := "http"
+	defaultPort := "80"
+	if tlsEnabled {
+		fallbackBaseURL = defaultPublicHTTPSBaseURL
+		scheme = "https"
+		defaultPort = "443"
+	}
+
+	host, port := normalizeDefaultPublicAddr(addr)
+	if host == "" || port == "" || port == "0" {
+		return fallbackBaseURL
+	}
+	if port == defaultPort {
+		return scheme + "://" + canonicalHost(host)
+	}
+	return scheme + "://" + canonicalHostPort(host, port)
+}
+
+func normalizeDefaultPublicAddr(addr string) (host, port string) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "localhost", strings.TrimPrefix(addr, ":")
+	}
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		host = strings.TrimSpace(strings.Trim(host, "[]"))
+		if host == "" || isUnspecifiedHost(host) {
+			host = "localhost"
+		}
+		return host, strings.TrimSpace(port)
+	}
+
+	host = strings.TrimSpace(strings.Trim(addr, "[]"))
+	if host == "" || isUnspecifiedHost(host) {
+		host = "localhost"
+	}
+	return host, ""
+}
+
+func isUnspecifiedHost(host string) bool {
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsUnspecified()
+}
+
+func (c serverConfig) TLSEnabled() bool {
+	return c.TLSCertFile != "" && c.TLSKeyFile != ""
 }
 
 func envOrInt64(key string, def int64) int64 {
