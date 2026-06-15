@@ -162,16 +162,16 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
   - [x] Parallelize re-indexing jobs.
 - [ ] Server stats in header above ".editor-header > .editor-actions"
 - [ ] Upload spinner and overview
-- [ ] better search (by title, path and tags)
-  - [ ] Include Flieds in search:
-    - [ ] embedding should be limited to paragraphs instead of the whole note to make it more accurate. The Avrage match is then calculated which is then used for the search ranking.
-    - [ ] Note titles
-    - [ ] Note Paths
-    - [ ] Note tags
-  - [ ] Filter by note type
-    - [ ] Default exclution: Anything but default notes
-    - [ ] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
-    - [ ] Include all note types with '.a'
+- [x] better search (by title, path and tags)
+  - [x] Include Flieds in search:
+    - [x] embedding should be limited to paragraphs instead of the whole note to make it more accurate. The Avrage match is then calculated which is then used for the search ranking.
+    - [x] Note titles
+    - [x] Note Paths
+    - [x] Note tags
+  - [x] Filter by note type
+    - [x] Default exclution: Anything but default notes
+    - [x] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
+    - [x] Include all note types with '.a'
 - [ ] mobile-app - consider Flutter for UI
 - [x] add recipie printer function to help note types to print stuff
 - [ ] UX Improvements

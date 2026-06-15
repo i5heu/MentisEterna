@@ -559,7 +559,7 @@ func (s *Server) handleRecalculateRecipeIngredientCategories(w http.ResponseWrit
 }
 
 // handleReindexNotes enqueues vss_index jobs for all notes that are missing
-// embeddings in vss_notes. Returns the count of enqueued jobs.
+// chunked search embeddings. Returns the count of enqueued jobs.
 func (s *Server) handleReindexNotes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -571,12 +571,11 @@ func (s *Server) handleReindexNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT n.id, n.title, COALESCE(u.body, '') AS body
+		SELECT n.id
 		FROM notes n
-		LEFT JOIN updates u ON u.id = (
-			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		WHERE NOT EXISTS (
+			SELECT 1 FROM note_search_chunks c WHERE c.note_id = n.id
 		)
-		WHERE n.id NOT IN (SELECT rowid FROM vss_notes)
 		ORDER BY n.id ASC
 	`)
 	if err != nil {
@@ -588,15 +587,12 @@ func (s *Server) handleReindexNotes(w http.ResponseWriter, r *http.Request) {
 	var count int
 	for rows.Next() {
 		var id int64
-		var title, body string
-		if err := rows.Scan(&id, &title, &body); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			log.Printf("reindex: scan note: %v", err)
 			continue
 		}
 		payload, _ := json.Marshal(map[string]interface{}{
 			"note_id": id,
-			"title":   title,
-			"body":    body,
 		})
 		if _, err := s.jobManager.Enqueue("_system", "vss_index", payload); err != nil {
 			log.Printf("reindex: enqueue vss_index for note %d: %v", id, err)
