@@ -138,8 +138,10 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [ ] icons and status in settings modal for jobs
 - [x] files with wired MIMES will be uploaded correctly but the upload HTTP request will fail with 502 "STT for file 8 completed with error: unsupported MIME type for STT: image/RAF"
 - [x] The Pantry ingredients should not be added to the grocery list as default, they must be added manually via the "Add Pantry Staples" button in the recipe overview.
+- [ ] Get rid of the auth proxy, rather harden code
 
 ## TODO Future
+- [ ] Setup building pipeline
 - [x] OCR for images and pdfs
 - [x] If not selecting or focusing somethign, pressing "u" should open the parent in main.
 - [x] speech to text notes

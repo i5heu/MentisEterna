@@ -4,24 +4,24 @@
  *            or: @import "./status-colors.css";         (from task/)
  *
  * Usage:
- *   - .status-todo          → light white badge / dot / border
- *   - .status-in_progress   → vivid green
- *   - .status-done          → blue
+ *   - .status-todo          → neutral grey
+ *   - .status-in_progress   → blue
+ *   - .status-done          → green
  *
  * Three forms are provided so consumers can apply colors as a background
  * (badges, dots), as a border-left (stat cards), or as a foreground color:
  *
  *   .status-todo             — background: #6b7280; color: #fff
- *   .status-in_progress      — background: #22c55e; color: #1a1a1a
- *   .status-done             — background: #3b82f6; color: #1a1a1a
+ *   .status-in_progress      — background: #3b82f6; color: #1a1a1a
+ *   .status-done             — background: #22c55e; color: #1a1a1a
  *
  *   .status-todo-border      — border-left-color: #6b7280
- *   .status-in_progress-border — border-left-color: #22c55e
- *   .status-done-border      — border-left-color: #3b82f6
+ *   .status-in_progress-border — border-left-color: #3b82f6
+ *   .status-done-border      — border-left-color: #22c55e
  *
  *   .status-todo-fg          — color: #6b7280
- *   .status-in_progress-fg   — color: #22c55e
- *   .status-done-fg          — color: #3b82f6
+ *   .status-in_progress-fg   — color: #3b82f6
+ *   .status-done-fg          — color: #22c55e
  */
 
 /* === Background form (badges, dots) ===================================== */

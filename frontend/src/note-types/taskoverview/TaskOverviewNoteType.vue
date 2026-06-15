@@ -613,11 +613,11 @@ onBeforeUnmount(unsubOverview);
 }
 
 .status-in_progress.status-dot {
-    background: #22c55e;
+    background: #3b82f6;
 }
 
 .status-done.status-dot {
-    background: #3b82f6;
+    background: #22c55e;
 }
 
 .filters {
