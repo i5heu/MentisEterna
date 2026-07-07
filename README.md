@@ -129,7 +129,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] Click on Note Title should open the note in main view.
 - [x] Printer and needs a connection section in settings to show connection status.
 - [x] AI API needs a connection section in settings to test connection and show error messages.
-- [ ] If a print via recipe printer fails, the user should get a notification and after the click the button should show spin.
+- [x] If a print via recipe printer fails, the user should get a notification and after the click the button should show spin.
 - [x] VSS shows no connection in the API test, but this should be integrated in SQLite via the `vss` extension and not be a separate service.
 - [x] If the Search fails because of missing VSS or Embedding service or similar, the user should get a 500 and not a "No results"
 - [x] Go test bug "no usblp device nodes found at [/dev/usb/lp0 /dev/usb/lp1 /dev/usb/lp2]"
@@ -149,6 +149,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] Get rid of the auth proxy, rather harden code
 
 ## TODO Future
+- [ ] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] Setup building pipeline
 - [x] OCR for images and pdfs
 - [x] If not selecting or focusing somethign, pressing "u" should open the parent in main.
