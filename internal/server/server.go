@@ -781,7 +781,9 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 	embeddingOK := false
 	embeddingErr := ""
 	if s.llm != nil {
+		release := llm.BeginBackendUse(s.llm)
 		_, err := s.llm.GenerateEmbedding("test")
+		release()
 		if err != nil {
 			embeddingErr = err.Error()
 		} else {
@@ -795,7 +797,9 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 	chatOK := false
 	chatErr := ""
 	if s.chatClient != nil {
+		release := llm.BeginBackendUse(s.chatClient)
 		_, err := s.chatClient.GenerateTitle("test")
+		release()
 		if err != nil {
 			chatErr = err.Error()
 		} else {

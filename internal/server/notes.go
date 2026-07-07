@@ -911,6 +911,8 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 		return "", fmt.Errorf("generate_title: invalid payload: %w", err)
 	}
 
+	release := llm.BeginBackendUse(s.chatClient)
+	defer release()
 	title, err := s.chatClient.GenerateTitle(p.Body)
 	if err != nil {
 		return "", fmt.Errorf("generate title: %w", err)
@@ -1015,6 +1017,9 @@ func (s *Server) syncOCREmbeddingTask(db *sql.DB, payload []byte) (string, error
 		return fmt.Sprintf("Skipped embedding for file %d: empty OCR text", p.FileID), nil
 	}
 
+	release := llm.BeginBackendUse(s.llm)
+	defer release()
+
 	text := llm.TruncateForEmbedding(p.OCRText)
 	vec, err := s.llm.GenerateEmbedding(text)
 	if err != nil {
@@ -1099,6 +1104,9 @@ func (s *Server) syncSTTEmbeddingTask(db *sql.DB, payload []byte) (string, error
 	if p.STTText == "" {
 		return fmt.Sprintf("Skipped embedding for file %d: empty STT text", p.FileID), nil
 	}
+
+	release := llm.BeginBackendUse(s.llm)
+	defer release()
 
 	text := llm.TruncateForEmbedding(p.STTText)
 	vec, err := s.llm.GenerateEmbedding(text)

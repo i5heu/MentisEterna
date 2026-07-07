@@ -66,6 +66,8 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 
 	allowedTypes := parseSearchTypeFilter(r)
 	query = llm.TruncateForEmbedding(query)
+	release := llm.BeginBackendUse(s.llm)
+	defer release()
 	vec, err := s.llm.GenerateEmbedding(query)
 	if err != nil {
 		log.Printf("semantic search embedding error: %v", err)

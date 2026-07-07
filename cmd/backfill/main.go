@@ -33,6 +33,8 @@ func main() {
 	}
 
 	client := llm.NewEmbeddingClient()
+	release := llm.BeginBackendUse(client)
+	defer release()
 
 	rows, err := database.Query(`
 		SELECT n.id

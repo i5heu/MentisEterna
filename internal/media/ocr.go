@@ -98,6 +98,8 @@ func (s *Service) RunOCRForFile(ctx context.Context, fileID int64, ocrClient llm
 	}
 
 	// Send to OCR model
+	release := llm.BeginBackendUse(ocrClient)
+	defer release()
 	ocrText, err := ocrClient.RunOCR(plainBuf.Bytes())
 	if err != nil {
 		return s.saveOCRError(fileID, model, fmt.Errorf("ocr: model error: %w", err))
