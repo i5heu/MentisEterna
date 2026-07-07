@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/i5heu/MentisEterna/internal/llm"
 	recipeplugin "github.com/i5heu/MentisEterna/pkg/notetype/recipe"
 )
 
@@ -30,6 +31,8 @@ func (s *Server) classifyRecipeIngredientsForNotes(noteIDs ...int64) {
 	workers := s.recipeCategoryWorkerCount()
 
 	go func() {
+		release := llm.BeginBackendUse(embedder)
+		defer release()
 		if err := recipeplugin.CategorizeIngredientsForNotesWithWorkers(context.Background(), dbConn, embedder, ids, workers); err != nil {
 			log.Printf("recipe: categorize ingredients for notes %v: %v", ids, err)
 		}
@@ -92,6 +95,9 @@ func (s *Server) classifyAllRecipeIngredients(ctx context.Context, dbConn *sql.D
 	`).Scan(&ingredientCount); err != nil {
 		return 0, 0, fmt.Errorf("count recipe ingredients: %w", err)
 	}
+
+	release := llm.BeginBackendUse(s.llm)
+	defer release()
 
 	const batchSize = 200
 	for start := 0; start < len(noteIDs); start += batchSize {

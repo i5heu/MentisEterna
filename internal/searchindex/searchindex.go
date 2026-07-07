@@ -134,6 +134,9 @@ func BuildChunks(doc Document) []Chunk {
 }
 
 func ReplaceNoteIndex(db *sql.DB, embedder llm.Embedder, doc Document) (int, error) {
+	release := llm.BeginBackendUse(embedder)
+	defer release()
+
 	chunks := BuildChunks(doc)
 	indexed := make([]struct {
 		Chunk

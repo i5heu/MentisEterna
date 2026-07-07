@@ -102,6 +102,8 @@ func (s *Service) RunSTTForFile(ctx context.Context, fileID int64, sttClient llm
 	}
 
 	// Send to STT model.
+	release := llm.BeginBackendUse(sttClient)
+	defer release()
 	sttText, err := sttClient.RunSTT(plainBuf.Bytes(), rec.Filename)
 	if err != nil {
 		return s.saveSTTError(fileID, model, fmt.Errorf("stt: model error: %w", err))
