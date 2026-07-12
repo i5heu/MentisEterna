@@ -153,6 +153,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] Setup building pipeline
 - [ ] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
+- [ ] Add automatic tags in a new "Auto Tags" to the NoteType. 
 - [x] Connected/Disconnected and ping indicator.
 - [x] Websocket for real time updates of notes, jobs and other stuff
 - [x] OCR for images and pdfs
