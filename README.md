@@ -144,7 +144,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] The Shortcut helper modal is long and needs to be able to scroll.
 - [x] Tables can become quite wide, we need to add a horizontal scroll to the table in the recipe note type. And we need a light zebra effect to make it easier to read.
 - [x] The saving of a recipe takes long becuase the ingredients categoriced but this should happen in a background job and not block the user.
-- [ ] icons and status in settings modal for jobs
+- [x] icons and status in settings modal for jobs
 - [x] files with wired MIMES will be uploaded correctly but the upload HTTP request will fail with 502 "STT for file 8 completed with error: unsupported MIME type for STT: image/RAF"
 - [x] The Pantry ingredients should not be added to the grocery list as default, they must be added manually via the "Add Pantry Staples" button in the recipe overview.
 - [x] Get rid of the auth proxy, rather harden code
