@@ -29,7 +29,7 @@ func NewOCRClient() *OCRClient {
 	return &OCRClient{
 		BaseURL: llmBaseURL(),
 		Model:   envOr("LOCALAI_OCR_MODEL", "gpt-4o-mini"),
-		http:    &http.Client{},
+		http:    newLLMHTTPClient(),
 	}
 }
 

@@ -41,6 +41,7 @@ export LOCALAI_EMBEDDING_MODEL="Qwen3-Embedding-4B-GGUF"  # Model for embeddings
 export LOCALAI_CHAT_MODEL="gemma-3-4b-it"  # Model for title generation
 export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
 export LOCALAI_STT_MODEL="voxtral-mini-4b-realtime"  # Whisper-compatible model for speech-to-text
+export LOCALAI_TLS_INSECURE="0"  # Set to "1", "true", "yes", or "on" to skip TLS verification (self-signed certs)
 export JOB_WORKERS="10"  # Concurrent background jobs (reindexing, OCR, STT, etc.)
 export RECIPE_CATEGORY_WORKERS="10"  # Parallel ingredient-category embedding requests
 export PUBLIC_BASE_URL="http://localhost:8080"  # Browser URL; set https://... when serving TLS or deploying remotely

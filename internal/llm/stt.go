@@ -30,7 +30,7 @@ func NewSTTClient() *STTClient {
 	return &STTClient{
 		BaseURL: llmBaseURL(),
 		Model:   envOr("LOCALAI_STT_MODEL", "nemo-parakeet-tdt-0.6b"),
-		http:    &http.Client{},
+		http:    newLLMHTTPClient(),
 	}
 }
 
