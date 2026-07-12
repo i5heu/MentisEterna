@@ -31,10 +31,6 @@ func (p *TaskOverviewPlugin) InitSchema(db *sql.DB) error {
 			FOREIGN KEY (overview_note_id) REFERENCES notes(id) ON DELETE CASCADE,
 			FOREIGN KEY (task_note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
-		CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_ov
-			ON ct_taskoverview_daily(overview_note_id, assigned_at);
-		CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_generation
-			ON ct_taskoverview_daily(overview_note_id, generation_id);
 		CREATE TABLE IF NOT EXISTS ct_taskoverview_config (
 			note_id                 INTEGER PRIMARY KEY,
 			daily_task_count        INTEGER NOT NULL DEFAULT 3,
@@ -63,6 +59,13 @@ func (p *TaskOverviewPlugin) InitSchema(db *sql.DB) error {
 	db.Exec(`ALTER TABLE ct_taskoverview_config ADD COLUMN fun_weight REAL NOT NULL DEFAULT 0.75`)
 	db.Exec(`ALTER TABLE ct_taskoverview_config ADD COLUMN time_estimation_weight REAL NOT NULL DEFAULT -0.5`)
 	db.Exec(`ALTER TABLE ct_taskoverview_config ADD COLUMN fun_time_weight REAL NOT NULL DEFAULT 0.1`)
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_ov ON ct_taskoverview_daily(overview_note_id, assigned_at)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_generation ON ct_taskoverview_daily(overview_note_id, generation_id)`); err != nil {
+		return err
+	}
 	return nil
 }
 
