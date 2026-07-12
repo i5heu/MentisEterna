@@ -256,7 +256,7 @@ export async function fetchAncestors(token, id) {
     return request(`/notes/${id}/ancestors`, { headers: authHeaders(token) });
 }
 
-export async function searchNotes(token, query, options = {}) {
+function buildSearchParams(query, options = {}) {
     const params = new URLSearchParams({ q: query });
     const types = Array.isArray(options.types)
         ? [
@@ -268,9 +268,80 @@ export async function searchNotes(token, query, options = {}) {
     if (types && types.length > 0) {
         params.set("types", types.join(","));
     }
+    if (options.stream) {
+        params.set("stream", "1");
+    }
+    return params;
+}
+
+export async function searchNotes(token, query, options = {}) {
+    const params = buildSearchParams(query, options);
     return request(`/notes/search?${params.toString()}`, {
         headers: authHeaders(token),
     });
+}
+
+export async function streamSearchNotes(token, query, options = {}) {
+    const params = buildSearchParams(query, { ...options, stream: true });
+    const res = await fetch(`/notes/search?${params.toString()}`, {
+        credentials: "include",
+        headers: {
+            Accept: "application/x-ndjson",
+        },
+        signal: options.signal,
+    });
+    if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        throw new Error("unauthorized");
+    }
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.trim() || `HTTP ${res.status}`);
+    }
+    if (!res.body) {
+        options.onDone?.({ type: "done", total: 0 });
+        return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const dispatchEvent = (event) => {
+        options.onEvent?.(event);
+        if (event.type === "status") {
+            options.onStatus?.(event);
+        } else if (event.type === "section") {
+            options.onSection?.(event.section, event);
+        } else if (event.type === "error") {
+            options.onError?.(event);
+        } else if (event.type === "done") {
+            options.onDone?.(event);
+        }
+    };
+
+    const processLine = (line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        dispatchEvent(JSON.parse(trimmed));
+    };
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex = buffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+            processLine(buffer.slice(0, newlineIndex));
+            buffer = buffer.slice(newlineIndex + 1);
+            newlineIndex = buffer.indexOf("\n");
+        }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+        processLine(buffer);
+    }
 }
 
 export async function setNotePin(token, id, pinned) {

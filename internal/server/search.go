@@ -1,21 +1,29 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/searchindex"
+	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
 const (
-	searchResultLimit      = 10
-	searchCandidateLimit   = 30
-	searchChunkQueryLimit  = 80
-	searchAttachmentQueryK = 20
+	searchResultLimit         = 10
+	searchCandidateLimit      = 30
+	searchChunkQueryLimit     = 80
+	searchAttachmentQueryK    = 20
+	searchStreamTagLimit      = 6
+	searchStreamCategoryLimit = 6
+	searchStreamTitleLimit    = 8
+	searchStreamSemanticLimit = 10
 )
 
 // SearchResult extends NoteSummary with ranked search metadata.
@@ -29,6 +37,41 @@ type SearchResult struct {
 type noteSearchScore struct {
 	sum   float64
 	count int
+}
+
+type searchStreamEvent struct {
+	Type    string         `json:"type"`
+	Phase   string         `json:"phase,omitempty"`
+	Message string         `json:"message,omitempty"`
+	Section *searchSection `json:"section,omitempty"`
+	Total   int            `json:"total,omitempty"`
+}
+
+type searchSection struct {
+	Key         string         `json:"key"`
+	Label       string         `json:"label"`
+	Description string         `json:"description,omitempty"`
+	Results     []SearchResult `json:"results"`
+}
+
+type searchNoteMeta struct {
+	ID        int64
+	Title     string
+	Type      string
+	Pinned    bool
+	UpdatedAt string
+}
+
+type literalMatch struct {
+	ID    int64
+	Score float64
+	Order int
+}
+
+type searchTypeInfo struct {
+	ID       string
+	Label    string
+	Category string
 }
 
 func (s *noteSearchScore) AddHit(distance float64) {
@@ -45,11 +88,17 @@ func (s *noteSearchScore) Average() float64 {
 
 // searchNotes performs a hybrid semantic search over note paragraphs, titles,
 // paths, tags, and attachment OCR/STT embeddings.
-// GET /notes/search?q=your+query[&types=standard,recipe]
+// GET /notes/search?q=your+query[&types=standard,recipe][&stream=1]
 func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if query == "" {
 		http.Error(w, "query parameter 'q' is required", http.StatusBadRequest)
+		return
+	}
+
+	allowedTypes := parseSearchTypeFilter(r)
+	if wantsStreamedSearch(r) {
+		s.streamSearchNotes(w, r, query, allowedTypes)
 		return
 	}
 
@@ -64,7 +113,6 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowedTypes := parseSearchTypeFilter(r)
 	query = llm.TruncateForEmbedding(query)
 	release := llm.BeginBackendUse(s.llm)
 	defer release()
@@ -96,6 +144,187 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+func wantsStreamedSearch(r *http.Request) bool {
+	stream := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("stream")))
+	if stream == "1" || stream == "true" || stream == "yes" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/x-ndjson")
+}
+
+func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query string, allowedTypes []string) {
+	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	encoder := json.NewEncoder(w)
+	var flusher http.Flusher
+	if f, ok := w.(http.Flusher); ok {
+		flusher = f
+	}
+
+	send := func(event searchStreamEvent) bool {
+		if err := encoder.Encode(event); err != nil {
+			log.Printf("search stream encode error: %v", err)
+			return false
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return true
+	}
+
+	seen := map[int64]bool{}
+	if !send(searchStreamEvent{
+		Type:    "status",
+		Phase:   "literal",
+		Message: "Searching tags, categories, and title matches…",
+	}) {
+		return
+	}
+
+	for _, phase := range []struct {
+		key         string
+		label       string
+		description string
+		limit       int
+		search      func(string, []string, map[int64]bool, int) ([]SearchResult, error)
+	}{
+		{
+			key:         "tags",
+			label:       "Tag matches",
+			description: "Exact and fuzzy tag hits appear first.",
+			limit:       searchStreamTagLimit,
+			search:      s.searchTagResults,
+		},
+		{
+			key:         "categories",
+			label:       "Category matches",
+			description: "Notes whose type or note-type category matches your query.",
+			limit:       searchStreamCategoryLimit,
+			search:      s.searchCategoryResults,
+		},
+		{
+			key:         "titles",
+			label:       "Title matches",
+			description: "Fast title-first matches without reshuffling earlier hits.",
+			limit:       searchStreamTitleLimit,
+			search:      s.searchTitleResults,
+		},
+	} {
+		if err := r.Context().Err(); err != nil {
+			return
+		}
+		results, err := phase.search(query, allowedTypes, seen, phase.limit)
+		if err != nil {
+			send(searchStreamEvent{Type: "error", Phase: phase.key, Message: "Search failed while loading exact matches."})
+			return
+		}
+		if len(results) == 0 {
+			continue
+		}
+		updateSeenSearchResults(seen, results)
+		if !send(searchStreamEvent{
+			Type: "section",
+			Section: &searchSection{
+				Key:         phase.key,
+				Label:       phase.label,
+				Description: phase.description,
+				Results:     results,
+			},
+		}) {
+			return
+		}
+	}
+
+	if err := r.Context().Err(); err != nil {
+		return
+	}
+
+	if !send(searchStreamEvent{
+		Type:    "status",
+		Phase:   "semantic",
+		Message: "Streaming related notes from embeddings…",
+	}) {
+		return
+	}
+
+	if !s.db.VSSAvailable() || s.llm == nil {
+		message := "Semantic results are unavailable right now, but exact matches are ready."
+		if len(seen) == 0 {
+			message = "No exact matches found, and semantic search is unavailable right now."
+		}
+		send(searchStreamEvent{Type: "done", Phase: "semantic", Message: message, Total: len(seen)})
+		return
+	}
+
+	truncated := llm.TruncateForEmbedding(query)
+	release := llm.BeginBackendUse(s.llm)
+	vec, err := s.llm.GenerateEmbedding(truncated)
+	release()
+	if err != nil {
+		log.Printf("semantic search embedding error: %v", err)
+		message := "Exact matches loaded, but semantic results failed."
+		if len(seen) == 0 {
+			message = "Semantic search failed."
+		}
+		send(searchStreamEvent{Type: "done", Phase: "semantic", Message: message, Total: len(seen)})
+		return
+	}
+	vecJSON := llm.EmbeddingToJSON(vec)
+
+	scores, err := s.searchNoteChunkHits(vecJSON, allowedTypes)
+	if err == nil {
+		err = s.mergeAttachmentSearchHits(scores, vecJSON, "vss_files_ocr", "ocr_embedding", allowedTypes)
+	}
+	if err == nil {
+		err = s.mergeAttachmentSearchHits(scores, vecJSON, "vss_files_stt", "stt_embedding", allowedTypes)
+	}
+	if err != nil {
+		log.Printf("search stream semantic error: %v", err)
+		message := "Exact matches loaded, but semantic results failed."
+		if len(seen) == 0 {
+			message = "Semantic search failed."
+		}
+		send(searchStreamEvent{Type: "done", Phase: "semantic", Message: message, Total: len(seen)})
+		return
+	}
+
+	semantic, err := s.buildSearchResultsFiltered(scores, query, seen, searchStreamSemanticLimit)
+	if err != nil {
+		log.Printf("search stream semantic build error: %v", err)
+		send(searchStreamEvent{Type: "done", Phase: "semantic", Message: "Exact matches loaded, but semantic results failed.", Total: len(seen)})
+		return
+	}
+	if len(semantic) > 0 {
+		updateSeenSearchResults(seen, semantic)
+		if !send(searchStreamEvent{
+			Type: "section",
+			Section: &searchSection{
+				Key:         "semantic",
+				Label:       "Related notes",
+				Description: "Embedding-based results stream in after exact matches and never move earlier hits.",
+				Results:     semantic,
+			},
+		}) {
+			return
+		}
+	}
+
+	message := "Search complete."
+	if len(seen) == 0 {
+		message = "No results found."
+	}
+	send(searchStreamEvent{Type: "done", Phase: "complete", Message: message, Total: len(seen)})
+}
+
+func updateSeenSearchResults(seen map[int64]bool, results []SearchResult) {
+	for _, result := range results {
+		seen[result.ID] = true
+	}
 }
 
 func parseSearchTypeFilter(r *http.Request) []string {
@@ -253,8 +482,15 @@ func (s *Server) mergeAttachmentSearchHits(scores map[int64]*noteSearchScore, ve
 }
 
 func (s *Server) buildSearchResults(scores map[int64]*noteSearchScore, query string) ([]SearchResult, error) {
+	return s.buildSearchResultsFiltered(scores, query, nil, searchResultLimit)
+}
+
+func (s *Server) buildSearchResultsFiltered(scores map[int64]*noteSearchScore, query string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
 	if len(scores) == 0 {
 		return []SearchResult{}, nil
+	}
+	if limit <= 0 {
+		limit = searchResultLimit
 	}
 
 	type candidate struct {
@@ -263,8 +499,15 @@ func (s *Server) buildSearchResults(scores map[int64]*noteSearchScore, query str
 	}
 	candidates := make([]candidate, 0, len(scores))
 	for id, score := range scores {
+		if exclude != nil && exclude[id] {
+			continue
+		}
 		candidates = append(candidates, candidate{id: id, distance: score.Average()})
 	}
+	if len(candidates) == 0 {
+		return []SearchResult{}, nil
+	}
+
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].distance == candidates[j].distance {
 			return candidates[i].id < candidates[j].id
@@ -323,8 +566,8 @@ func (s *Server) buildSearchResults(scores map[int64]*noteSearchScore, query str
 		}
 		return results[i].Distance < results[j].Distance
 	})
-	if len(results) > searchResultLimit {
-		results = results[:searchResultLimit]
+	if len(results) > limit {
+		results = results[:limit]
 	}
 	return results, nil
 }
@@ -354,6 +597,338 @@ func (s *Server) loadSearchSummaries(ids []int64) (map[int64]NoteSummary, error)
 		out[summary.ID] = summary
 	}
 	return out, rows.Err()
+}
+
+func (s *Server) searchTagResults(query string, allowedTypes []string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
+	typeClause, typeArgs := buildTypeFilterClause("n", allowedTypes)
+	rows, err := s.db.Query(`
+		SELECT n.id, t.name
+		FROM notes n
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
+		JOIN tags_refs tr ON tr.note_id = n.id
+		JOIN tags t ON t.id = tr.tag_id
+		WHERE 1 = 1`+typeClause+`
+		ORDER BY n.pinned DESC, COALESCE(u.created_at, n.created_at) DESC, t.name ASC
+	`, typeArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	best := map[int64]literalMatch{}
+	order := 0
+	for rows.Next() {
+		var noteID int64
+		var tagName string
+		if err := rows.Scan(&noteID, &tagName); err != nil {
+			return nil, err
+		}
+		if exclude != nil && exclude[noteID] {
+			continue
+		}
+		score, ok := fuzzySearchScore(query, tagName)
+		if !ok {
+			continue
+		}
+		upsertLiteralMatch(best, noteID, score, order)
+		order++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.buildLiteralResults(matchesFromMap(best), limit)
+}
+
+func (s *Server) searchCategoryResults(query string, allowedTypes []string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
+	typeScores := map[string]float64{}
+	for _, info := range searchTypeCatalog() {
+		best := math.MaxFloat64
+		for _, candidate := range []string{info.ID, info.Label, info.Category, info.Label + " " + info.Category} {
+			score, ok := fuzzySearchScore(query, candidate)
+			if ok && score < best {
+				best = score
+			}
+		}
+		if best < math.MaxFloat64 {
+			typeScores[info.ID] = best
+		}
+	}
+	if len(typeScores) == 0 {
+		return []SearchResult{}, nil
+	}
+
+	metas, err := s.loadSearchMetas(allowedTypes)
+	if err != nil {
+		return nil, err
+	}
+	best := map[int64]literalMatch{}
+	for idx, meta := range metas {
+		if exclude != nil && exclude[meta.ID] {
+			continue
+		}
+		score, ok := typeScores[meta.Type]
+		if !ok {
+			continue
+		}
+		upsertLiteralMatch(best, meta.ID, score, idx)
+	}
+	return s.buildLiteralResults(matchesFromMap(best), limit)
+}
+
+func (s *Server) searchTitleResults(query string, allowedTypes []string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
+	metas, err := s.loadSearchMetas(allowedTypes)
+	if err != nil {
+		return nil, err
+	}
+	best := map[int64]literalMatch{}
+	for idx, meta := range metas {
+		if exclude != nil && exclude[meta.ID] {
+			continue
+		}
+		score, ok := fuzzySearchScore(query, meta.Title)
+		if !ok {
+			continue
+		}
+		upsertLiteralMatch(best, meta.ID, score, idx)
+	}
+	return s.buildLiteralResults(matchesFromMap(best), limit)
+}
+
+func (s *Server) loadSearchMetas(allowedTypes []string) ([]searchNoteMeta, error) {
+	typeClause, typeArgs := buildTypeFilterClause("n", allowedTypes)
+	rows, err := s.db.Query(`
+		SELECT n.id, n.title, n.type, n.pinned, COALESCE(u.created_at, n.created_at) AS updated_at
+		FROM notes n
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
+		WHERE 1 = 1`+typeClause+`
+		ORDER BY n.pinned DESC, updated_at DESC, n.id ASC
+	`, typeArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var metas []searchNoteMeta
+	for rows.Next() {
+		var meta searchNoteMeta
+		if err := rows.Scan(&meta.ID, &meta.Title, &meta.Type, &meta.Pinned, &meta.UpdatedAt); err != nil {
+			return nil, err
+		}
+		metas = append(metas, meta)
+	}
+	return metas, rows.Err()
+}
+
+func (s *Server) buildLiteralResults(matches []literalMatch, limit int) ([]SearchResult, error) {
+	if len(matches) == 0 {
+		return []SearchResult{}, nil
+	}
+	if limit <= 0 {
+		limit = len(matches)
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].Score == matches[j].Score {
+			if matches[i].Order == matches[j].Order {
+				return matches[i].ID < matches[j].ID
+			}
+			return matches[i].Order < matches[j].Order
+		}
+		return matches[i].Score < matches[j].Score
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+
+	noteIDs := make([]int64, 0, len(matches))
+	scoreByID := make(map[int64]float64, len(matches))
+	for _, match := range matches {
+		noteIDs = append(noteIDs, match.ID)
+		scoreByID[match.ID] = match.Score
+	}
+	summaries, err := s.loadSearchSummaries(noteIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]SearchResult, 0, len(matches))
+	for _, match := range matches {
+		summary, ok := summaries[match.ID]
+		if !ok {
+			continue
+		}
+
+		pathSegments, err := searchindex.LoadPathSegments(s.db.DB, match.ID)
+		if err != nil {
+			pathSegments = nil
+		}
+		path := searchindex.DisplayPath(pathSegments)
+
+		tags, err := loadTags(s.db.DB, match.ID)
+		if err != nil || tags == nil {
+			tags = []string{}
+		}
+
+		results = append(results, SearchResult{
+			NoteSummary: summary,
+			Distance:    scoreByID[match.ID],
+			Path:        path,
+			Tags:        tags,
+		})
+	}
+	return results, nil
+}
+
+func upsertLiteralMatch(best map[int64]literalMatch, noteID int64, score float64, order int) {
+	current, exists := best[noteID]
+	if !exists || score < current.Score || (score == current.Score && order < current.Order) {
+		best[noteID] = literalMatch{ID: noteID, Score: score, Order: order}
+	}
+}
+
+func matchesFromMap(best map[int64]literalMatch) []literalMatch {
+	matches := make([]literalMatch, 0, len(best))
+	for _, match := range best {
+		matches = append(matches, match)
+	}
+	return matches
+}
+
+func searchTypeCatalog() []searchTypeInfo {
+	catalog := []searchTypeInfo{{ID: "standard", Label: "Standard", Category: "General"}}
+	for _, manifest := range notetype.ListManifests() {
+		catalog = append(catalog, searchTypeInfo{
+			ID:       manifest.ID,
+			Label:    manifest.Label,
+			Category: manifest.Category,
+		})
+	}
+	return catalog
+}
+
+func normalizeSearchText(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsNumber(r))
+	})
+	return strings.Join(parts, " ")
+}
+
+func fuzzySearchScore(query, target string) (float64, bool) {
+	q := normalizeSearchText(query)
+	t := normalizeSearchText(target)
+	if q == "" || t == "" {
+		return 0, false
+	}
+	if t == q {
+		return 0, true
+	}
+	if strings.HasPrefix(t, q) {
+		return 0.06 + relativeLengthPenalty(t, q, 0.08), true
+	}
+	if strings.Contains(t, q) {
+		return 0.14 + relativeLengthPenalty(t, q, 0.12), true
+	}
+
+	qTokens := strings.Fields(q)
+	tTokens := strings.Fields(t)
+	if len(qTokens) > 0 && len(tTokens) > 0 {
+		total := 0.0
+		for _, queryToken := range qTokens {
+			bestTokenScore, ok := bestTokenScore(queryToken, tTokens)
+			if !ok {
+				total = -1
+				break
+			}
+			total += bestTokenScore
+		}
+		if total >= 0 {
+			return 0.22 + total/float64(len(qTokens)), true
+		}
+	}
+
+	compactQuery := strings.ReplaceAll(q, " ", "")
+	compactTarget := strings.ReplaceAll(t, " ", "")
+	if compactQuery != "" && compactTarget != "" && isSubsequence(compactQuery, compactTarget) {
+		return 0.38 + relativeLengthPenalty(compactTarget, compactQuery, 0.18), true
+	}
+
+	return 0, false
+}
+
+func bestTokenScore(queryToken string, targetTokens []string) (float64, bool) {
+	best := math.MaxFloat64
+	for _, targetToken := range targetTokens {
+		switch {
+		case targetToken == queryToken:
+			best = minFloat(best, 0.02)
+		case strings.HasPrefix(targetToken, queryToken):
+			best = minFloat(best, 0.06+relativeLengthPenalty(targetToken, queryToken, 0.08))
+		case strings.HasPrefix(queryToken, targetToken):
+			best = minFloat(best, 0.08+relativeLengthPenalty(queryToken, targetToken, 0.08))
+		case strings.Contains(targetToken, queryToken):
+			best = minFloat(best, 0.12+relativeLengthPenalty(targetToken, queryToken, 0.1))
+		case strings.Contains(queryToken, targetToken):
+			best = minFloat(best, 0.16+relativeLengthPenalty(queryToken, targetToken, 0.1))
+		case isSubsequence(queryToken, targetToken):
+			best = minFloat(best, 0.22+relativeLengthPenalty(targetToken, queryToken, 0.14))
+		}
+	}
+	if best == math.MaxFloat64 {
+		return 0, false
+	}
+	return best, true
+}
+
+func relativeLengthPenalty(target, query string, scale float64) float64 {
+	targetLen := len([]rune(target))
+	queryLen := len([]rune(query))
+	if targetLen == 0 || queryLen == 0 {
+		return 0
+	}
+	diff := targetLen - queryLen
+	if diff < 0 {
+		diff = -diff
+	}
+	return math.Min(scale, float64(diff)/float64(maxInt(targetLen, queryLen))*scale)
+}
+
+func isSubsequence(query, target string) bool {
+	queryRunes := []rune(query)
+	if len(queryRunes) == 0 {
+		return false
+	}
+	qi := 0
+	for _, r := range []rune(target) {
+		if qi < len(queryRunes) && queryRunes[qi] == r {
+			qi++
+			if qi == len(queryRunes) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func literalSearchBoost(query, title, path string, tags []string) float64 {

@@ -56,8 +56,17 @@
                     />
                     <span v-if="searching" class="search-spinner">⟳</span>
                 </div>
-                <div v-if="searchFilterSummary" class="search-filter-summary">
-                    {{ searchFilterSummary }}
+                <div class="search-box-meta">
+                    <div v-if="searchFilterSummary" class="search-filter-summary">
+                        {{ searchFilterSummary }}
+                    </div>
+                    <div class="search-stream-hint">
+                        Tags → categories → titles first, then related notes stream in
+                        below without moving earlier results.
+                    </div>
+                    <div v-if="searchStatusMessage" class="search-stream-status">
+                        {{ searchStatusMessage }}
+                    </div>
                 </div>
                 <div v-if="searchTypePickerVisible" class="search-type-panel">
                     <div class="search-type-panel-header">
@@ -117,43 +126,72 @@
                     position="top-right"
                 />
                 <!-- Search results mode -->
-                <template v-if="searchQuery.trim()">
+                <template v-if="hasSidebarSearch">
                     <div
-                        v-for="(sr, idx) in searchResults"
-                        :key="sr.id"
-                        class="note-item"
-                        :class="{
-                            active: selected?.id === sr.id,
-                            highlighted: highlightedIndex === idx,
-                        }"
-                        @click="selectSearchResult(sr)"
+                        v-for="section in searchSectionGroups"
+                        :key="section.key"
+                        class="search-section"
                     >
-                        <span class="note-title-row">
-                            <span class="note-title">{{
-                                sr.title || "Untitled"
+                        <div class="search-section-header">
+                            <span class="search-section-title">{{ section.label }}</span>
+                            <span class="search-section-count">{{
+                                section.items.length
                             }}</span>
-                            <span
-                                v-if="sr.type && sr.type !== 'standard'"
-                                class="search-result-type"
-                            >
-                                {{ noteTypeLabel(sr.type) }}
+                        </div>
+                        <div
+                            v-if="section.description"
+                            class="search-section-description"
+                        >
+                            {{ section.description }}
+                        </div>
+                        <div
+                            v-for="item in section.items"
+                            :key="item.key"
+                            class="note-item search-note-item"
+                            :class="{
+                                active: selected?.id === item.result.id,
+                                highlighted: highlightedIndex === item.flatIndex,
+                            }"
+                            @click="selectSearchResult(item.result)"
+                        >
+                            <span class="note-title-row">
+                                <span class="note-title">{{
+                                    item.result.title || "Untitled"
+                                }}</span>
+                                <span
+                                    v-if="
+                                        item.result.type &&
+                                        item.result.type !== 'standard'
+                                    "
+                                    class="search-result-type"
+                                >
+                                    {{ noteTypeLabel(item.result.type) }}
+                                </span>
                             </span>
-                        </span>
-                        <span v-if="sr.path" class="search-result-path">{{
-                            sr.path
-                        }}</span>
-                        <span
-                            v-if="sr.tags && sr.tags.length"
-                            class="search-result-tags"
-                            >{{ formatSearchTags(sr.tags) }}</span
-                        >
-                        <span class="note-date"
-                            >{{ fmtDate(sr.updated_at) }} —
-                            {{ relevancePct(sr.distance) }}</span
-                        >
+                            <span
+                                v-if="item.result.path"
+                                class="search-result-path"
+                                >{{ item.result.path }}</span
+                            >
+                            <span
+                                v-if="item.result.tags && item.result.tags.length"
+                                class="search-result-tags"
+                                >{{ formatSearchTags(item.result.tags) }}</span
+                            >
+                            <span class="note-date"
+                                >{{ fmtDate(item.result.updated_at) }} —
+                                {{ relevancePct(item.result.distance) }}</span
+                            >
+                        </div>
                     </div>
                     <div v-if="searchError && !searching" class="empty-list">
                         {{ searchError }}
+                    </div>
+                    <div
+                        v-else-if="searchResults.length === 0 && searching"
+                        class="empty-list"
+                    >
+                        {{ searchStatusMessage || "Searching…" }}
                     </div>
                     <div
                         v-else-if="searchResults.length === 0 && !searching"
@@ -195,7 +233,7 @@
                         No notes yet
                     </div>
                 </template>
-                <div v-if="loading || searching" class="empty-list">
+                <div v-if="loading && !hasSidebarSearch" class="empty-list">
                     Loading…
                 </div>
             </div>
@@ -322,24 +360,80 @@
                                 <div
                                     v-if="
                                         showParentPicker &&
-                                        (parentOptions.length > 0 ||
+                                        (parentSearchActive ||
+                                            parentOptions.length > 0 ||
                                             parentSearching)
                                     "
                                     class="parent-dropdown"
                                 >
                                     <div
-                                        v-if="parentSearching"
+                                        v-if="parentSearchStatusMessage"
+                                        class="parent-dropdown-status"
+                                    >
+                                        {{ parentSearchStatusMessage }}
+                                    </div>
+                                    <template
+                                        v-for="section in parentSectionGroups"
+                                        :key="section.key"
+                                    >
+                                        <div class="parent-dropdown-section-label">
+                                            {{ section.label }}
+                                        </div>
+                                        <div
+                                            v-for="item in section.items"
+                                            :key="item.key"
+                                            class="parent-dropdown-item"
+                                            @click="selectParent(item.result)"
+                                        >
+                                            <span class="parent-dropdown-title-row">
+                                                <span class="parent-dropdown-title">{{
+                                                    item.result.title ||
+                                                    "Untitled"
+                                                }}</span>
+                                                <span
+                                                    v-if="
+                                                        item.result.type &&
+                                                        item.result.type !==
+                                                            'standard'
+                                                    "
+                                                    class="search-result-type"
+                                                >
+                                                    {{
+                                                        noteTypeLabel(
+                                                            item.result.type,
+                                                        )
+                                                    }}
+                                                </span>
+                                            </span>
+                                            <span
+                                                v-if="item.result.path"
+                                                class="parent-dropdown-meta"
+                                                >{{ item.result.path }}</span
+                                            >
+                                            <span
+                                                v-if="
+                                                    item.result.tags &&
+                                                    item.result.tags.length
+                                                "
+                                                class="parent-dropdown-meta"
+                                                >{{
+                                                    formatSearchTags(
+                                                        item.result.tags,
+                                                    )
+                                                }}</span
+                                            >
+                                        </div>
+                                    </template>
+                                    <div
+                                        v-if="
+                                            parentSearchActive &&
+                                            parentSearch.trim() &&
+                                            !parentSearching &&
+                                            parentOptions.length === 0
+                                        "
                                         class="parent-dropdown-item muted"
                                     >
-                                        Searching…
-                                    </div>
-                                    <div
-                                        v-for="opt in parentOptions"
-                                        :key="opt.id"
-                                        class="parent-dropdown-item"
-                                        @click="selectParent(opt)"
-                                    >
-                                        {{ opt.title }}
+                                        No matching parent notes
                                     </div>
                                 </div>
                             </div>
@@ -521,68 +615,85 @@
                                     :style="linkPopupStyle"
                                 >
                                     <div
-                                        v-if="
-                                            !linkSearching &&
-                                            !linkSearchQuery.trim()
-                                        "
+                                        v-if="!linkSearchQuery.trim()"
                                         class="link-search-status"
                                     >
                                         Start typing to search notes…
                                     </div>
                                     <div
-                                        v-else-if="linkSearching"
+                                        v-if="linkSearchStatusMessage"
                                         class="link-search-status"
                                     >
-                                        Searching…
+                                        {{ linkSearchStatusMessage }}
                                     </div>
-                                    <div
-                                        v-for="(r, idx) in linkSearchResults"
-                                        :key="r.id"
-                                        class="link-search-item"
-                                        :class="{
-                                            highlighted:
-                                                idx === linkSearchIndex,
-                                        }"
-                                        :style="
-                                            idx === linkSearchIndex
-                                                ? {
-                                                      background: '#2f2000',
-                                                      color: '#fff',
-                                                      boxShadow:
-                                                          'inset 4px 0 0 #ffb400',
-                                                      outline:
-                                                          '1px solid rgba(255, 180, 0, 0.35)',
-                                                  }
-                                                : null
-                                        "
-                                        @click="selectLinkResult(r)"
-                                        @mouseenter="linkSearchIndex = idx"
+                                    <template
+                                        v-for="section in linkSearchSectionGroups"
+                                        :key="section.key"
                                     >
-                                        <span
-                                            class="link-search-title"
-                                            :style="
-                                                idx === linkSearchIndex
-                                                    ? {
-                                                          fontWeight: '700',
-                                                      }
-                                                    : null
+                                        <div class="link-search-section-header">
+                                            <span>{{ section.label }}</span>
+                                            <span>{{ section.items.length }}</span>
+                                        </div>
+                                        <div
+                                            v-for="item in section.items"
+                                            :key="item.key"
+                                            class="link-search-item"
+                                            :class="{
+                                                highlighted:
+                                                    item.flatIndex ===
+                                                    linkSearchIndex,
+                                            }"
+                                            @click="selectLinkResult(item.result)"
+                                            @mouseenter="
+                                                linkSearchIndex = item.flatIndex
                                             "
-                                            >{{ r.title || "Untitled" }}</span
                                         >
-                                        <span
-                                            class="link-search-relevance"
-                                            :style="
-                                                idx === linkSearchIndex
-                                                    ? {
-                                                          color: 'rgba(255, 255, 255, 0.92)',
-                                                      }
-                                                    : null
-                                            "
-                                            >{{
-                                                relevancePct(r.distance)
-                                            }}</span
-                                        >
-                                    </div>
+                                            <div class="link-search-body">
+                                                <span class="link-search-title-row">
+                                                    <span class="link-search-title">{{
+                                                        item.result.title ||
+                                                        "Untitled"
+                                                    }}</span>
+                                                    <span
+                                                        v-if="
+                                                            item.result.type &&
+                                                            item.result.type !==
+                                                                'standard'
+                                                        "
+                                                        class="search-result-type"
+                                                    >
+                                                        {{
+                                                            noteTypeLabel(
+                                                                item.result.type,
+                                                            )
+                                                        }}
+                                                    </span>
+                                                </span>
+                                                <span
+                                                    v-if="item.result.path"
+                                                    class="link-search-meta"
+                                                    >{{ item.result.path }}</span
+                                                >
+                                                <span
+                                                    v-if="
+                                                        item.result.tags &&
+                                                        item.result.tags.length
+                                                    "
+                                                    class="link-search-meta"
+                                                    >{{
+                                                        formatSearchTags(
+                                                            item.result.tags,
+                                                        )
+                                                    }}</span
+                                                >
+                                            </div>
+                                            <span class="link-search-relevance">{{
+                                                relevancePct(
+                                                    item.result.distance,
+                                                )
+                                            }}</span>
+                                        </div>
+                                    </template>
                                     <div
                                         v-if="
                                             !linkSearching &&
@@ -793,62 +904,83 @@
                             :style="linkPopupStyle"
                         >
                             <div
-                                v-if="!linkSearching && !linkSearchQuery.trim()"
+                                v-if="!linkSearchQuery.trim()"
                                 class="link-search-status"
                             >
                                 Start typing to search notes…
                             </div>
                             <div
-                                v-else-if="linkSearching"
+                                v-if="linkSearchStatusMessage"
                                 class="link-search-status"
                             >
-                                Searching…
+                                {{ linkSearchStatusMessage }}
                             </div>
-                            <div
-                                v-for="(r, idx) in linkSearchResults"
-                                :key="r.id"
-                                class="link-search-item"
-                                :class="{
-                                    highlighted: idx === linkSearchIndex,
-                                }"
-                                :style="
-                                    idx === linkSearchIndex
-                                        ? {
-                                              background: '#2f2000',
-                                              color: '#fff',
-                                              boxShadow:
-                                                  'inset 4px 0 0 #ffb400',
-                                              outline:
-                                                  '1px solid rgba(255, 180, 0, 0.35)',
-                                          }
-                                        : null
-                                "
-                                @click="selectLinkResult(r)"
-                                @mouseenter="linkSearchIndex = idx"
+                            <template
+                                v-for="section in linkSearchSectionGroups"
+                                :key="section.key"
                             >
-                                <span
-                                    class="link-search-title"
-                                    :style="
-                                        idx === linkSearchIndex
-                                            ? {
-                                                  fontWeight: '700',
-                                              }
-                                            : null
+                                <div class="link-search-section-header">
+                                    <span>{{ section.label }}</span>
+                                    <span>{{ section.items.length }}</span>
+                                </div>
+                                <div
+                                    v-for="item in section.items"
+                                    :key="item.key"
+                                    class="link-search-item"
+                                    :class="{
+                                        highlighted:
+                                            item.flatIndex ===
+                                            linkSearchIndex,
+                                    }"
+                                    @click="selectLinkResult(item.result)"
+                                    @mouseenter="
+                                        linkSearchIndex = item.flatIndex
                                     "
-                                    >{{ r.title || "Untitled" }}</span
                                 >
-                                <span
-                                    class="link-search-relevance"
-                                    :style="
-                                        idx === linkSearchIndex
-                                            ? {
-                                                  color: 'rgba(255, 255, 255, 0.92)',
-                                              }
-                                            : null
-                                    "
-                                    >{{ relevancePct(r.distance) }}</span
-                                >
-                            </div>
+                                    <div class="link-search-body">
+                                        <span class="link-search-title-row">
+                                            <span class="link-search-title">{{
+                                                item.result.title ||
+                                                "Untitled"
+                                            }}</span>
+                                            <span
+                                                v-if="
+                                                    item.result.type &&
+                                                    item.result.type !==
+                                                        'standard'
+                                                "
+                                                class="search-result-type"
+                                            >
+                                                {{
+                                                    noteTypeLabel(
+                                                        item.result.type,
+                                                    )
+                                                }}
+                                            </span>
+                                        </span>
+                                        <span
+                                            v-if="item.result.path"
+                                            class="link-search-meta"
+                                            >{{ item.result.path }}</span
+                                        >
+                                        <span
+                                            v-if="
+                                                item.result.tags &&
+                                                item.result.tags.length
+                                            "
+                                            class="link-search-meta"
+                                            >{{
+                                                formatSearchTags(
+                                                    item.result.tags,
+                                                )
+                                            }}</span
+                                        >
+                                    </div>
+                                    <span class="link-search-relevance">{{
+                                        relevancePct(item.result.distance)
+                                    }}</span>
+                                </div>
+                            </template>
                             <div
                                 v-if="
                                     !linkSearching &&
@@ -1078,59 +1210,72 @@
                         :style="linkPopupStyle"
                     >
                         <div
-                            v-if="!linkSearching && !linkSearchQuery.trim()"
+                            v-if="!linkSearchQuery.trim()"
                             class="link-search-status"
                         >
                             Start typing to search notes…
                         </div>
                         <div
-                            v-else-if="linkSearching"
+                            v-if="linkSearchStatusMessage"
                             class="link-search-status"
                         >
-                            Searching…
+                            {{ linkSearchStatusMessage }}
                         </div>
-                        <div
-                            v-for="(r, idx) in linkSearchResults"
-                            :key="r.id"
-                            class="link-search-item"
-                            :class="{ highlighted: idx === linkSearchIndex }"
-                            :style="
-                                idx === linkSearchIndex
-                                    ? {
-                                          background: '#2f2000',
-                                          color: '#fff',
-                                          boxShadow: 'inset 4px 0 0 #ffb400',
-                                          outline:
-                                              '1px solid rgba(255, 180, 0, 0.35)',
-                                      }
-                                    : null
-                            "
-                            @click="selectLinkResult(r)"
-                            @mouseenter="linkSearchIndex = idx"
+                        <template
+                            v-for="section in linkSearchSectionGroups"
+                            :key="section.key"
                         >
-                            <span
-                                class="link-search-title"
-                                :style="
-                                    idx === linkSearchIndex
-                                        ? {
-                                              fontWeight: '700',
-                                          }
-                                        : null
-                                "
-                                >{{ r.title || "Untitled" }}</span
+                            <div class="link-search-section-header">
+                                <span>{{ section.label }}</span>
+                                <span>{{ section.items.length }}</span>
+                            </div>
+                            <div
+                                v-for="item in section.items"
+                                :key="item.key"
+                                class="link-search-item"
+                                :class="{
+                                    highlighted:
+                                        item.flatIndex === linkSearchIndex,
+                                }"
+                                @click="selectLinkResult(item.result)"
+                                @mouseenter="linkSearchIndex = item.flatIndex"
                             >
-                            <span
-                                class="link-search-relevance"
-                                :style="
-                                    idx === linkSearchIndex
-                                        ? {
-                                              color: 'rgba(255, 255, 255, 0.92)',
-                                          }
-                                        : null
-                                "
-                                >{{ relevancePct(r.distance) }}</span
-                            >
-                        </div>
+                                <div class="link-search-body">
+                                    <span class="link-search-title-row">
+                                        <span class="link-search-title">{{
+                                            item.result.title || "Untitled"
+                                        }}</span>
+                                        <span
+                                            v-if="
+                                                item.result.type &&
+                                                item.result.type !== 'standard'
+                                            "
+                                            class="search-result-type"
+                                        >
+                                            {{ noteTypeLabel(item.result.type) }}
+                                        </span>
+                                    </span>
+                                    <span
+                                        v-if="item.result.path"
+                                        class="link-search-meta"
+                                        >{{ item.result.path }}</span
+                                    >
+                                    <span
+                                        v-if="
+                                            item.result.tags &&
+                                            item.result.tags.length
+                                        "
+                                        class="link-search-meta"
+                                        >{{
+                                            formatSearchTags(item.result.tags)
+                                        }}</span
+                                    >
+                                </div>
+                                <span class="link-search-relevance">{{
+                                    relevancePct(item.result.distance)
+                                }}</span>
+                            </div>
+                        </template>
                         <div
                             v-if="
                                 !linkSearching &&
@@ -1212,7 +1357,7 @@ import {
     fetchNoteHistory,
     fetchChildren,
     fetchAncestors,
-    searchNotes,
+    streamSearchNotes,
     setNotePin,
     fetchTags,
     pluginActionV2,
@@ -1295,22 +1440,30 @@ const historyLoading = ref(false);
 
 // Search state
 const searchQuery = ref("");
-const searchResults = ref([]);
+const searchSections = ref([]);
+const searchStatusMessage = ref("");
 const searchError = ref("");
 const searching = ref(false);
 const highlightedIndex = ref(-1);
 const searchSelectedTypes = ref(["standard"]);
+const searchResults = computed(() => flattenSearchSections(searchSections.value));
 let searchTimeout = null;
+const sidebarSearchRequest = { controller: null };
 
 // [[ Link search state
 const linkSearchQuery = ref("");
-const linkSearchResults = ref([]);
+const linkSearchSections = ref([]);
+const linkSearchStatusMessage = ref("");
+const linkSearchResults = computed(() =>
+    flattenSearchSections(linkSearchSections.value),
+);
 const linkSearching = ref(false);
 const linkSearchIndex = ref(-1);
 const linkSearchVisible = ref(false);
 const linkSearchTarget = ref(null);
 const linkPopupStyle = ref({ left: "20px", top: "20px" });
 let linkSearchTimeout = null;
+const linkSearchRequest = { controller: null };
 
 function getLinkSearchContext(target = linkSearchTarget.value) {
     switch (target) {
@@ -1409,12 +1562,18 @@ const canSendThreadReply = computed(
 
 // Parent selector state
 const parentSearch = ref("");
-const parentOptions = ref([]);
+const parentSearchSections = ref([]);
+const parentSearchStatusMessage = ref("");
+const parentOptions = computed(() =>
+    flattenSearchSections(parentSearchSections.value),
+);
 
 const ancestors = ref([]);
 const parentSearching = ref(false);
 const showParentPicker = ref(false);
+const parentSearchActive = ref(false);
 let parentSearchTimeout = null;
+const parentSearchRequest = { controller: null };
 
 // Root notes (no parent_id) — shown in the sidebar
 const rootNotes = computed(() =>
@@ -1422,12 +1581,12 @@ const rootNotes = computed(() =>
 );
 
 // The list currently shown in the sidebar (search results or root notes)
-const sidebarList = computed(() =>
-    searchQuery.value.trim() ? searchResults.value : rootNotes.value,
-);
-
 const allSearchTypeValues = computed(() => typeOptions.map((opt) => opt.value));
 const searchMode = computed(() => parseSearchMode(searchQuery.value));
+const hasSidebarSearch = computed(() => Boolean(searchMode.value.query));
+const sidebarList = computed(() =>
+    hasSidebarSearch.value ? searchResults.value : rootNotes.value,
+);
 const searchTypePickerVisible = computed(() => searchMode.value.useTypePicker);
 const searchFilterSummary = computed(() => {
     if (!searchQuery.value.trim()) return "";
@@ -1443,6 +1602,13 @@ const searchFilterSummary = computed(() => {
     }
     return "Searching standard notes only. Add .i to choose note types or .a for all.";
 });
+const searchSectionGroups = computed(() => buildSectionGroups(searchSections.value));
+const parentSectionGroups = computed(() =>
+    buildSectionGroups(parentSearchSections.value, { includeFlatIndex: false }),
+);
+const linkSearchSectionGroups = computed(() =>
+    buildSectionGroups(linkSearchSections.value),
+);
 
 watch(searchTypePickerVisible, (visible) => {
     if (visible && searchSelectedTypes.value.length === 0) {
@@ -1515,6 +1681,134 @@ function noteTypeLabel(type) {
 
 function formatSearchTags(tags) {
     return tags.map((tag) => `#${tag}`).join(" ");
+}
+
+function flattenSearchSections(sections) {
+    return (sections || []).flatMap((section) => section?.results || []);
+}
+
+function buildSectionGroups(sections, { includeFlatIndex = true } = {}) {
+    let flatIndex = 0;
+    return (sections || []).map((section, sectionIndex) => ({
+        ...section,
+        items: (section?.results || []).map((result, itemIndex) => {
+            const currentFlatIndex = includeFlatIndex ? flatIndex++ : itemIndex;
+            return {
+                key: `${section?.key || sectionIndex}:${result.id}:${itemIndex}`,
+                result,
+                flatIndex: currentFlatIndex,
+            };
+        }),
+    }));
+}
+
+function normalizeSearchSection(section, { filterResult = null } = {}) {
+    const results = Array.isArray(section?.results)
+        ? section.results.filter((result) =>
+              filterResult ? filterResult(result) : true,
+          )
+        : [];
+    if (results.length === 0) {
+        return null;
+    }
+    return {
+        key: section?.key || `section-${results[0]?.id || "results"}`,
+        label: section?.label || "Results",
+        description: section?.description || "",
+        results,
+    };
+}
+
+function abortSearchRequest(store) {
+    if (store?.controller) {
+        store.controller.abort();
+        store.controller = null;
+    }
+}
+
+async function runStreamedSearch({
+    query,
+    types = null,
+    sectionsRef,
+    statusRef,
+    searchingRef,
+    requestStore,
+    errorRef = null,
+    filterResult = null,
+    onFirstResult = null,
+    onReset = null,
+    onDone = null,
+}) {
+    const trimmed = String(query || "").trim();
+    abortSearchRequest(requestStore);
+
+    if (!trimmed) {
+        sectionsRef.value = [];
+        statusRef.value = "";
+        searchingRef.value = false;
+        if (errorRef) {
+            errorRef.value = "";
+        }
+        onReset?.();
+        return;
+    }
+
+    const controller = new AbortController();
+    requestStore.controller = controller;
+    sectionsRef.value = [];
+    statusRef.value = "Searching exact matches…";
+    if (errorRef) {
+        errorRef.value = "";
+    }
+    searchingRef.value = true;
+    let firstResultDelivered = false;
+
+    try {
+        await streamSearchNotes(props.token, trimmed, {
+            types,
+            signal: controller.signal,
+            onStatus(event) {
+                if (requestStore.controller !== controller) return;
+                statusRef.value = event?.message || "";
+            },
+            onSection(section) {
+                if (requestStore.controller !== controller) return;
+                const normalized = normalizeSearchSection(section, {
+                    filterResult,
+                });
+                if (!normalized) return;
+                sectionsRef.value = [...sectionsRef.value, normalized];
+                if (!firstResultDelivered) {
+                    firstResultDelivered = true;
+                    onFirstResult?.();
+                }
+            },
+            onError(event) {
+                if (requestStore.controller !== controller || !errorRef) return;
+                errorRef.value = event?.message || "Search failed";
+            },
+            onDone(event) {
+                if (requestStore.controller !== controller) return;
+                statusRef.value = event?.message || "";
+                onDone?.(event);
+            },
+        });
+    } catch (e) {
+        if (e?.name === "AbortError") {
+            return;
+        }
+        sectionsRef.value = [];
+        statusRef.value = "";
+        if (errorRef) {
+            errorRef.value = e?.message || "Search failed";
+        }
+        onReset?.();
+    } finally {
+        if (requestStore.controller === controller) {
+            requestStore.controller = null;
+            searchingRef.value = false;
+        }
+    }
 }
 
 function hasUnsavedSelectedChanges() {
@@ -1957,7 +2251,7 @@ async function runLiveRefresh() {
     try {
         if (refreshFull) {
             await loadNotes();
-            if (searchQuery.value.trim()) {
+            if (hasSidebarSearch.value) {
                 await doSearch();
             }
         }
@@ -2164,6 +2458,10 @@ async function selectSearchResult(
 }
 
 function populateParentSearch(note) {
+    abortSearchRequest(parentSearchRequest);
+    parentSearchActive.value = false;
+    parentSearchSections.value = [];
+    parentSearchStatusMessage.value = "";
     if (note?.parent_id) {
         const p = notes.value.find((n) => n.id === note.parent_id);
         parentSearch.value = p ? p.title : "";
@@ -2208,6 +2506,10 @@ function newNote(
     children.value = [];
     childrenLoaded.value = false;
     parentSearch.value = "";
+    parentSearchActive.value = false;
+    parentSearchSections.value = [];
+    parentSearchStatusMessage.value = "";
+    showParentPicker.value = false;
     ancestors.value = [];
     isEditing.value = true;
     if (parentNote) {
@@ -2301,34 +2603,36 @@ async function loadThreadChildren() {
 }
 
 function onParentSearchInput() {
+    parentSearchActive.value = Boolean(parentSearch.value.trim());
     clearTimeout(parentSearchTimeout);
     parentSearchTimeout = setTimeout(doParentSearch, 200);
 }
 
 async function doParentSearch() {
     const q = parentSearch.value.trim();
-    if (!q) {
-        parentOptions.value = [];
-        return;
-    }
-    parentSearching.value = true;
-    try {
-        const results = await searchNotes(props.token, q);
-        // Filter out the current note so it can't be its own parent
-        parentOptions.value = results
-            .filter((r) => r.id !== selected.value?.id)
-            .slice(0, 8);
-    } catch {
-        parentOptions.value = [];
-    } finally {
-        parentSearching.value = false;
-    }
+    await runStreamedSearch({
+        query: q,
+        sectionsRef: parentSearchSections,
+        statusRef: parentSearchStatusMessage,
+        searchingRef: parentSearching,
+        requestStore: parentSearchRequest,
+        filterResult: (result) => result.id !== selected.value?.id,
+        onReset: () => {
+            parentSearchSections.value = [];
+        },
+        onDone: () => {
+            parentSearchStatusMessage.value = "";
+        },
+    });
 }
 
 function selectParent(note) {
     selected.value = { ...selected.value, parent_id: note.id };
     parentSearch.value = note.title;
-    parentOptions.value = [];
+    parentSearchActive.value = false;
+    parentSearchSections.value = [];
+    parentSearchStatusMessage.value = "";
+    abortSearchRequest(parentSearchRequest);
     showParentPicker.value = false;
     dirty.value = true;
 }
@@ -2336,8 +2640,11 @@ function selectParent(note) {
 function clearParent() {
     selected.value = { ...selected.value, parent_id: null };
     parentSearch.value = "";
+    parentSearchActive.value = false;
     ancestors.value = [];
-    parentOptions.value = [];
+    parentSearchSections.value = [];
+    parentSearchStatusMessage.value = "";
+    abortSearchRequest(parentSearchRequest);
     dirty.value = true;
 }
 
@@ -2782,27 +3089,28 @@ function onSearchInput() {
 async function doSearch() {
     const mode = searchMode.value;
     const q = mode.query;
-    if (!q) {
-        searchResults.value = [];
-        searchError.value = "";
-        highlightedIndex.value = -1;
-        return;
-    }
-    searching.value = true;
-    searchError.value = "";
-    try {
-        searchResults.value = await searchNotes(props.token, q, {
-            types: mode.types,
-        });
-        searchError.value = "";
-        highlightedIndex.value = searchResults.value.length > 0 ? 0 : -1;
-    } catch (e) {
-        searchResults.value = [];
-        searchError.value = "Semantic Search System Error";
-        highlightedIndex.value = -1;
-    } finally {
-        searching.value = false;
-    }
+    await runStreamedSearch({
+        query: q,
+        types: mode.types,
+        sectionsRef: searchSections,
+        statusRef: searchStatusMessage,
+        searchingRef: searching,
+        requestStore: sidebarSearchRequest,
+        errorRef: searchError,
+        onFirstResult: () => {
+            if (highlightedIndex.value < 0 && searchResults.value.length > 0) {
+                highlightedIndex.value = 0;
+            }
+        },
+        onReset: () => {
+            searchSections.value = [];
+            searchStatusMessage.value = "";
+            highlightedIndex.value = -1;
+        },
+        onDone: () => {
+            searchStatusMessage.value = "";
+        },
+    });
 }
 
 function relevancePct(distance) {
@@ -2864,8 +3172,10 @@ function updateLinkSearchFromCursor() {
 
             clearTimeout(linkSearchTimeout);
             if (!query.trim()) {
+                abortSearchRequest(linkSearchRequest);
                 linkSearching.value = false;
-                linkSearchResults.value = [];
+                linkSearchSections.value = [];
+                linkSearchStatusMessage.value = "";
                 linkSearchIndex.value = -1;
                 return;
             }
@@ -2971,30 +3281,37 @@ function updateLinkPopupPosition() {
 
 async function doLinkSearch() {
     const q = linkSearchQuery.value.trim();
-    if (!q) {
-        linkSearchResults.value = [];
-        linkSearchIndex.value = -1;
-        return;
-    }
-    linkSearching.value = true;
-    try {
-        linkSearchResults.value = await searchNotes(props.token, q);
-        linkSearchIndex.value = linkSearchResults.value.length > 0 ? 0 : -1;
-    } catch (e) {
-        linkSearchResults.value = [];
-        linkSearchIndex.value = -1;
-    } finally {
-        linkSearching.value = false;
-    }
+    await runStreamedSearch({
+        query: q,
+        sectionsRef: linkSearchSections,
+        statusRef: linkSearchStatusMessage,
+        searchingRef: linkSearching,
+        requestStore: linkSearchRequest,
+        onFirstResult: () => {
+            if (linkSearchIndex.value < 0 && linkSearchResults.value.length > 0) {
+                linkSearchIndex.value = 0;
+            }
+        },
+        onReset: () => {
+            linkSearchSections.value = [];
+            linkSearchStatusMessage.value = "";
+            linkSearchIndex.value = -1;
+        },
+        onDone: () => {
+            linkSearchStatusMessage.value = "";
+        },
+    });
 }
 
 function closeLinkSearch() {
     linkSearchVisible.value = false;
     linkSearchQuery.value = "";
-    linkSearchResults.value = [];
+    linkSearchSections.value = [];
+    linkSearchStatusMessage.value = "";
     linkSearchIndex.value = -1;
     linkSearchTarget.value = null;
     clearTimeout(linkSearchTimeout);
+    abortSearchRequest(linkSearchRequest);
 }
 
 function selectLinkResult(note) {
@@ -3051,7 +3368,10 @@ function handleEscapeShortcut(event) {
 
     if (inSearch && searchQuery.value.trim()) {
         searchQuery.value = "";
-        searchResults.value = [];
+        searchSections.value = [];
+        searchStatusMessage.value = "";
+        searchError.value = "";
+        abortSearchRequest(sidebarSearchRequest);
         highlightedIndex.value = -1;
         return;
     }
@@ -3135,7 +3455,7 @@ function handleEnterShortcut(event) {
 
     event.preventDefault();
     const item = sidebarList.value[idx];
-    if (searchQuery.value.trim()) {
+    if (hasSidebarSearch.value) {
         selectSearchResult(item);
     } else {
         selectNote(item);
@@ -3163,6 +3483,12 @@ onUnmounted(() => {
     window.removeEventListener("keydown", onThreadSidebarCtrlKeyDown, true);
     window.removeEventListener("keyup", onThreadSidebarCtrlKeyUp, true);
     window.removeEventListener("blur", onThreadSidebarCtrlBlur);
+    clearTimeout(searchTimeout);
+    clearTimeout(parentSearchTimeout);
+    clearTimeout(linkSearchTimeout);
+    abortSearchRequest(sidebarSearchRequest);
+    abortSearchRequest(parentSearchRequest);
+    abortSearchRequest(linkSearchRequest);
 });
 
 function onClickOutside(e) {
@@ -3415,28 +3741,53 @@ function onPopstate() {
 .search-box {
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
-    padding: 0.5rem 0.75rem;
+    gap: 0.55rem;
+    padding: 0.75rem;
     border-bottom: 1px solid var(--border-color);
+    background: linear-gradient(
+        180deg,
+        rgba(109, 148, 132, 0.08),
+        rgba(109, 148, 132, 0)
+    );
 }
 
 .search-input-row {
     display: flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.45rem;
     width: 100%;
 }
 
 .search-input {
     flex: 1;
-    font-size: 0.82rem;
-    padding: 0.35rem 0.6rem;
+    font-size: 0.84rem;
+    padding: 0.5rem 0.7rem;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--raised-bg);
+}
+
+.search-box-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
 }
 
 .search-filter-summary {
     font-size: 0.72rem;
     color: var(--date-color);
     line-height: 1.35;
+}
+
+.search-stream-hint,
+.search-stream-status {
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--font-color-secondary);
+}
+
+.search-stream-status {
+    color: var(--accent-teal);
 }
 
 .search-type-panel {
@@ -3567,6 +3918,43 @@ function onPopstate() {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.search-section + .search-section {
+    margin-top: 0.55rem;
+}
+
+.search-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.35rem 1rem 0.15rem;
+}
+
+.search-section-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--font-color-secondary);
+}
+
+.search-section-count {
+    font-size: 0.68rem;
+    color: var(--font-color-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.search-section-description {
+    padding: 0 1rem 0.35rem;
+    font-size: 0.72rem;
+    color: var(--date-color);
+    line-height: 1.35;
+}
+
+.search-note-item {
+    border-left-width: 4px;
 }
 
 .note-date {
@@ -3834,21 +4222,46 @@ function onPopstate() {
 
 .parent-dropdown {
     position: absolute;
-    top: 100%;
+    top: calc(100% + 6px);
     left: 0;
     right: 0;
-    margin-top: 2px;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
-    max-height: 220px;
+    border-radius: 12px;
+    max-height: 260px;
     overflow-y: auto;
     z-index: 50;
-    box-shadow: 0 4px 12px var(--shadow-color);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+}
+
+.parent-dropdown-status,
+.parent-dropdown-section-label {
+    padding: 0.45rem 0.75rem;
+    font-size: 0.7rem;
+    color: var(--font-color-secondary);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.parent-dropdown-status {
+    color: var(--accent-teal);
+}
+
+.parent-dropdown-section-label {
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border-top: 1px solid var(--border-color);
+}
+
+.parent-dropdown-section-label:first-of-type {
+    border-top: none;
 }
 
 .parent-dropdown-item {
-    padding: 0.4rem 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    padding: 0.55rem 0.75rem;
     font-size: 0.82rem;
     cursor: pointer;
     color: var(--font-color);
@@ -3862,6 +4275,29 @@ function onPopstate() {
 .parent-dropdown-item.muted {
     color: var(--font-color-secondary);
     cursor: default;
+}
+
+.parent-dropdown-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.parent-dropdown-title {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.parent-dropdown-meta {
+    font-size: 0.72rem;
+    color: var(--date-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .breadcrumb-trail {
@@ -3938,22 +4374,42 @@ function onPopstate() {
 /* [[ Link search popup */
 .link-search-popup {
     position: absolute;
-    width: 320px;
-    max-width: min(320px, calc(100% - 16px));
-    max-height: 220px;
+    width: 340px;
+    max-width: min(340px, calc(100% - 16px));
+    max-height: 260px;
     overflow-y: auto;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
     z-index: 50;
+}
+
+.link-search-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--font-color-secondary);
+    background: rgba(255, 255, 255, 0.03);
+    border-top: 1px solid var(--border-color);
+}
+
+.link-search-section-header:first-of-type {
+    border-top: none;
 }
 
 .link-search-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    padding: 0.55rem 0.85rem;
+    gap: 0.8rem;
+    padding: 0.65rem 0.85rem;
     cursor: pointer;
     border-bottom: 1px solid var(--border-color);
     font-size: 0.85rem;
@@ -3978,12 +4434,37 @@ function onPopstate() {
     outline: 1px solid rgba(255, 180, 0, 0.35);
 }
 
+.link-search-item.highlighted .link-search-meta,
 .link-search-item.highlighted .link-search-relevance {
     color: rgba(255, 255, 255, 0.92);
 }
 
+.link-search-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    min-width: 0;
+    flex: 1;
+}
+
+.link-search-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
 .link-search-title {
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 1;
+}
+
+.link-search-meta {
+    font-size: 0.72rem;
+    color: var(--date-color);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3993,11 +4474,12 @@ function onPopstate() {
     color: var(--font-color-secondary);
     font-size: 0.75rem;
     flex-shrink: 0;
-    margin-left: 1rem;
+    margin-left: 0.5rem;
+    padding-top: 0.05rem;
 }
 
 .link-search-status {
-    padding: 0.55rem 0.85rem;
+    padding: 0.65rem 0.85rem;
     font-size: 0.8rem;
     color: var(--font-color-secondary);
     text-align: center;
