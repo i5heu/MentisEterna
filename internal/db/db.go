@@ -172,7 +172,10 @@ func (d *DB) migrate() error {
 	if err := d.ensureSTTTables(); err != nil {
 		return err
 	}
-	return d.migrateTags()
+	if err := d.migrateTags(); err != nil {
+		return err
+	}
+	return d.ensureNotesFTS()
 }
 
 func (d *DB) ensureAuthTables() error {
@@ -424,6 +427,106 @@ func (d *DB) migrateTags() error {
 		CREATE INDEX IF NOT EXISTS idx_tags_refs_tag_id ON tags_refs(tag_id);
 	`)
 	return err
+}
+
+// ensureNotesFTS creates the FTS4 full-text index over note titles and tag
+// names. The index is kept in sync with the `notes` and `tags_refs` tables
+// via triggers so that title edits, tag attachments/detachments, and tag
+// renames propagate automatically.
+//
+// FTS4 does not support true fuzzy matching, but the queries constructed in
+// the search package combine prefix tokens (`word*`), OR'd phrase queries, and
+// post-filter ranking with the existing subsequence scorer to produce robust
+// results that tolerate typos, partial words, and multi-word queries.
+func (d *DB) ensureNotesFTS() error {
+	// Create the FTS4 table if missing. We use `IF NOT EXISTS` so existing
+	// databases are upgraded in place without reindexing on every startup.
+	if _, err := d.Exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts4(
+			note_id UNINDEXED,
+			title,
+			tags,
+			tokenize = unicode61
+		);
+	`); err != nil {
+		return fmt.Errorf("create notes_fts: %w", err)
+	}
+
+	// Backfill any notes that are missing from the index (e.g. legacy DBs
+	// upgraded after the FTS table was introduced, or rows that slipped past
+	// a trigger due to a schema migration gap).
+	if _, err := d.Exec(`
+		INSERT INTO notes_fts(note_id, title, tags)
+		SELECT n.id,
+		       COALESCE(n.title, ''),
+		       COALESCE((
+		         SELECT GROUP_CONCAT(t.name, ' ')
+		         FROM tags_refs tr
+		         JOIN tags t ON t.id = tr.tag_id
+		         WHERE tr.note_id = n.id
+		         ORDER BY t.name
+		       ), '')
+		FROM notes n
+		WHERE NOT EXISTS (SELECT 1 FROM notes_fts f WHERE f.note_id = n.id);
+	`); err != nil {
+		return fmt.Errorf("backfill notes_fts: %w", err)
+	}
+
+	// Triggers keep the FTS index in sync with the source tables.
+	// Notes: title changes.
+	for _, stmt := range []string{
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_ai AFTER INSERT ON notes BEGIN
+			INSERT INTO notes_fts(note_id, title, tags) VALUES (new.id, COALESCE(new.title, ''), '');
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_ad AFTER DELETE ON notes BEGIN
+			DELETE FROM notes_fts WHERE note_id = old.id;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_au AFTER UPDATE OF title ON notes BEGIN
+			UPDATE notes_fts SET title = COALESCE(new.title, '') WHERE note_id = new.id;
+		END`,
+		// Tags: when a tag is attached/detached we rebuild the tags column for
+		// the affected note(s) so the FTS row reflects the current set.
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_tags_ai AFTER INSERT ON tags_refs BEGIN
+			UPDATE notes_fts
+			SET tags = COALESCE((
+			  SELECT GROUP_CONCAT(t.name, ' ')
+			  FROM tags_refs tr
+			  JOIN tags t ON t.id = tr.tag_id
+			  WHERE tr.note_id = new.note_id
+			  ORDER BY t.name
+			), '')
+			WHERE note_id = new.note_id;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_tags_ad AFTER DELETE ON tags_refs BEGIN
+			UPDATE notes_fts
+			SET tags = COALESCE((
+			  SELECT GROUP_CONCAT(t.name, ' ')
+			  FROM tags_refs tr
+			  JOIN tags t ON t.id = tr.tag_id
+			  WHERE tr.note_id = old.note_id
+			  ORDER BY t.name
+			), '')
+			WHERE note_id = old.note_id;
+		END`,
+		// If a tag is renamed, refresh every note that uses it.
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_tags_au AFTER UPDATE OF name ON tags BEGIN
+			UPDATE notes_fts
+			SET tags = COALESCE((
+			  SELECT GROUP_CONCAT(t2.name, ' ')
+			  FROM tags_refs tr2
+			  JOIN tags t2 ON t2.id = tr2.tag_id
+			  WHERE tr2.note_id = tr.note_id
+			  ORDER BY t2.name
+			), '')
+			FROM tags_refs tr
+			WHERE tr.tag_id = new.id AND notes_fts.note_id = tr.note_id;
+		END`,
+	} {
+		if _, err := d.Exec(stmt); err != nil {
+			return fmt.Errorf("create notes_fts trigger: %w", err)
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureOCRTables() error {

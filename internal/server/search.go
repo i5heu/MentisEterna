@@ -12,7 +12,6 @@ import (
 
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/searchindex"
-	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
 const (
@@ -21,7 +20,6 @@ const (
 	searchChunkQueryLimit     = 80
 	searchAttachmentQueryK    = 20
 	searchStreamTagLimit      = 6
-	searchStreamCategoryLimit = 6
 	searchStreamTitleLimit    = 8
 	searchStreamSemanticLimit = 10
 )
@@ -54,24 +52,10 @@ type searchSection struct {
 	Results     []SearchResult `json:"results"`
 }
 
-type searchNoteMeta struct {
-	ID        int64
-	Title     string
-	Type      string
-	Pinned    bool
-	UpdatedAt string
-}
-
 type literalMatch struct {
 	ID    int64
 	Score float64
 	Order int
-}
-
-type searchTypeInfo struct {
-	ID       string
-	Label    string
-	Category string
 }
 
 func (s *noteSearchScore) AddHit(distance float64) {
@@ -181,7 +165,7 @@ func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query
 	if !send(searchStreamEvent{
 		Type:    "status",
 		Phase:   "literal",
-		Message: "Searching tags, categories, and title matches…",
+		Message: "Searching titles and tags…",
 	}) {
 		return
 	}
@@ -194,25 +178,18 @@ func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query
 		search      func(string, []string, map[int64]bool, int) ([]SearchResult, error)
 	}{
 		{
-			key:         "tags",
-			label:       "Tag matches",
-			description: "Exact and fuzzy tag hits appear first.",
-			limit:       searchStreamTagLimit,
-			search:      s.searchTagResults,
-		},
-		{
-			key:         "categories",
-			label:       "Category matches",
-			description: "Notes whose type or note-type category matches your query.",
-			limit:       searchStreamCategoryLimit,
-			search:      s.searchCategoryResults,
-		},
-		{
 			key:         "titles",
 			label:       "Title matches",
-			description: "Fast title-first matches without reshuffling earlier hits.",
+			description: "FTS4 title hits with prefix-token fuzzy matching.",
 			limit:       searchStreamTitleLimit,
 			search:      s.searchTitleResults,
+		},
+		{
+			key:         "tags",
+			label:       "Tag matches",
+			description: "FTS4 tag hits with prefix-token fuzzy matching.",
+			limit:       searchStreamTagLimit,
+			search:      s.searchTagResults,
 		},
 	} {
 		if err := r.Context().Err(); err != nil {
@@ -599,19 +576,64 @@ func (s *Server) loadSearchSummaries(ids []int64) (map[int64]NoteSummary, error)
 	return out, rows.Err()
 }
 
+// ftsColumnQuery builds an FTS4 MATCH expression scoped to a single column
+// (e.g. `tags:foo* OR tags:bar*`). FTS4 column-scoped queries use the
+// `column:term` syntax and require the column name to be present in the
+// MATCH expression for every term.
+//
+// FTS4 has no native fuzzy/Levenshtein support, so we approximate it by:
+//  1. Lowercasing and stripping punctuation.
+//  2. Splitting into tokens.
+//  3. For each token, emitting `column:token*` (prefix match) — this
+//     catches typos that share a prefix (e.g. "recip" -> "recipe",
+//     "recipies") and partial-word input.
+//  4. Combining tokens with OR so any single token hit surfaces a
+//     candidate. Multi-word queries that should be more restrictive are
+//     re-ranked by the in-memory fuzzy scorer after the candidate set is
+//     fetched.
+func ftsColumnQuery(query, column string) string {
+	normalized := normalizeSearchText(query)
+	if normalized == "" {
+		return ""
+	}
+	tokens := strings.Fields(normalized)
+	if len(tokens) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		if tok == "" {
+			continue
+		}
+		parts = append(parts, column+":"+tok+"*")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " OR ")
+}
+
+// searchTagResults uses the FTS4 `tags` column to find notes whose tag set
+// contains a token starting with any query token. Candidates are then
+// re-ranked with the in-memory fuzzy scorer against the full tag string so
+// that exact / prefix / subsequence matches sort before loose prefix hits.
 func (s *Server) searchTagResults(query string, allowedTypes []string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
+	match := ftsColumnQuery(query, "tags")
+	if match == "" {
+		return []SearchResult{}, nil
+	}
 	typeClause, typeArgs := buildTypeFilterClause("n", allowedTypes)
 	rows, err := s.db.Query(`
-		SELECT n.id, t.name
-		FROM notes n
+		SELECT f.note_id, COALESCE(f.tags, ''), n.pinned,
+		       COALESCE(u.created_at, n.created_at) AS updated_at
+		FROM notes_fts f
+		JOIN notes n ON n.id = f.note_id
 		LEFT JOIN updates u ON u.id = (
 			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
 		)
-		JOIN tags_refs tr ON tr.note_id = n.id
-		JOIN tags t ON t.id = tr.tag_id
-		WHERE 1 = 1`+typeClause+`
-		ORDER BY n.pinned DESC, COALESCE(u.created_at, n.created_at) DESC, t.name ASC
-	`, typeArgs...)
+		WHERE f.tags MATCH ? AND f.tags != ''`+typeClause+`
+		ORDER BY n.pinned DESC, updated_at DESC, f.note_id ASC
+	`, append([]any{match}, typeArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -621,18 +643,29 @@ func (s *Server) searchTagResults(query string, allowedTypes []string, exclude m
 	order := 0
 	for rows.Next() {
 		var noteID int64
-		var tagName string
-		if err := rows.Scan(&noteID, &tagName); err != nil {
+		var tagText string
+		var pinned bool
+		var updatedAt string
+		if err := rows.Scan(&noteID, &tagText, &pinned, &updatedAt); err != nil {
 			return nil, err
 		}
 		if exclude != nil && exclude[noteID] {
 			continue
 		}
-		score, ok := fuzzySearchScore(query, tagName)
-		if !ok {
-			continue
+		// Re-rank against each individual tag token via the fuzzy scorer so
+		// that strong matches (exact / prefix) outrank weak prefix hits.
+		bestScore := math.MaxFloat64
+		for _, tag := range strings.Fields(tagText) {
+			if score, ok := fuzzySearchScore(query, tag); ok && score < bestScore {
+				bestScore = score
+			}
 		}
-		upsertLiteralMatch(best, noteID, score, order)
+		if bestScore == math.MaxFloat64 {
+			// FTS4 prefix hit but no token-level fuzzy match — keep it with a
+			// weak score so it still surfaces but ranks below stronger hits.
+			bestScore = 0.5
+		}
+		upsertLiteralMatch(best, noteID, bestScore, order)
 		order++
 	}
 	if err := rows.Err(); err != nil {
@@ -641,86 +674,59 @@ func (s *Server) searchTagResults(query string, allowedTypes []string, exclude m
 	return s.buildLiteralResults(matchesFromMap(best), limit)
 }
 
-func (s *Server) searchCategoryResults(query string, allowedTypes []string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
-	typeScores := map[string]float64{}
-	for _, info := range searchTypeCatalog() {
-		best := math.MaxFloat64
-		for _, candidate := range []string{info.ID, info.Label, info.Category, info.Label + " " + info.Category} {
-			score, ok := fuzzySearchScore(query, candidate)
-			if ok && score < best {
-				best = score
-			}
-		}
-		if best < math.MaxFloat64 {
-			typeScores[info.ID] = best
-		}
-	}
-	if len(typeScores) == 0 {
+// searchTitleResults uses the FTS4 `title` column to find notes whose title
+// contains a token starting with any query token. Candidates are re-ranked
+// with the in-memory fuzzy scorer against the full title so exact and prefix
+// matches sort before loose prefix hits.
+func (s *Server) searchTitleResults(query string, allowedTypes []string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
+	match := ftsColumnQuery(query, "title")
+	if match == "" {
 		return []SearchResult{}, nil
 	}
-
-	metas, err := s.loadSearchMetas(allowedTypes)
-	if err != nil {
-		return nil, err
-	}
-	best := map[int64]literalMatch{}
-	for idx, meta := range metas {
-		if exclude != nil && exclude[meta.ID] {
-			continue
-		}
-		score, ok := typeScores[meta.Type]
-		if !ok {
-			continue
-		}
-		upsertLiteralMatch(best, meta.ID, score, idx)
-	}
-	return s.buildLiteralResults(matchesFromMap(best), limit)
-}
-
-func (s *Server) searchTitleResults(query string, allowedTypes []string, exclude map[int64]bool, limit int) ([]SearchResult, error) {
-	metas, err := s.loadSearchMetas(allowedTypes)
-	if err != nil {
-		return nil, err
-	}
-	best := map[int64]literalMatch{}
-	for idx, meta := range metas {
-		if exclude != nil && exclude[meta.ID] {
-			continue
-		}
-		score, ok := fuzzySearchScore(query, meta.Title)
-		if !ok {
-			continue
-		}
-		upsertLiteralMatch(best, meta.ID, score, idx)
-	}
-	return s.buildLiteralResults(matchesFromMap(best), limit)
-}
-
-func (s *Server) loadSearchMetas(allowedTypes []string) ([]searchNoteMeta, error) {
 	typeClause, typeArgs := buildTypeFilterClause("n", allowedTypes)
 	rows, err := s.db.Query(`
-		SELECT n.id, n.title, n.type, n.pinned, COALESCE(u.created_at, n.created_at) AS updated_at
-		FROM notes n
+		SELECT f.note_id, COALESCE(f.title, ''), n.pinned,
+		       COALESCE(u.created_at, n.created_at) AS updated_at
+		FROM notes_fts f
+		JOIN notes n ON n.id = f.note_id
 		LEFT JOIN updates u ON u.id = (
 			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
 		)
-		WHERE 1 = 1`+typeClause+`
-		ORDER BY n.pinned DESC, updated_at DESC, n.id ASC
-	`, typeArgs...)
+		WHERE f.title MATCH ? AND f.title != ''`+typeClause+`
+		ORDER BY n.pinned DESC, updated_at DESC, f.note_id ASC
+	`, append([]any{match}, typeArgs...)...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var metas []searchNoteMeta
+	best := map[int64]literalMatch{}
+	order := 0
 	for rows.Next() {
-		var meta searchNoteMeta
-		if err := rows.Scan(&meta.ID, &meta.Title, &meta.Type, &meta.Pinned, &meta.UpdatedAt); err != nil {
+		var noteID int64
+		var title string
+		var pinned bool
+		var updatedAt string
+		if err := rows.Scan(&noteID, &title, &pinned, &updatedAt); err != nil {
 			return nil, err
 		}
-		metas = append(metas, meta)
+		if exclude != nil && exclude[noteID] {
+			continue
+		}
+		score, ok := fuzzySearchScore(query, title)
+		if !ok {
+			// FTS4 prefix hit but the fuzzy scorer (which is stricter about
+			// subsequence + length) didn't accept it. Keep it with a weak
+			// score so prefix matches still surface.
+			score = 0.5
+		}
+		upsertLiteralMatch(best, noteID, score, order)
+		order++
 	}
-	return metas, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.buildLiteralResults(matchesFromMap(best), limit)
 }
 
 func (s *Server) buildLiteralResults(matches []literalMatch, limit int) ([]SearchResult, error) {
@@ -796,18 +802,6 @@ func matchesFromMap(best map[int64]literalMatch) []literalMatch {
 		matches = append(matches, match)
 	}
 	return matches
-}
-
-func searchTypeCatalog() []searchTypeInfo {
-	catalog := []searchTypeInfo{{ID: "standard", Label: "Standard", Category: "General"}}
-	for _, manifest := range notetype.ListManifests() {
-		catalog = append(catalog, searchTypeInfo{
-			ID:       manifest.ID,
-			Label:    manifest.Label,
-			Category: manifest.Category,
-		})
-	}
-	return catalog
 }
 
 func normalizeSearchText(s string) string {
