@@ -2,12 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/jobs"
 )
 
@@ -58,6 +60,13 @@ func newLiveHub() *liveHub {
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, _, err := s.sessionUsername(r); errors.Is(err, db.ErrNotFound) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	} else if err != nil {
+		writeErr(w, err)
 		return
 	}
 	if s.liveHub == nil {
