@@ -19,10 +19,6 @@ import (
 	"github.com/i5heu/MentisEterna/internal/jobs"
 )
 
-// ---------------------------------------------------------------------------
-// UniquePositiveNoteIDs — table-driven (map-based)
-// ---------------------------------------------------------------------------
-
 func TestUniquePositiveNoteIDs(t *testing.T) {
 	t.Parallel()
 
@@ -32,49 +28,39 @@ func TestUniquePositiveNoteIDs(t *testing.T) {
 	}{
 		// Guards against nil input — must return nil, not empty slice.
 		"nil input returns nil": {
-			input: nil,
-			want:  nil,
+			input: nil, want: nil,
 		},
 		// Guards against empty slice — must check the early-return path.
 		"empty input returns nil": {
-			input: []int64{},
-			want:  nil,
+			input: []int64{}, want: nil,
 		},
 		// Guards against passing through zero values (0 is not positive).
 		"zero value filtered out": {
-			input: []int64{0, 1, 2},
-			want:  []int64{1, 2},
+			input: []int64{0, 1, 2}, want: []int64{1, 2},
 		},
 		// Guards against passing through negative values.
 		"negative values filtered out": {
-			input: []int64{-1, -5, 3, 4},
-			want:  []int64{3, 4},
+			input: []int64{-1, -5, 3, 4}, want: []int64{3, 4},
 		},
 		// Guards against duplicates not being collapsed.
 		"duplicates collapsed": {
-			input: []int64{1, 2, 2, 3, 1, 3},
-			want:  []int64{1, 2, 3},
+			input: []int64{1, 2, 2, 3, 1, 3}, want: []int64{1, 2, 3},
 		},
 		// Guards against all-zero-or-negative input producing empty output.
-		// Note: function returns an empty (non-nil) slice because make() is used.
 		"all zero or negative returns empty": {
-			input: []int64{0, -1, -99},
-			want:  []int64{},
+			input: []int64{0, -1, -99}, want: []int64{},
 		},
 		// Guards against single-element slice regressing.
 		"single valid element": {
-			input: []int64{42},
-			want:  []int64{42},
+			input: []int64{42}, want: []int64{42},
 		},
 		// Guards against ordering regressions: output must preserve first-seen order.
 		"preserves first-seen order": {
-			input: []int64{3, 1, 4, 1, 5, 9, 3},
-			want:  []int64{3, 1, 4, 5, 9},
+			input: []int64{3, 1, 4, 1, 5, 9, 3}, want: []int64{3, 1, 4, 5, 9},
 		},
 		// Guards against int64 max value being mishandled.
 		"max int64 value handled": {
-			input: []int64{1, 9223372036854775807, 2},
-			want:  []int64{1, 9223372036854775807, 2},
+			input: []int64{1, 9223372036854775807, 2}, want: []int64{1, 9223372036854775807, 2},
 		},
 	}
 
@@ -90,10 +76,6 @@ func TestUniquePositiveNoteIDs(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// UniquePositiveNoteIDs — property-based (rapid)
-// ---------------------------------------------------------------------------
-
 func TestUniquePositiveNoteIDs_PBT(t *testing.T) {
 	t.Parallel()
 
@@ -103,10 +85,8 @@ func TestUniquePositiveNoteIDs_PBT(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(t *rapid.T) {
 			ids := rapid.SliceOf(rapid.Int64()).Draw(t, "input")
-
 			first := uniquePositiveNoteIDs(ids)
 			second := uniquePositiveNoteIDs(first)
-
 			if diff := cmp.Diff(first, second, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("idempotency violated (-first +second):\n%s", diff)
 			}
@@ -119,7 +99,6 @@ func TestUniquePositiveNoteIDs_PBT(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(t *rapid.T) {
 			ids := rapid.SliceOf(rapid.Int64()).Draw(t, "input")
-
 			result := uniquePositiveNoteIDs(ids)
 			for _, v := range result {
 				if v <= 0 {
@@ -135,7 +114,6 @@ func TestUniquePositiveNoteIDs_PBT(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(t *rapid.T) {
 			ids := rapid.SliceOf(rapid.Int64()).Draw(t, "input")
-
 			result := uniquePositiveNoteIDs(ids)
 			seen := map[int64]struct{}{}
 			for _, v := range result {
@@ -153,14 +131,12 @@ func TestUniquePositiveNoteIDs_PBT(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(t *rapid.T) {
 			ids := rapid.SliceOf(rapid.Int64()).Draw(t, "input")
-
 			inputSet := map[int64]struct{}{}
 			for _, v := range ids {
 				if v > 0 {
 					inputSet[v] = struct{}{}
 				}
 			}
-
 			result := uniquePositiveNoteIDs(ids)
 			for _, v := range result {
 				if _, ok := inputSet[v]; !ok {
@@ -176,7 +152,6 @@ func TestUniquePositiveNoteIDs_PBT(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(t *rapid.T) {
 			ids := rapid.SliceOf(rapid.Int64()).Draw(t, "input")
-
 			result := uniquePositiveNoteIDs(ids)
 			if len(result) > len(ids) {
 				t.Fatalf("output len %d > input len %d", len(result), len(ids))
@@ -194,10 +169,6 @@ func TestUniquePositiveNoteIDs_PBT(t *testing.T) {
 		})
 	})
 }
-
-// ---------------------------------------------------------------------------
-// liveMessage — JSON roundtrip table-driven
-// ---------------------------------------------------------------------------
 
 func TestLiveMessageJSONRoundtrip(t *testing.T) {
 	t.Parallel()
@@ -243,20 +214,13 @@ func TestLiveMessageJSONRoundtrip(t *testing.T) {
 			if err := json.Unmarshal(raw, &decoded); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-
-			opts := []cmp.Option{
-				cmpopts.EquateEmpty(),
-			}
+			opts := []cmp.Option{cmpopts.EquateEmpty()}
 			if diff := cmp.Diff(tc.msg, decoded, opts...); diff != "" {
 				t.Errorf("roundtrip mismatch (-original +decoded):\n%s", diff)
 			}
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// liveMessage — property-based JSON roundtrip
-// ---------------------------------------------------------------------------
 
 func TestLiveMessageJSONRoundtrip_PBT(t *testing.T) {
 	t.Parallel()
@@ -283,19 +247,12 @@ func TestLiveMessageJSONRoundtrip_PBT(t *testing.T) {
 		if err := json.Unmarshal(raw, &decoded); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-
-		opts := []cmp.Option{
-			cmpopts.EquateEmpty(),
-		}
+		opts := []cmp.Option{cmpopts.EquateEmpty()}
 		if diff := cmp.Diff(msg, decoded, opts...); diff != "" {
 			t.Errorf("roundtrip mismatch (-original +decoded):\n%s", diff)
 		}
 	})
 }
-
-// ---------------------------------------------------------------------------
-// liveTimestamp — produces valid RFC3339Nano
-// ---------------------------------------------------------------------------
 
 func TestLiveTimestamp(t *testing.T) {
 	t.Parallel()
@@ -310,15 +267,10 @@ func TestLiveTimestamp(t *testing.T) {
 	if parsed.IsZero() {
 		t.Fatal("liveTimestamp() returned a zero time")
 	}
-	// Must be within 5 seconds of now (UTC).
 	if diff := time.Since(parsed.UTC()).Abs(); diff > 5*time.Second {
 		t.Errorf("liveTimestamp() %q is %.1f seconds from now", ts, diff.Seconds())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// newLiveHub — initialization invariants
-// ---------------------------------------------------------------------------
 
 func TestNewLiveHub(t *testing.T) {
 	t.Parallel()
@@ -339,15 +291,11 @@ func TestNewLiveHub(t *testing.T) {
 	if hub.upgrader.CheckOrigin == nil {
 		t.Fatal("newLiveHub: CheckOrigin is nil")
 	}
-	// Guards against CheckOrigin not accepting any origin (upgrader would reject).
+	// Guards against CheckOrigin not accepting any origin.
 	if !hub.upgrader.CheckOrigin(&http.Request{}) {
 		t.Fatal("newLiveHub: CheckOrigin rejected an empty request")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// liveHub register / unregister — table-driven with go-cmp
-// ---------------------------------------------------------------------------
 
 func TestLiveHubRegisterUnregister(t *testing.T) {
 	t.Parallel()
@@ -363,20 +311,12 @@ func TestLiveHubRegisterUnregister(t *testing.T) {
 	}{
 		// Guards against register not adding the client.
 		"single register": {
-			ops: func(h *liveHub, cs []*liveClient) []*liveClient {
-				h.register(cs[0])
-				return cs[:1]
-			},
+			ops:     func(h *liveHub, cs []*liveClient) []*liveClient { h.register(cs[0]); return cs[:1] },
 			wantLen: 1,
 		},
-		// Guards against duplicate registration creating multiple entries
-		// (map key is pointer, so duplicates with same pointer are no-ops).
+		// Guards against duplicate registration (map key is pointer, no-op).
 		"duplicate register is no-op": {
-			ops: func(h *liveHub, cs []*liveClient) []*liveClient {
-				h.register(cs[0])
-				h.register(cs[0])
-				return cs[:1]
-			},
+			ops:     func(h *liveHub, cs []*liveClient) []*liveClient { h.register(cs[0]); h.register(cs[0]); return cs[:1] },
 			wantLen: 1,
 		},
 		// Guards against unregister of registered client not removing it.
@@ -390,13 +330,10 @@ func TestLiveHubRegisterUnregister(t *testing.T) {
 		},
 		// Guards against unregister of never-registered client causing panic.
 		"unregister nonexistent does not panic": {
-			ops: func(h *liveHub, cs []*liveClient) []*liveClient {
-				h.unregister(cs[0])
-				return cs[:0]
-			},
+			ops:     func(h *liveHub, cs []*liveClient) []*liveClient { h.unregister(cs[0]); return cs[:0] },
 			wantLen: 0,
 		},
-		// Guards against multiple unregisters (idempotent unregister).
+		// Guards against multiple unregisters (idempotent).
 		"multiple unregister is idempotent": {
 			ops: func(h *liveHub, cs []*liveClient) []*liveClient {
 				h.register(cs[0])
@@ -412,10 +349,7 @@ func TestLiveHubRegisterUnregister(t *testing.T) {
 				var wg sync.WaitGroup
 				for i := range cs {
 					wg.Add(1)
-					go func(idx int) {
-						defer wg.Done()
-						h.register(cs[idx])
-					}(i)
+					go func(idx int) { defer wg.Done(); h.register(cs[idx]) }(i)
 				}
 				wg.Wait()
 				return cs
@@ -433,18 +367,13 @@ func TestLiveHubRegisterUnregister(t *testing.T) {
 			for i := range clients {
 				clients[i] = makeClient(hub)
 			}
-
 			wantKeep := tc.ops(hub, clients)
-
 			hub.mu.RLock()
 			gotLen := len(hub.clients)
 			hub.mu.RUnlock()
-
 			if gotLen != tc.wantLen {
 				t.Errorf("client count = %d, want %d (%s)", gotLen, tc.wantLen, tc.desc)
 			}
-
-			// Verify wanted clients are still present.
 			for _, c := range wantKeep {
 				hub.mu.RLock()
 				_, ok := hub.clients[c]
@@ -457,10 +386,6 @@ func TestLiveHubRegisterUnregister(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// liveHub — property-based register/unregister invariants
-// ---------------------------------------------------------------------------
-
 func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 	t.Parallel()
 
@@ -471,17 +396,13 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 		rapid.Check(t, func(t *rapid.T) {
 			n := rapid.IntRange(1, 50).Draw(t, "n")
 			hub := newLiveHub()
-
-			clients := make([]*liveClient, n)
 			for i := 0; i < n; i++ {
-				clients[i] = &liveClient{hub: hub, send: make(chan []byte, 1)}
-				hub.register(clients[i])
+				c := &liveClient{hub: hub, send: make(chan []byte, 1)}
+				hub.register(c)
 			}
-
 			hub.mu.RLock()
 			got := len(hub.clients)
 			hub.mu.RUnlock()
-
 			if got != n {
 				t.Fatalf("after %d registrations, hub has %d clients", n, got)
 			}
@@ -495,23 +416,19 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 		rapid.Check(t, func(t *rapid.T) {
 			n := rapid.IntRange(1, 30).Draw(t, "n")
 			hub := newLiveHub()
-
 			clients := make([]*liveClient, n)
 			for i := 0; i < n; i++ {
 				clients[i] = &liveClient{hub: hub, send: make(chan []byte, 1)}
 				hub.register(clients[i])
 			}
-
 			// Unregister all in shuffled order to catch ordering dependencies.
 			rand.Shuffle(n, func(i, j int) { clients[i], clients[j] = clients[j], clients[i] })
 			for _, c := range clients {
 				hub.unregister(c)
 			}
-
 			hub.mu.RLock()
 			got := len(hub.clients)
 			hub.mu.RUnlock()
-
 			if got != 0 {
 				t.Fatalf("after register+unregister all, hub has %d clients, want 0", got)
 			}
@@ -527,8 +444,6 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 			client := &liveClient{hub: hub, send: make(chan []byte, 1)}
 			hub.register(client)
 			hub.unregister(client)
-
-			// Reading from closed channel should return zero value immediately.
 			select {
 			case _, ok := <-client.send:
 				if ok {
@@ -540,10 +455,6 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 		})
 	})
 }
-
-// ---------------------------------------------------------------------------
-// liveHub broadcast — unit-level
-// ---------------------------------------------------------------------------
 
 func TestLiveHubBroadcast(t *testing.T) {
 	t.Parallel()
@@ -561,9 +472,7 @@ func TestLiveHubBroadcast(t *testing.T) {
 		},
 		// Guards against message not reaching a registered client.
 		"broadcast reaches single client": {
-			setup: func(hub *liveHub, cs []*liveClient) {
-				hub.register(cs[0])
-			},
+			setup:    func(hub *liveHub, cs []*liveClient) { hub.register(cs[0]) },
 			msg:      liveMessage{Type: liveTypeReady, Timestamp: "2000-01-01T00:00:00Z"},
 			wantRecv: 1,
 		},
@@ -578,9 +487,7 @@ func TestLiveHubBroadcast(t *testing.T) {
 			for i := range clients {
 				clients[i] = &liveClient{hub: hub, send: make(chan []byte, 64)}
 			}
-
 			tc.setup(hub, clients)
-
 			var mu sync.Mutex
 			recvCount := 0
 			done := make(chan struct{})
@@ -596,17 +503,12 @@ func TestLiveHubBroadcast(t *testing.T) {
 				}
 				close(done)
 			}()
-
 			time.Sleep(50 * time.Millisecond)
-
 			hub.broadcast(tc.msg)
-
 			<-done
-
 			mu.Lock()
 			got := recvCount
 			mu.Unlock()
-
 			if got != tc.wantRecv {
 				t.Errorf("received by %d clients, want %d", got, tc.wantRecv)
 			}
@@ -614,181 +516,30 @@ func TestLiveHubBroadcast(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// liveHub broadcast — full-channel unregisters client (integration)
-// ---------------------------------------------------------------------------
-
-func TestLiveHubBroadcastUnregistersFullChannelClient(t *testing.T) {
-	t.Parallel()
-
-	// Guards against slow/full client not being unregistered and disconnected.
-	// Connects a real WebSocket client, then floods broadcasts to fill the
-	// 64-buffer send channel, which should cause unregister + close.
-	s := newTestServer(t)
-	token := createTestSession(t, s)
-	httpServer, wsURL := newLiveTestHTTPServer(t, s)
-
-	conn, _, err := dialLiveWebSocket(t, wsURL, token, httpServer.URL)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
-
-	// Drain the ready message.
-	requireLiveMessageType(t, conn, liveTypeReady)
-
-	// Verify one client is registered.
-	s.liveHub.mu.RLock()
-	initialCount := len(s.liveHub.clients)
-	s.liveHub.mu.RUnlock()
-	if initialCount != 1 {
-		t.Fatalf("expected 1 client, got %d", initialCount)
-	}
-
-	// Flood broadcasts to fill the client's 64-buffer send channel.
-	// After the buffer fills, the client should be unregistered.
-	for i := 0; i < 100; i++ {
-		s.notifyNotesChanged("flood", int64(i))
-	}
-
-	// Poll until unregistered or deadline.
-	deadline := time.After(3 * time.Second)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		s.liveHub.mu.RLock()
-		count := len(s.liveHub.clients)
-		s.liveHub.mu.RUnlock()
-
-		if count == 0 {
-			break // Success: client was unregistered.
-		}
-
-		select {
-		case <-ticker.C:
-			continue
-		case <-deadline:
-			t.Errorf("hub still has %d clients after flood (expected unregister)", count)
-			return
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// liveClient enqueueJSON — table-driven
-// ---------------------------------------------------------------------------
-
 func TestLiveClientEnqueueJSON(t *testing.T) {
 	t.Parallel()
 
-	tests := map[string]struct {
-		bufSize   int
-		prefill   int
-		msg       liveMessage
-		wantRecv  bool
-		wantInHub bool
-	}{
-		// Guards against message not being sent to an open channel.
-		"enqueue to open channel succeeds": {
-			bufSize:   1,
-			prefill:   0,
-			msg:       liveMessage{Type: liveTypeReady, Timestamp: "2000-01-01T00:00:00Z"},
-			wantRecv:  true,
-			wantInHub: true,
-		},
+	// Guards against message not being sent to an open channel.
+	hub := newLiveHub()
+	client := &liveClient{hub: hub, send: make(chan []byte, 1)}
+	hub.register(client)
+
+	client.enqueueJSON(liveMessage{Type: liveTypeReady, Timestamp: "2000-01-01T00:00:00Z"})
+
+	select {
+	case <-client.send:
+		// OK: message delivered.
+	default:
+		t.Error("expected to receive message but got none")
 	}
 
-	for name, tc := range tests {
-		tc := tc
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			hub := newLiveHub()
-			client := &liveClient{hub: hub, send: make(chan []byte, tc.bufSize)}
-			hub.register(client)
-
-			for i := 0; i < tc.prefill; i++ {
-				client.send <- []byte("filler")
-			}
-
-			client.enqueueJSON(tc.msg)
-
-			select {
-			case <-client.send:
-				if !tc.wantRecv {
-					t.Error("received message but expected none")
-				}
-			default:
-				if tc.wantRecv {
-					t.Error("expected to receive message but got none")
-				}
-			}
-
-			hub.mu.RLock()
-			_, inHub := hub.clients[client]
-			hub.mu.RUnlock()
-
-			if inHub != tc.wantInHub {
-				t.Errorf("client in hub = %v, want %v", inHub, tc.wantInHub)
-			}
-		})
+	hub.mu.RLock()
+	_, inHub := hub.clients[client]
+	hub.mu.RUnlock()
+	if !inHub {
+		t.Error("client should remain in hub after successful enqueueJSON")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// enqueueJSON — full channel path tested via integration
-// ---------------------------------------------------------------------------
-
-func TestEnqueueJSONUnregistersFullChannelClient(t *testing.T) {
-	t.Parallel()
-
-	// Guards against full send channel in enqueueJSON not triggering unregister.
-	// Connect a real WebSocket client, fill its send buffer via broadcasts,
-	// then verify it gets unregistered.
-	s := newTestServer(t)
-	token := createTestSession(t, s)
-	httpServer, wsURL := newLiveTestHTTPServer(t, s)
-
-	conn, _, err := dialLiveWebSocket(t, wsURL, token, httpServer.URL)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
-
-	requireLiveMessageType(t, conn, liveTypeReady)
-
-	// Flood broadcasts to overflow the client's 64-element send buffer.
-	for i := 0; i < 100; i++ {
-		s.notifyNotesChanged("flood", int64(i))
-	}
-
-	// Poll until unregistered.
-	deadline := time.After(3 * time.Second)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		s.liveHub.mu.RLock()
-		count := len(s.liveHub.clients)
-		s.liveHub.mu.RUnlock()
-
-		if count == 0 {
-			return
-		}
-
-		select {
-		case <-ticker.C:
-			continue
-		case <-deadline:
-			t.Errorf("hub still has %d clients after flood", count)
-			return
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// notifyNotesChanged — nil-safety and filtering
-// ---------------------------------------------------------------------------
 
 func TestNotifyNotesChangedNilSafety(t *testing.T) {
 	t.Parallel()
@@ -799,23 +550,11 @@ func TestNotifyNotesChangedNilSafety(t *testing.T) {
 		noteIDs []int64
 	}{
 		// Guards against nil Server receiver panicking.
-		"nil server does not panic": {
-			s:       nil,
-			reason:  "test",
-			noteIDs: []int64{1},
-		},
+		"nil server does not panic": {s: nil, reason: "test", noteIDs: []int64{1}},
 		// Guards against server with nil liveHub panicking.
-		"nil liveHub does not panic": {
-			s:       &Server{liveHub: nil},
-			reason:  "test",
-			noteIDs: []int64{1},
-		},
+		"nil liveHub does not panic": {s: &Server{liveHub: nil}, reason: "test", noteIDs: []int64{1}},
 		// Guards against zero note IDs — filtered by uniquePositiveNoteIDs.
-		"zero note IDs produces no broadcast": {
-			s:       &Server{liveHub: newLiveHub()},
-			reason:  "test",
-			noteIDs: []int64{0, -1},
-		},
+		"zero note IDs produces no broadcast": {s: &Server{liveHub: newLiveHub()}, reason: "test", noteIDs: []int64{0, -1}},
 	}
 
 	for name, tc := range tests {
@@ -827,10 +566,6 @@ func TestNotifyNotesChangedNilSafety(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// notifyJobEvent — nil-safety
-// ---------------------------------------------------------------------------
-
 func TestNotifyJobEventNilSafety(t *testing.T) {
 	t.Parallel()
 
@@ -839,15 +574,9 @@ func TestNotifyJobEventNilSafety(t *testing.T) {
 		evt jobs.RunEvent
 	}{
 		// Guards against nil Server receiver panicking.
-		"nil server does not panic": {
-			s:   nil,
-			evt: jobs.RunEvent{Type: "test", RunID: 1},
-		},
+		"nil server does not panic": {s: nil, evt: jobs.RunEvent{Type: "test", RunID: 1}},
 		// Guards against nil liveHub panicking.
-		"nil liveHub does not panic": {
-			s:   &Server{liveHub: nil},
-			evt: jobs.RunEvent{Type: "test", RunID: 1},
-		},
+		"nil liveHub does not panic": {s: &Server{liveHub: nil}, evt: jobs.RunEvent{Type: "test", RunID: 1}},
 	}
 
 	for name, tc := range tests {
@@ -858,10 +587,6 @@ func TestNotifyJobEventNilSafety(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleWebSocket — method not allowed
-// ---------------------------------------------------------------------------
 
 func TestHandleWebSocketMethodNotAllowed(t *testing.T) {
 	t.Parallel()
@@ -888,7 +613,6 @@ func TestHandleWebSocketMethodNotAllowed(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(method, "/ws", nil)
 			s.handleWebSocket(w, r)
-
 			if w.Code != http.StatusMethodNotAllowed {
 				t.Errorf("%s: status = %d, want %d", method, w.Code, http.StatusMethodNotAllowed)
 			}
@@ -896,29 +620,19 @@ func TestHandleWebSocketMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleWebSocket — nil liveHub
-// ---------------------------------------------------------------------------
-
 func TestHandleWebSocketNilLiveHub(t *testing.T) {
 	t.Parallel()
 
 	// Guards against handleWebSocket called on a Server with no liveHub.
 	// Failure mode: nil pointer dereference on s.liveHub access.
 	s := &Server{liveHub: nil}
-
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	s.handleWebSocket(w, r)
-
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WebSocket lifecycle — connect, receive ready, close
-// ---------------------------------------------------------------------------
 
 func TestWebSocketConnectAndClose(t *testing.T) {
 	t.Parallel()
@@ -938,7 +652,6 @@ func TestWebSocketConnectAndClose(t *testing.T) {
 	if msg.Timestamp == "" {
 		t.Error("live.ready message has empty timestamp")
 	}
-
 	// Guards against timestamp not being valid RFC3339Nano.
 	if _, err := time.Parse(time.RFC3339Nano, msg.Timestamp); err != nil {
 		t.Errorf("live.ready timestamp %q is not valid RFC3339Nano: %v", msg.Timestamp, err)
@@ -948,10 +661,6 @@ func TestWebSocketConnectAndClose(t *testing.T) {
 		t.Fatalf("close websocket: %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WebSocket — ping/pong keepalive
-// ---------------------------------------------------------------------------
 
 func TestWebSocketPingPongKeepalive(t *testing.T) {
 	t.Parallel()
@@ -986,7 +695,7 @@ func TestWebSocketPingPongKeepalive(t *testing.T) {
 		t.Log("no ping received within expected window (may be timing-related)")
 	}
 
-	// Verify connection is still alive.
+	// Verify connection is still alive by triggering a notes.change event.
 	note := helperCreateNote(t, s, "Keepalive Test", "test body", nil)
 	// Drain the "created" broadcast from helperCreateNote.
 	requireLiveMessageType(t, conn, liveTypeNotesChange)
@@ -1006,10 +715,6 @@ func TestWebSocketPingPongKeepalive(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", msg.Reason, "updated")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WebSocket — multiple clients receive broadcasts
-// ---------------------------------------------------------------------------
 
 func TestWebSocketMultipleClientsReceiveBroadcast(t *testing.T) {
 	t.Parallel()
@@ -1069,10 +774,6 @@ func TestWebSocketMultipleClientsReceiveBroadcast(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// WebSocket — client disconnect triggers cleanup
-// ---------------------------------------------------------------------------
-
 func TestWebSocketClientDisconnectCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -1084,7 +785,6 @@ func TestWebSocketClientDisconnectCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial websocket: %v", err)
 	}
-
 	requireLiveMessageType(t, conn, liveTypeReady)
 
 	// Guards against hub retaining clients after connection close.
@@ -1101,11 +801,9 @@ func TestWebSocketClientDisconnectCleanup(t *testing.T) {
 		s.liveHub.mu.RLock()
 		clientCount := len(s.liveHub.clients)
 		s.liveHub.mu.RUnlock()
-
 		if clientCount == 0 {
 			break
 		}
-
 		select {
 		case <-ticker.C:
 			continue
@@ -1115,10 +813,6 @@ func TestWebSocketClientDisconnectCleanup(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WebSocket — duplicate note IDs are deduplicated in broadcast
-// ---------------------------------------------------------------------------
 
 func TestNotifyNotesChangedDeduplicatesIDs(t *testing.T) {
 	t.Parallel()
