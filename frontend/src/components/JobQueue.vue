@@ -79,7 +79,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { fetchJobs, retryJob } from "../api.js";
 
 const props = defineProps({ token: String, inline: Boolean });
@@ -91,7 +91,7 @@ const runs = ref([]);
 const pendingCount = ref(0);
 const seenDone = ref(new Set());
 
-let pollTimer = null;
+let loadTimer = null;
 
 function statusIcon(status) {
     switch (status) {
@@ -154,44 +154,32 @@ async function doRetry(runId) {
     }
 }
 
-function startPolling() {
-    if (pollTimer) return;
-    load();
-    pollTimer = setInterval(() => {
-        if (props.inline || expanded.value) {
-            load();
-        }
-    }, 10000);
-}
-
-function stopPolling() {
-    if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-    }
-}
-
-watch(expanded, (val) => {
-    if (val) {
+function scheduleLoad() {
+    if (loadTimer) return;
+    loadTimer = window.setTimeout(() => {
+        loadTimer = null;
         load();
-        startPolling();
-    }
-});
+    }, 100);
+}
+
+function onLiveMessage(event) {
+    const type = event?.detail?.type;
+    if (type !== "jobs.changed" && type !== "live.ready") return;
+    scheduleLoad();
+}
 
 onMounted(() => {
-    // Load initial count even when collapsed (for badge).
     load();
-    startPolling();
+    window.addEventListener("live:message", onLiveMessage);
 });
 
 onUnmounted(() => {
-    stopPolling();
+    window.removeEventListener("live:message", onLiveMessage);
+    if (loadTimer) {
+        window.clearTimeout(loadTimer);
+        loadTimer = null;
+    }
 });
-
-// In inline mode, start polling immediately.
-if (props.inline) {
-    startPolling();
-}
 </script>
 
 <style scoped>

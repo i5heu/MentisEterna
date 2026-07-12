@@ -462,6 +462,10 @@
                     </div>
                 </div>
                 <p v-if="saveError" class="save-error">{{ saveError }}</p>
+                <p v-else-if="liveRefreshPending" class="save-info">
+                    A newer version of this note is available. Save or leave
+                    this note to refresh it.
+                </p>
 
                 <!-- Chat Feed -->
                 <div class="chat-feed">
@@ -595,6 +599,7 @@
                         </div>
                         <NoteTypeRenderer
                             v-if="selected"
+                            :key="selectedRendererKey"
                             :note="selected"
                             :token="token"
                             :editing="isEditing"
@@ -928,6 +933,7 @@
                         v-html="renderMarkdown(threadNote.body)"
                     />
                     <NoteTypeRenderer
+                        :key="threadRendererKey"
                         :note="threadNote"
                         :token="token"
                         :editing="false"
@@ -1240,6 +1246,9 @@ const noteType = ref("standard");
 const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
+const liveRefreshPending = ref(false);
+const selectedRendererKey = ref(0);
+const threadRendererKey = ref(0);
 const editTitleInput = ref(null);
 const UNSAVED_NOTE_WARNING =
     "You have unsaved changes in this note. Leave without saving?";
@@ -1337,6 +1346,12 @@ const threadReplyTitle = ref("");
 const threadReplyBody = ref("");
 const threadSendingReply = ref(false);
 const DOUBLE_CONTROL_OPEN_MS = 350;
+let liveRefreshTimer = null;
+let liveRefreshRunning = false;
+let liveRefreshQueued = false;
+let liveRefreshFullRequested = false;
+let liveRefreshSelectedRequested = false;
+let liveRefreshThreadRequested = false;
 let threadSidebarCtrlTapArmed = false;
 let lastThreadSidebarCtrlTapAt = 0;
 let threadSidebarCtrlChordUsed = false;
@@ -1348,6 +1363,28 @@ const sendingReply = ref(false);
 
 function hasReplyDraft(title, body) {
     return Boolean(String(title || "").trim() || String(body || "").trim());
+}
+
+function applySelectedDetail(detail, { remount = true } = {}) {
+    if (!detail) return;
+    selected.value = detail;
+    editTitle.value = detail.title || "";
+    editBody.value = detail.body || "";
+    noteType.value = detail.type || "standard";
+    customData.value = detail.plugin?.config || detail.custom_data || null;
+    editTags.value = Array.isArray(detail.tags) ? [...detail.tags] : [];
+    liveRefreshPending.value = false;
+    if (remount) {
+        selectedRendererKey.value += 1;
+    }
+}
+
+function applyThreadDetail(detail, { remount = true } = {}) {
+    if (!detail) return;
+    threadNote.value = detail;
+    if (remount) {
+        threadRendererKey.value += 1;
+    }
 }
 
 const canSendReply = computed(
@@ -1836,8 +1873,180 @@ async function togglePin(note) {
     }
 }
 
-onMounted(loadNotes);
-onMounted(() => fetchAndMergeManifests(props.token));
+async function refreshSelectedCollections(noteId, typeValue = null) {
+    if (!noteId) return;
+    populateParentSearch(selected.value);
+    await loadAncestors(noteId);
+    if (showHistory.value) {
+        historyLoading.value = true;
+        try {
+            history.value = await fetchNoteHistory(props.token, noteId);
+        } finally {
+            historyLoading.value = false;
+        }
+    }
+    const effectiveType = typeValue || selected.value?.type || noteType.value;
+    if (childrenLoaded.value || !isLazyChildren(effectiveType || "standard")) {
+        await loadChildren(noteId);
+    }
+}
+
+async function refreshSelectedInPlace(noteId = selected.value?.id) {
+    if (!noteId) return;
+    try {
+        const full = await fetchNote(props.token, noteId);
+        if (selected.value?.id !== noteId) return;
+        applySelectedDetail(full);
+        await refreshSelectedCollections(noteId, full.type);
+    } catch (e) {
+        if (selected.value?.id !== noteId) return;
+        if ((e?.message || "").includes("not found")) {
+            selected.value = null;
+            children.value = [];
+            ancestors.value = [];
+            history.value = [];
+            showHistory.value = false;
+            pushURL();
+        }
+    }
+}
+
+async function refreshThreadNoteInPlace(noteId = threadNote.value?.id) {
+    if (!noteId) return;
+    try {
+        const full = await fetchNote(props.token, noteId);
+        if (threadNote.value?.id !== noteId) return;
+        applyThreadDetail(full);
+        if (
+            threadChildrenLoaded.value ||
+            !isLazyChildren((full.type || "standard") ?? "standard")
+        ) {
+            await loadThreadChildren();
+        }
+        try {
+            threadAncestors.value = await fetchAncestors(props.token, noteId);
+        } catch {
+            threadAncestors.value = [];
+        }
+    } catch (e) {
+        if (threadNote.value?.id !== noteId) return;
+        if ((e?.message || "").includes("not found")) {
+            closeThreadSidebar({ updateURL: false });
+        }
+    }
+}
+
+async function runLiveRefresh() {
+    if (liveRefreshRunning) {
+        liveRefreshQueued = true;
+        return;
+    }
+    liveRefreshRunning = true;
+    const refreshFull = liveRefreshFullRequested;
+    const refreshSelected = refreshFull || liveRefreshSelectedRequested;
+    const refreshThread = refreshFull || liveRefreshThreadRequested;
+    liveRefreshFullRequested = false;
+    liveRefreshSelectedRequested = false;
+    liveRefreshThreadRequested = false;
+    try {
+        if (refreshFull) {
+            await loadNotes();
+            if (searchQuery.value.trim()) {
+                await doSearch();
+            }
+        }
+        const selectedNoteID = selected.value?.id;
+        if (refreshSelected && selectedNoteID) {
+            if (dirty.value || saving.value) {
+                liveRefreshPending.value = true;
+                await refreshSelectedCollections(selectedNoteID);
+            } else {
+                await refreshSelectedInPlace(selectedNoteID);
+            }
+        }
+        if (refreshThread && threadNote.value?.id) {
+            await refreshThreadNoteInPlace(threadNote.value.id);
+        }
+    } finally {
+        liveRefreshRunning = false;
+        if (
+            liveRefreshQueued ||
+            liveRefreshFullRequested ||
+            liveRefreshSelectedRequested ||
+            liveRefreshThreadRequested
+        ) {
+            liveRefreshQueued = false;
+            scheduleLiveRefresh();
+        }
+    }
+}
+
+function scheduleLiveRefresh({ full = false, selected: refreshSelected = false, thread: refreshThread = false } = {}) {
+    liveRefreshFullRequested = liveRefreshFullRequested || full;
+    liveRefreshSelectedRequested = liveRefreshSelectedRequested || refreshSelected;
+    liveRefreshThreadRequested = liveRefreshThreadRequested || refreshThread;
+    if (liveRefreshTimer) return;
+    liveRefreshTimer = window.setTimeout(() => {
+        liveRefreshTimer = null;
+        runLiveRefresh();
+    }, 100);
+}
+
+function onLiveMessage(event) {
+    const detail = event?.detail;
+    if (!detail?.type) return;
+
+    if (detail.type === "live.ready") {
+        scheduleLiveRefresh({
+            full: true,
+            selected: Boolean(selected.value?.id),
+            thread: Boolean(threadNote.value?.id),
+        });
+        return;
+    }
+
+    if (detail.type !== "notes.changed") return;
+
+    const changedIDs = new Set(
+        Array.isArray(detail.note_ids)
+            ? detail.note_ids
+                  .map((id) => Number(id))
+                  .filter((id) => Number.isInteger(id) && id > 0)
+            : [],
+    );
+    const selectedNoteID = selected.value?.id;
+    const threadNoteID = threadNote.value?.id;
+    scheduleLiveRefresh({
+        full: true,
+        selected:
+            Boolean(selectedNoteID) &&
+            (changedIDs.size === 0 || changedIDs.has(selectedNoteID)),
+        thread:
+            Boolean(threadNoteID) &&
+            (changedIDs.size === 0 || changedIDs.has(threadNoteID)),
+    });
+}
+
+watch([dirty, saving], ([isDirty, isSaving]) => {
+    if (!liveRefreshPending.value || isDirty || isSaving) {
+        return;
+    }
+    scheduleLiveRefresh({ selected: true });
+});
+
+onMounted(() => {
+    loadNotes();
+    fetchAndMergeManifests(props.token);
+    window.addEventListener("live:message", onLiveMessage);
+});
+
+onUnmounted(() => {
+    window.removeEventListener("live:message", onLiveMessage);
+    if (liveRefreshTimer) {
+        window.clearTimeout(liveRefreshTimer);
+        liveRefreshTimer = null;
+    }
+});
 
 async function loadNotes() {
     loading.value = true;
@@ -1860,20 +2069,10 @@ async function selectNote(
     // Re-fetch from server to get full enriched data (plugin.config, plugin.view, etc.)
     try {
         const full = await fetchNote(props.token, note.id);
-        selected.value = full;
-        editTitle.value = full.title;
-        editBody.value = full.body;
-        noteType.value = full.type || "standard";
-        customData.value = full.plugin?.config || full.custom_data || null;
-        editTags.value = full.tags || [];
+        applySelectedDetail(full);
     } catch {
         // Fallback to the sidebar data if fetch fails.
-        selected.value = note;
-        editTitle.value = note.title;
-        editBody.value = note.body;
-        noteType.value = note.type || "standard";
-        customData.value = note.plugin?.config || note.custom_data || null;
-        editTags.value = note.tags || [];
+        applySelectedDetail(note);
     }
     dirty.value = false;
     saveError.value = "";
@@ -1908,14 +2107,9 @@ async function selectSearchResult(
     // Re-fetch full note for proper hydration.
     try {
         const full = await fetchNote(props.token, sr.id);
-        selected.value = full;
-        editTitle.value = full.title;
-        editBody.value = full.body;
-        noteType.value = full.type || "standard";
-        customData.value = full.plugin?.config || full.custom_data || null;
-        editTags.value = full.tags || [];
+        applySelectedDetail(full);
     } catch {
-        selected.value = {
+        applySelectedDetail({
             id: sr.id,
             title: sr.title,
             parent_id: sr.parent_id,
@@ -1924,12 +2118,8 @@ async function selectSearchResult(
             body: sr.body,
             created_at: sr.created_at,
             updated_at: sr.updated_at,
-        };
-        editTitle.value = sr.title;
-        editBody.value = sr.body;
-        noteType.value = sr.type || "standard";
-        customData.value = null;
-        editTags.value = sr.tags || [];
+            tags: sr.tags || [],
+        });
     }
     dirty.value = false;
     saveError.value = "";
@@ -1981,6 +2171,8 @@ function newNote(
         type: defaultType,
         parent_id: parentNote ? parentNote.id : null,
     };
+    liveRefreshPending.value = false;
+    selectedRendererKey.value += 1;
     editTitle.value = "";
     editBody.value = "";
     noteType.value = defaultType;
@@ -2029,6 +2221,7 @@ async function doDelete() {
         await deleteNote(props.token, selected.value.id);
         notes.value = notes.value.filter((n) => n.id !== selected.value.id);
         selected.value = null;
+        liveRefreshPending.value = false;
         threadNote.value = null;
         showDeleteModal.value = false;
         pushURL();
@@ -2182,9 +2375,9 @@ async function selectNoteById(id) {
 async function openThreadSidebar(note, { updateURL = true } = {}) {
     // Fetch the full enriched note so plugin data is available for rendering.
     try {
-        threadNote.value = await fetchNote(props.token, note.id);
+        applyThreadDetail(await fetchNote(props.token, note.id));
     } catch {
-        threadNote.value = note;
+        applyThreadDetail(note);
     }
     threadReplyTitle.value = "";
     threadReplyBody.value = "";
@@ -2391,10 +2584,7 @@ async function save() {
         }
         // Reload the full note list so sort order is correct.
         await loadNotes();
-        selected.value = updated;
-        editTitle.value = updated.title;
-        customData.value =
-            updated.plugin?.config || updated.custom_data || null;
+        applySelectedDetail(updated);
         dirty.value = false;
         isEditing.value = false;
         populateParentSearch(updated);
@@ -2428,13 +2618,7 @@ async function importRecipes(importJSON) {
             props.token,
             result?.primary_note_id || selected.value.id,
         );
-        selected.value = refreshed;
-        editTitle.value = refreshed.title;
-        editBody.value = refreshed.body;
-        noteType.value = refreshed.type || "recipe";
-        customData.value =
-            refreshed.plugin?.config || refreshed.custom_data || null;
-        editTags.value = refreshed.tags || [];
+        applySelectedDetail(refreshed);
         dirty.value = false;
         isEditing.value = false;
         populateParentSearch(refreshed);
@@ -3428,6 +3612,13 @@ function onPopstate() {
     padding: 0.4rem 1.25rem;
     font-size: 0.85rem;
     color: var(--heading-color);
+    background: var(--panel-bg);
+}
+
+.save-info {
+    padding: 0.4rem 1.25rem;
+    font-size: 0.85rem;
+    color: var(--tag-bg-color);
     background: var(--panel-bg);
 }
 

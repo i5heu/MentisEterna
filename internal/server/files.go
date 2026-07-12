@@ -84,6 +84,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		"file":    nf,
 		"results": results,
 	})
+	s.notifyNotesChanged("attachment_uploaded", noteID)
 }
 
 // --- Upload Inline File ---
@@ -167,6 +168,7 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 		"markdown": markdown,
 		"results":  results,
 	})
+	s.notifyNotesChanged("inline_attachment_uploaded", noteID)
 }
 
 // --- Delete Attachment ---
@@ -193,6 +195,7 @@ func (s *Server) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.notifyNotesChanged("attachment_deleted", noteID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

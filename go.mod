@@ -3,6 +3,7 @@ module github.com/i5heu/MentisEterna
 go 1.26.2
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sqlite3 v1.14.44
 	golang.org/x/image v0.41.0
 	pgregory.net/rapid v1.3.0

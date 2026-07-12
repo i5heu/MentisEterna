@@ -356,6 +356,11 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	if !userProvidedTitle {
 		s.enqueueTitleGeneration(id, in.Body)
 	}
+	notifyIDs := []int64{id}
+	if in.ParentID != nil && *in.ParentID > 0 {
+		notifyIDs = append(notifyIDs, *in.ParentID)
+	}
+	s.notifyNotesChanged("created", notifyIDs...)
 	writeJSON(w, http.StatusCreated, n)
 }
 
@@ -405,6 +410,15 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Type == "" {
 		in.Type = "standard"
+	}
+
+	var previousParentID sql.NullInt64
+	if err := s.db.QueryRow(`SELECT parent_id FROM notes WHERE id = ?`, id).Scan(&previousParentID); errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		writeErr(w, err)
+		return
 	}
 
 	// Validate custom data against the plugin.
@@ -492,6 +506,14 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	if !userProvidedTitle {
 		s.enqueueTitleGeneration(id, in.Body)
 	}
+	notifyIDs := []int64{id}
+	if previousParentID.Valid && previousParentID.Int64 > 0 {
+		notifyIDs = append(notifyIDs, previousParentID.Int64)
+	}
+	if in.ParentID != nil && *in.ParentID > 0 {
+		notifyIDs = append(notifyIDs, *in.ParentID)
+	}
+	s.notifyNotesChanged("updated", notifyIDs...)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -499,6 +521,28 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 	id, ok := noteID(w, r)
 	if !ok {
 		return
+	}
+
+	var parentRef sql.NullInt64
+	_ = s.db.QueryRow(`SELECT parent_id FROM notes WHERE id = ?`, id).Scan(&parentRef)
+
+	detachedChildIDs := make([]int64, 0)
+	rows, err := s.db.Query(`SELECT id FROM notes WHERE parent_id = ? ORDER BY id ASC`, id)
+	if err == nil {
+		for rows.Next() {
+			var childID int64
+			if scanErr := rows.Scan(&childID); scanErr != nil {
+				log.Printf("live: scan child id for note %d delete: %v", id, scanErr)
+				continue
+			}
+			detachedChildIDs = append(detachedChildIDs, childID)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			log.Printf("live: list child ids for note %d delete: %v", id, rowsErr)
+		}
+		rows.Close()
+	} else {
+		log.Printf("live: query child ids for note %d delete: %v", id, err)
 	}
 
 	// Collect deletable file IDs BEFORE deleting the note (refs still exist).
@@ -539,6 +583,12 @@ func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	notifyIDs := []int64{id}
+	if parentRef.Valid && parentRef.Int64 > 0 {
+		notifyIDs = append(notifyIDs, parentRef.Int64)
+	}
+	notifyIDs = append(notifyIDs, detachedChildIDs...)
+	s.notifyNotesChanged("deleted", notifyIDs...)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -582,6 +632,7 @@ func (s *Server) setNotePin(w http.ResponseWriter, r *http.Request) {
 		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
 	s.enrichDetail(&n)
+	s.notifyNotesChanged("pin_changed", id)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -815,7 +866,63 @@ func (s *Server) dispatchAction(w http.ResponseWriter, r *http.Request, noteID i
 		return
 	}
 	s.maybePostProcessRecipeAction(noteType, actionID, noteID, result)
+	if shouldNotifyForAction(plugin, actionID) {
+		s.notifyNotesChanged("plugin_action", actionRelatedNoteIDs(noteID, result)...)
+	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func actionRelatedNoteIDs(sourceNoteID int64, result any) []int64 {
+	noteIDs := []int64{sourceNoteID}
+	if result == nil {
+		return uniquePositiveNoteIDs(noteIDs)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return uniquePositiveNoteIDs(noteIDs)
+	}
+
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return uniquePositiveNoteIDs(noteIDs)
+	}
+	collectActionResultNoteIDs(decoded, &noteIDs)
+	return uniquePositiveNoteIDs(noteIDs)
+}
+
+func collectActionResultNoteIDs(value any, noteIDs *[]int64) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if isActionNoteIDKey(key) {
+				appendActionResultNoteIDValues(child, noteIDs)
+			}
+			collectActionResultNoteIDs(child, noteIDs)
+		}
+	case []any:
+		for _, child := range v {
+			collectActionResultNoteIDs(child, noteIDs)
+		}
+	}
+}
+
+func appendActionResultNoteIDValues(value any, noteIDs *[]int64) {
+	switch v := value.(type) {
+	case float64:
+		if id := int64(v); float64(id) == v && id > 0 {
+			*noteIDs = append(*noteIDs, id)
+		}
+	case []any:
+		for _, child := range v {
+			appendActionResultNoteIDValues(child, noteIDs)
+		}
+	}
+}
+
+func isActionNoteIDKey(key string) bool {
+	key = strings.TrimSpace(strings.ToLower(key))
+	return key == "note_id" || strings.HasSuffix(key, "_note_id") || key == "note_ids" || strings.HasSuffix(key, "_note_ids")
 }
 
 func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -834,6 +941,17 @@ func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func shouldNotifyForAction(plugin notetype.Plugin, actionID string) bool {
+	manifest := plugin.Manifest()
+	for _, action := range manifest.Actions {
+		if action.ID != actionID {
+			continue
+		}
+		return action.RefreshStrategy != "none"
+	}
+	return true
 }
 
 // noteIDAndAction extracts a note ID and action ID from a path like "/notes/123/actions/generate".
@@ -930,6 +1048,7 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 		return "", fmt.Errorf("update title: %w", err)
 	}
 	s.enqueueVSSIndex(p.NoteID)
+	s.notifyNotesChanged("title_generated", p.NoteID)
 	return fmt.Sprintf("Generated title for note %d: %q", p.NoteID, title), nil
 }
 

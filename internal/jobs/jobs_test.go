@@ -600,6 +600,97 @@ func TestMediaJobsRegistration(t *testing.T) {
 	t.Logf("media jobs: upload=%d delete=%d both completed", runID, runID2)
 }
 
+func TestObserverReceivesEnqueueCancelAndRetryEvents(t *testing.T) {
+	d := openTestDB(t)
+	m := NewManager(d, 1)
+
+	if err := m.RegisterAdHoc("test", []CronJob{{
+		Name: "observer_job",
+		Task: func(db *sql.DB, payload []byte) (string, error) {
+			return "ok", nil
+		},
+	}}); err != nil {
+		t.Fatalf("register ad-hoc: %v", err)
+	}
+
+	events := make([]RunEvent, 0, 3)
+	m.SetObserver(func(evt RunEvent) {
+		events = append(events, evt)
+	})
+
+	runID, err := m.Enqueue("test", "observer_job", nil)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := m.CancelRun(runID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	retriedID, err := m.RetryRun(runID)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("expected 3 observer events, got %d: %#v", len(events), events)
+	}
+	if events[0].Type != "enqueued" || events[0].RunID != runID || events[0].Status != StatusPlanned {
+		t.Fatalf("unexpected enqueue event: %+v", events[0])
+	}
+	if events[1].Type != "cancelled" || events[1].RunID != runID || events[1].Status != StatusCancelled {
+		t.Fatalf("unexpected cancel event: %+v", events[1])
+	}
+	if events[2].Type != "retried" || events[2].RunID != retriedID || events[2].Status != StatusPlanned {
+		t.Fatalf("unexpected retry event: %+v", events[2])
+	}
+}
+
+func TestObserverReceivesRunningAndDoneEventsFromWorker(t *testing.T) {
+	d := openTestDB(t)
+	m := NewManager(d, 1)
+	events := make(chan RunEvent, 8)
+	m.SetObserver(func(evt RunEvent) {
+		events <- evt
+	})
+
+	if err := m.RegisterAdHoc("test", []CronJob{{
+		Name: "worker_job",
+		Task: func(db *sql.DB, payload []byte) (string, error) {
+			return "worker finished", nil
+		},
+	}}); err != nil {
+		t.Fatalf("register ad-hoc: %v", err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.Stop()
+
+	runID, err := m.Enqueue("test", "worker_job", nil)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	seenRunning := false
+	seenDone := false
+	deadline := time.After(4 * time.Second)
+	for !seenRunning || !seenDone {
+		select {
+		case evt := <-events:
+			if evt.RunID != runID {
+				continue
+			}
+			if evt.Type == "running" && evt.Status == StatusRunning {
+				seenRunning = true
+			}
+			if evt.Type == "done" && evt.Status == StatusDone && evt.Result != nil && *evt.Result == "worker finished" {
+				seenDone = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for running/done events for run %d", runID)
+		}
+	}
+}
+
 func TestListRuns(t *testing.T) {
 	d := openTestDB(t)
 	m := NewManager(d, 1)
