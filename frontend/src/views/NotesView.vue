@@ -1189,9 +1189,10 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import MarkdownIt from "markdown-it";
 import markdownItFootnote from "markdown-it-footnote";
+import spoilerPlugin from "../spoilerPlugin.js";
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true }).use(
     markdownItFootnote,
-);
+).use(spoilerPlugin);
 import {
     fetchNotes,
     fetchNote,
@@ -3921,6 +3922,46 @@ function onPopstate() {
 }
 .markdown-body :deep(section.footnotes li) {
     margin: 0.4em 0;
+}
+
+/* ── Spoiler / accordion ── */
+.markdown-body :deep(details.spoiler) {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin: 0.8em 0;
+    padding: 0;
+    overflow: hidden;
+}
+.markdown-body :deep(details.spoiler[open]) {
+    background: var(--panel-bg);
+}
+.markdown-body :deep(details.spoiler summary) {
+    padding: 0.65em 1em;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--accent-teal);
+    background: var(--raised-bg);
+    user-select: none;
+    border-radius: 8px;
+    transition: background 0.15s;
+    list-style: none;
+}
+.markdown-body :deep(details.spoiler summary::-webkit-details-marker) {
+    display: none;
+}
+.markdown-body :deep(details.spoiler summary::marker) {
+    display: none;
+    content: "";
+}
+.markdown-body :deep(details.spoiler summary:hover) {
+    background: var(--hover-bg);
+}
+.markdown-body :deep(details.spoiler[open] summary) {
+    border-radius: 8px 8px 0 0;
+}
+/* Inner content wrapper */
+.markdown-body :deep(.spoiler-content) {
+    padding: 0.75em 1em;
 }
 
 .history-panel {
