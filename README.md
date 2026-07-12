@@ -124,6 +124,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 `hf.co/ggml-org/GLM-OCR-GGUF:Q8_0`
 
 ## TODO Bugs
+- [ ] If the .options-card model is oppened, the .ws-indicator > .ws-dot is red altohugh the ping is changing.
 - [x] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
 - [x] Remove Light Mode, Only Dark Mode is supported.
 - [x] Font Color of the Task Note Type > .status-badge is not visible because fontcolor is to dark.
@@ -152,7 +153,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] Setup building pipeline
-- [ ] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
+- [x] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
 - [ ] Add automatic tags in a new "Auto Tags" to the NoteType. 
 - [x] Connected/Disconnected and ping indicator.
 - [x] Websocket for real time updates of notes, jobs and other stuff

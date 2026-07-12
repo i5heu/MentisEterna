@@ -48,21 +48,28 @@
                 <div class="search-input-row">
                     <input
                         v-model="searchQuery"
+                        ref="searchInputEl"
                         type="text"
                         placeholder="Search notes… (.i filters, .a all)"
                         class="search-input"
                         :title="getShortcutLabel('focus-search')"
                         @input="onSearchInput"
                     />
+                    <button
+                        v-if="searchQuery.trim()"
+                        type="button"
+                        class="search-clear-btn"
+                        title="Clear search"
+                        aria-label="Clear search"
+                        @click="clearSearchInput({ focus: true })"
+                    >
+                        ✕
+                    </button>
                     <span v-if="searching" class="search-spinner">⟳</span>
                 </div>
                 <div class="search-box-meta">
                     <div v-if="searchFilterSummary" class="search-filter-summary">
                         {{ searchFilterSummary }}
-                    </div>
-                    <div class="search-stream-hint">
-                        Tags → categories → titles first, then related notes stream in
-                        below without moving earlier results.
                     </div>
                     <div v-if="searchStatusMessage" class="search-stream-status">
                         {{ searchStatusMessage }}
@@ -131,20 +138,32 @@
                         v-for="section in searchSectionGroups"
                         :key="section.key"
                         class="search-section"
+                        :class="{ collapsed: section.collapsed }"
                     >
-                        <div class="search-section-header">
-                            <span class="search-section-title">{{ section.label }}</span>
+                        <button
+                            type="button"
+                            class="search-section-header"
+                            :class="{ collapsed: section.collapsed }"
+                            @click="toggleSearchSection(section.key)"
+                        >
+                            <span class="search-section-heading">
+                                <span class="search-section-caret">{{
+                                    section.collapsed ? '▸' : '▾'
+                                }}</span>
+                                <span class="search-section-title">{{ section.label }}</span>
+                            </span>
                             <span class="search-section-count">{{
                                 section.items.length
                             }}</span>
-                        </div>
+                        </button>
                         <div
-                            v-if="section.description"
+                            v-if="section.description && !section.collapsed"
                             class="search-section-description"
                         >
                             {{ section.description }}
                         </div>
                         <div
+                            v-if="!section.collapsed"
                             v-for="item in section.items"
                             :key="item.key"
                             class="note-item search-note-item"
@@ -376,10 +395,24 @@
                                         v-for="section in parentSectionGroups"
                                         :key="section.key"
                                     >
-                                        <div class="parent-dropdown-section-label">
-                                            {{ section.label }}
-                                        </div>
+                                        <button
+                                            type="button"
+                                            class="parent-dropdown-section-label"
+                                            :class="{ collapsed: section.collapsed }"
+                                            @click="toggleParentSearchSection(section.key)"
+                                        >
+                                            <span class="parent-dropdown-section-heading">
+                                                <span class="parent-dropdown-caret">{{
+                                                    section.collapsed ? '▸' : '▾'
+                                                }}</span>
+                                                <span>{{ section.label }}</span>
+                                            </span>
+                                            <span class="parent-dropdown-section-count">{{
+                                                section.items.length
+                                            }}</span>
+                                        </button>
                                         <div
+                                            v-if="!section.collapsed"
                                             v-for="item in section.items"
                                             :key="item.key"
                                             class="parent-dropdown-item"
@@ -630,11 +663,22 @@
                                         v-for="section in linkSearchSectionGroups"
                                         :key="section.key"
                                     >
-                                        <div class="link-search-section-header">
-                                            <span>{{ section.label }}</span>
+                                        <button
+                                            type="button"
+                                            class="link-search-section-header"
+                                            :class="{ collapsed: section.collapsed }"
+                                            @click="toggleLinkSearchSection(section.key)"
+                                        >
+                                            <span class="link-search-section-heading">
+                                                <span class="link-search-caret">{{
+                                                    section.collapsed ? '▸' : '▾'
+                                                }}</span>
+                                                <span>{{ section.label }}</span>
+                                            </span>
                                             <span>{{ section.items.length }}</span>
-                                        </div>
+                                        </button>
                                         <div
+                                            v-if="!section.collapsed"
                                             v-for="item in section.items"
                                             :key="item.key"
                                             class="link-search-item"
@@ -919,11 +963,22 @@
                                 v-for="section in linkSearchSectionGroups"
                                 :key="section.key"
                             >
-                                <div class="link-search-section-header">
-                                    <span>{{ section.label }}</span>
+                                <button
+                                    type="button"
+                                    class="link-search-section-header"
+                                    :class="{ collapsed: section.collapsed }"
+                                    @click="toggleLinkSearchSection(section.key)"
+                                >
+                                    <span class="link-search-section-heading">
+                                        <span class="link-search-caret">{{
+                                            section.collapsed ? '▸' : '▾'
+                                        }}</span>
+                                        <span>{{ section.label }}</span>
+                                    </span>
                                     <span>{{ section.items.length }}</span>
-                                </div>
+                                </button>
                                 <div
+                                    v-if="!section.collapsed"
                                     v-for="item in section.items"
                                     :key="item.key"
                                     class="link-search-item"
@@ -1225,11 +1280,22 @@
                             v-for="section in linkSearchSectionGroups"
                             :key="section.key"
                         >
-                            <div class="link-search-section-header">
-                                <span>{{ section.label }}</span>
+                            <button
+                                type="button"
+                                class="link-search-section-header"
+                                :class="{ collapsed: section.collapsed }"
+                                @click="toggleLinkSearchSection(section.key)"
+                            >
+                                <span class="link-search-section-heading">
+                                    <span class="link-search-caret">{{
+                                        section.collapsed ? '▸' : '▾'
+                                    }}</span>
+                                    <span>{{ section.label }}</span>
+                                </span>
                                 <span>{{ section.items.length }}</span>
-                            </div>
+                            </button>
                             <div
+                                v-if="!section.collapsed"
                                 v-for="item in section.items"
                                 :key="item.key"
                                 class="link-search-item"
@@ -1403,6 +1469,7 @@ const threadRendererKey = ref(0);
 const editTitleInput = ref(null);
 const UNSAVED_NOTE_WARNING =
     "You have unsaved changes in this note. Leave without saving?";
+const searchInputEl = ref(null);
 const bodyTextarea = ref(null);
 const newReplyTitleInput = ref(null);
 const newReplyTextarea = ref(null);
@@ -1441,21 +1508,25 @@ const historyLoading = ref(false);
 // Search state
 const searchQuery = ref("");
 const searchSections = ref([]);
+const searchCollapsedSections = ref({});
 const searchStatusMessage = ref("");
 const searchError = ref("");
 const searching = ref(false);
 const highlightedIndex = ref(-1);
 const searchSelectedTypes = ref(["standard"]);
-const searchResults = computed(() => flattenSearchSections(searchSections.value));
+const searchResults = computed(() =>
+    flattenVisibleSectionGroups(searchSectionGroups.value),
+);
 let searchTimeout = null;
 const sidebarSearchRequest = { controller: null };
 
 // [[ Link search state
 const linkSearchQuery = ref("");
 const linkSearchSections = ref([]);
+const linkSearchCollapsedSections = ref({});
 const linkSearchStatusMessage = ref("");
 const linkSearchResults = computed(() =>
-    flattenSearchSections(linkSearchSections.value),
+    flattenVisibleSectionGroups(linkSearchSectionGroups.value),
 );
 const linkSearching = ref(false);
 const linkSearchIndex = ref(-1);
@@ -1563,9 +1634,10 @@ const canSendThreadReply = computed(
 // Parent selector state
 const parentSearch = ref("");
 const parentSearchSections = ref([]);
+const parentSearchCollapsedSections = ref({});
 const parentSearchStatusMessage = ref("");
 const parentOptions = computed(() =>
-    flattenSearchSections(parentSearchSections.value),
+    flattenVisibleSectionGroups(parentSectionGroups.value),
 );
 
 const ancestors = ref([]);
@@ -1602,12 +1674,21 @@ const searchFilterSummary = computed(() => {
     }
     return "Searching standard notes only. Add .i to choose note types or .a for all.";
 });
-const searchSectionGroups = computed(() => buildSectionGroups(searchSections.value));
+const searchSectionGroups = computed(() =>
+    buildSectionGroups(searchSections.value, {
+        collapsedMap: searchCollapsedSections.value,
+    }),
+);
 const parentSectionGroups = computed(() =>
-    buildSectionGroups(parentSearchSections.value, { includeFlatIndex: false }),
+    buildSectionGroups(parentSearchSections.value, {
+        includeFlatIndex: false,
+        collapsedMap: parentSearchCollapsedSections.value,
+    }),
 );
 const linkSearchSectionGroups = computed(() =>
-    buildSectionGroups(linkSearchSections.value),
+    buildSectionGroups(linkSearchSections.value, {
+        collapsedMap: linkSearchCollapsedSections.value,
+    }),
 );
 
 watch(searchTypePickerVisible, (visible) => {
@@ -1687,19 +1768,57 @@ function flattenSearchSections(sections) {
     return (sections || []).flatMap((section) => section?.results || []);
 }
 
-function buildSectionGroups(sections, { includeFlatIndex = true } = {}) {
+function flattenVisibleSectionGroups(groups) {
+    return (groups || []).flatMap((section) =>
+        section?.collapsed ? [] : (section?.items || []).map((item) => item.result),
+    );
+}
+
+function buildSectionGroups(
+    sections,
+    { includeFlatIndex = true, collapsedMap = {} } = {},
+) {
     let flatIndex = 0;
-    return (sections || []).map((section, sectionIndex) => ({
-        ...section,
-        items: (section?.results || []).map((result, itemIndex) => {
-            const currentFlatIndex = includeFlatIndex ? flatIndex++ : itemIndex;
+    return (sections || []).map((section, sectionIndex) => {
+        const collapsed = Boolean(collapsedMap?.[section?.key]);
+        const items = (section?.results || []).map((result, itemIndex) => {
+            const currentFlatIndex = includeFlatIndex ? flatIndex : itemIndex;
+            if (!collapsed && includeFlatIndex) {
+                flatIndex += 1;
+            }
             return {
                 key: `${section?.key || sectionIndex}:${result.id}:${itemIndex}`,
                 result,
                 flatIndex: currentFlatIndex,
             };
-        }),
-    }));
+        });
+        return {
+            ...section,
+            collapsed,
+            items,
+        };
+    });
+}
+
+function toggleCollapsedSection(collapsedRef, key) {
+    collapsedRef.value = {
+        ...collapsedRef.value,
+        [key]: !collapsedRef.value?.[key],
+    };
+}
+
+function toggleSearchSection(key) {
+    toggleCollapsedSection(searchCollapsedSections, key);
+    highlightedIndex.value = -1;
+}
+
+function toggleParentSearchSection(key) {
+    toggleCollapsedSection(parentSearchCollapsedSections, key);
+}
+
+function toggleLinkSearchSection(key) {
+    toggleCollapsedSection(linkSearchCollapsedSections, key);
+    linkSearchIndex.value = -1;
 }
 
 function normalizeSearchSection(section, { filterResult = null } = {}) {
@@ -1832,8 +1951,24 @@ function openOptions() {
 }
 
 function focusSearchInput() {
-    const input = document.querySelector(".search-input");
+    const input = searchInputEl.value || document.querySelector(".search-input");
     if (input) input.focus();
+}
+
+function clearSearchInput({ focus = false } = {}) {
+    searchQuery.value = "";
+    searchSections.value = [];
+    searchCollapsedSections.value = {};
+    searchStatusMessage.value = "";
+    searchError.value = "";
+    abortSearchRequest(sidebarSearchRequest);
+    clearTimeout(searchTimeout);
+    highlightedIndex.value = -1;
+    if (focus) {
+        requestAnimationFrame(() => {
+            searchInputEl.value?.focus();
+        });
+    }
 }
 
 function focusNoteTitle() {
@@ -2461,6 +2596,7 @@ function populateParentSearch(note) {
     abortSearchRequest(parentSearchRequest);
     parentSearchActive.value = false;
     parentSearchSections.value = [];
+    parentSearchCollapsedSections.value = {};
     parentSearchStatusMessage.value = "";
     if (note?.parent_id) {
         const p = notes.value.find((n) => n.id === note.parent_id);
@@ -2508,6 +2644,7 @@ function newNote(
     parentSearch.value = "";
     parentSearchActive.value = false;
     parentSearchSections.value = [];
+    parentSearchCollapsedSections.value = {};
     parentSearchStatusMessage.value = "";
     showParentPicker.value = false;
     ancestors.value = [];
@@ -2610,6 +2747,7 @@ function onParentSearchInput() {
 
 async function doParentSearch() {
     const q = parentSearch.value.trim();
+    parentSearchCollapsedSections.value = {};
     await runStreamedSearch({
         query: q,
         sectionsRef: parentSearchSections,
@@ -2619,6 +2757,7 @@ async function doParentSearch() {
         filterResult: (result) => result.id !== selected.value?.id,
         onReset: () => {
             parentSearchSections.value = [];
+            parentSearchCollapsedSections.value = {};
         },
         onDone: () => {
             parentSearchStatusMessage.value = "";
@@ -2631,6 +2770,7 @@ function selectParent(note) {
     parentSearch.value = note.title;
     parentSearchActive.value = false;
     parentSearchSections.value = [];
+    parentSearchCollapsedSections.value = {};
     parentSearchStatusMessage.value = "";
     abortSearchRequest(parentSearchRequest);
     showParentPicker.value = false;
@@ -2643,6 +2783,7 @@ function clearParent() {
     parentSearchActive.value = false;
     ancestors.value = [];
     parentSearchSections.value = [];
+    parentSearchCollapsedSections.value = {};
     parentSearchStatusMessage.value = "";
     abortSearchRequest(parentSearchRequest);
     dirty.value = true;
@@ -3089,6 +3230,7 @@ function onSearchInput() {
 async function doSearch() {
     const mode = searchMode.value;
     const q = mode.query;
+    searchCollapsedSections.value = {};
     await runStreamedSearch({
         query: q,
         types: mode.types,
@@ -3104,6 +3246,7 @@ async function doSearch() {
         },
         onReset: () => {
             searchSections.value = [];
+            searchCollapsedSections.value = {};
             searchStatusMessage.value = "";
             highlightedIndex.value = -1;
         },
@@ -3175,6 +3318,7 @@ function updateLinkSearchFromCursor() {
                 abortSearchRequest(linkSearchRequest);
                 linkSearching.value = false;
                 linkSearchSections.value = [];
+                linkSearchCollapsedSections.value = {};
                 linkSearchStatusMessage.value = "";
                 linkSearchIndex.value = -1;
                 return;
@@ -3281,6 +3425,7 @@ function updateLinkPopupPosition() {
 
 async function doLinkSearch() {
     const q = linkSearchQuery.value.trim();
+    linkSearchCollapsedSections.value = {};
     await runStreamedSearch({
         query: q,
         sectionsRef: linkSearchSections,
@@ -3294,6 +3439,7 @@ async function doLinkSearch() {
         },
         onReset: () => {
             linkSearchSections.value = [];
+            linkSearchCollapsedSections.value = {};
             linkSearchStatusMessage.value = "";
             linkSearchIndex.value = -1;
         },
@@ -3307,6 +3453,7 @@ function closeLinkSearch() {
     linkSearchVisible.value = false;
     linkSearchQuery.value = "";
     linkSearchSections.value = [];
+    linkSearchCollapsedSections.value = {};
     linkSearchStatusMessage.value = "";
     linkSearchIndex.value = -1;
     linkSearchTarget.value = null;
@@ -3367,12 +3514,7 @@ function handleEscapeShortcut(event) {
     const inSearch = active?.classList.contains("search-input");
 
     if (inSearch && searchQuery.value.trim()) {
-        searchQuery.value = "";
-        searchSections.value = [];
-        searchStatusMessage.value = "";
-        searchError.value = "";
-        abortSearchRequest(sidebarSearchRequest);
-        highlightedIndex.value = -1;
+        clearSearchInput();
         return;
     }
     if (highlightedIndex.value >= 0) {
@@ -3767,6 +3909,30 @@ function onPopstate() {
     background: var(--raised-bg);
 }
 
+.search-clear-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--raised-bg);
+    color: var(--font-color-secondary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition:
+        color 0.12s,
+        border-color 0.12s,
+        background 0.12s;
+}
+
+.search-clear-btn:hover {
+    color: var(--heading-color);
+    border-color: color-mix(in srgb, var(--accent-teal) 35%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-teal) 10%, var(--raised-bg));
+}
+
 .search-box-meta {
     display: flex;
     flex-direction: column;
@@ -3779,14 +3945,9 @@ function onPopstate() {
     line-height: 1.35;
 }
 
-.search-stream-hint,
 .search-stream-status {
     font-size: 0.72rem;
     line-height: 1.4;
-    color: var(--font-color-secondary);
-}
-
-.search-stream-status {
     color: var(--accent-teal);
 }
 
@@ -3902,12 +4063,14 @@ function onPopstate() {
 .search-result-type {
     flex-shrink: 0;
     font-size: 0.63rem;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--accent-teal);
-    background: rgba(109, 148, 132, 0.15);
-    padding: 0.12rem 0.45rem;
+    letter-spacing: 0.06em;
+    color: color-mix(in srgb, var(--accent-teal) 82%, white 18%);
+    background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-teal) 38%, transparent);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    padding: 0.16rem 0.5rem;
     border-radius: 999px;
 }
 
@@ -3925,25 +4088,66 @@ function onPopstate() {
 }
 
 .search-section-header {
+    width: calc(100% - 1rem);
+    margin: 0 0.5rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
-    padding: 0.35rem 1rem 0.15rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid color-mix(in srgb, var(--accent-teal) 26%, var(--border-color));
+    border-radius: 12px;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent-teal) 18%, var(--raised-bg)),
+        var(--raised-bg)
+    );
+    cursor: pointer;
+    text-align: left;
+    transition:
+        border-color 0.12s,
+        transform 0.12s,
+        background 0.12s;
+}
+
+.search-section-header:hover {
+    border-color: color-mix(in srgb, var(--accent-teal) 45%, var(--border-color));
+    transform: translateY(-1px);
+}
+
+.search-section-header.collapsed {
+    opacity: 0.92;
+}
+
+.search-section-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.search-section-caret {
+    font-size: 0.85rem;
+    color: var(--accent-teal);
+    flex-shrink: 0;
 }
 
 .search-section-title {
     font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
+    font-weight: 800;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--font-color-secondary);
+    color: color-mix(in srgb, var(--accent-teal) 70%, var(--font-color));
 }
 
 .search-section-count {
     font-size: 0.68rem;
-    color: var(--font-color-secondary);
+    color: var(--accent-teal);
     font-variant-numeric: tabular-nums;
+    border-radius: 999px;
+    padding: 0.14rem 0.45rem;
+    background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-teal) 28%, transparent);
 }
 
 .search-section-description {
@@ -4247,14 +4451,40 @@ function onPopstate() {
 }
 
 .parent-dropdown-section-label {
-    font-weight: 700;
-    letter-spacing: 0.05em;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
+    border: none;
     border-top: 1px solid var(--border-color);
+    cursor: pointer;
+    text-align: left;
 }
 
 .parent-dropdown-section-label:first-of-type {
     border-top: none;
+}
+
+.parent-dropdown-section-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.parent-dropdown-caret {
+    color: var(--accent-teal);
+}
+
+.parent-dropdown-section-count {
+    border-radius: 999px;
+    padding: 0.12rem 0.4rem;
+    color: var(--accent-teal);
+    background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-teal) 28%, transparent);
 }
 
 .parent-dropdown-item {
@@ -4386,22 +4616,40 @@ function onPopstate() {
 }
 
 .link-search-section-header {
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
-    padding: 0.45rem 0.85rem;
+    padding: 0.5rem 0.85rem;
     font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.05em;
+    font-weight: 800;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--font-color-secondary);
-    background: rgba(255, 255, 255, 0.03);
+    color: color-mix(in srgb, var(--accent-teal) 70%, var(--font-color-secondary));
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent-teal) 12%, rgba(255, 255, 255, 0.03)),
+        rgba(255, 255, 255, 0.03)
+    );
+    border: none;
     border-top: 1px solid var(--border-color);
+    cursor: pointer;
+    text-align: left;
 }
 
 .link-search-section-header:first-of-type {
     border-top: none;
+}
+
+.link-search-section-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.link-search-caret {
+    color: var(--accent-teal);
 }
 
 .link-search-item {
