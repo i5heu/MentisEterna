@@ -855,6 +855,92 @@ func TestSearchFindsTitlePathAndTags(t *testing.T) {
 	}
 }
 
+// TestSearchFTSFuzzyTitleMatch verifies that the FTS4-backed title search finds
+// notes via prefix tokens that would not be matched by exact substring search
+// alone (e.g. a typo or partial word that shares a prefix with the indexed
+// title token).
+func TestSearchFTSFuzzyTitleMatch(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	n := helperCreateNoteSync(t, s, "Recipe Collection", "body text", nil)
+
+	// "recip" is a prefix of "recipe" — FTS4 prefix matching should surface it.
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=recip&stream=1", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	events := decodeSearchStreamEvents(t, w.Body.String())
+	found := false
+	for _, event := range events {
+		if event.Section == nil || event.Section.Key != "titles" {
+			continue
+		}
+		for _, result := range event.Section.Results {
+			if result.ID == n.ID {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected note %d (%q) in title section for prefix query \"recip\", got events: %+v", n.ID, n.Title, events)
+	}
+}
+
+// TestSearchFTSFuzzyTagMatch verifies that the FTS4-backed tag search finds
+// notes via prefix tokens against the tags column.
+func TestSearchFTSFuzzyTagMatch(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	n := helperCreateNoteRaw(t, s, `{"title":"Dinner Plan","body":"body","tags":["vegetarian"]}`)
+	helperSyncSearchIndex(t, s, n.ID)
+
+	// "veg" is a prefix of "vegetarian" — FTS4 prefix matching should surface it.
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=veg&stream=1", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	events := decodeSearchStreamEvents(t, w.Body.String())
+	found := false
+	for _, event := range events {
+		if event.Section == nil || event.Section.Key != "tags" {
+			continue
+		}
+		for _, result := range event.Section.Results {
+			if result.ID == n.ID {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected note %d in tag section for prefix query \"veg\", got events: %+v", n.ID, events)
+	}
+}
+
+// TestSearchStreamHasNoCategorySection verifies that the removed "categories"
+// section no longer appears in streamed search results.
+func TestSearchStreamHasNoCategorySection(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	_ = helperCreateNoteSync(t, s, "Recipe Note", "body", nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=recipe&stream=1", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	events := decodeSearchStreamEvents(t, w.Body.String())
+	for _, event := range events {
+		if event.Section != nil && event.Section.Key == "categories" {
+			t.Fatalf("expected no categories section, got events: %+v", events)
+		}
+	}
+}
+
 func TestSearchTypeFilter(t *testing.T) {
 	s := newTestServerWithEmbedder(t)
 
