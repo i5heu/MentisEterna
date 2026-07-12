@@ -178,8 +178,17 @@ func (c *liveClient) readLoop() {
 		return c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 	for {
-		if _, _, err := c.conn.ReadMessage(); err != nil {
+		msgType, msg, err := c.conn.ReadMessage()
+		if err != nil {
 			return
+		}
+		if msgType == websocket.TextMessage {
+			var m struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(msg, &m) == nil && m.Type == "ping" {
+				c.enqueueJSON(liveMessage{Type: "pong", Timestamp: liveTimestamp()})
+			}
 		}
 	}
 }

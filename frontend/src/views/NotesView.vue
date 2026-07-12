@@ -17,6 +17,10 @@
                     />
                 </div>
                 <span class="app-title">MentisEterna</span>
+                <span class="ws-indicator" :class="{ connected: wsConnected, disconnected: !wsConnected }" :title="wsConnected ? 'Connected' + (wsLatency != null ? ' (' + wsLatency + ' ms)' : '') : 'Disconnected'">
+                    <span class="ws-dot"></span>
+                    <span v-if="wsLatency != null" class="ws-latency">{{ wsLatency }} ms</span>
+                </span>
                 <button
                     class="btn-ghost icon-btn shortcut-anchor"
                     :title="getShortcutLabel('open-options')"
@@ -1239,6 +1243,8 @@ const emit = defineEmits(["logout", "navigate-options"]);
 
 const notes = ref([]);
 const loading = ref(false);
+const wsConnected = ref(false);
+const wsLatency = ref(null);
 const selected = ref(null);
 const editTitle = ref("");
 const editBody = ref("");
@@ -2034,14 +2040,29 @@ watch([dirty, saving], ([isDirty, isSaving]) => {
     scheduleLiveRefresh({ selected: true });
 });
 
+function onLiveStatus(event) {
+    wsConnected.value = !!event.detail.connected;
+    if (!event.detail.connected && !event.detail.connecting) {
+        wsLatency.value = null;
+    }
+}
+
+function onLiveLatency(event) {
+    wsLatency.value = event.detail.ms;
+}
+
 onMounted(() => {
     loadNotes();
     fetchAndMergeManifests(props.token);
     window.addEventListener("live:message", onLiveMessage);
+    window.addEventListener("live:status", onLiveStatus);
+    window.addEventListener("live:latency", onLiveLatency);
 });
 
 onUnmounted(() => {
     window.removeEventListener("live:message", onLiveMessage);
+    window.removeEventListener("live:status", onLiveStatus);
+    window.removeEventListener("live:latency", onLiveLatency);
     if (liveRefreshTimer) {
         window.clearTimeout(liveRefreshTimer);
         liveRefreshTimer = null;
@@ -3352,6 +3373,37 @@ function onPopstate() {
     font-weight: 700;
     color: var(--header-title-color);
     letter-spacing: 0.02em;
+}
+
+.ws-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--font-color-secondary);
+}
+
+.ws-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+    transition: background 0.3s;
+}
+
+.ws-indicator.connected .ws-dot {
+    background: #22c55e;
+    box-shadow: 0 0 4px #22c55e;
+}
+
+.ws-indicator.disconnected .ws-dot {
+    background: #ef4444;
+    box-shadow: 0 0 4px #ef4444;
+}
+
+.ws-latency {
+    font-variant-numeric: tabular-nums;
 }
 
 .icon-btn {

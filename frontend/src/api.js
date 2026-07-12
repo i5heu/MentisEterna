@@ -29,6 +29,8 @@ let liveSocket = null;
 let liveReconnectTimer = null;
 let liveReconnectAttempt = 0;
 let liveConnectionDesired = false;
+let livePingTimer = null;
+let livePingSentAt = null;
 
 function dispatchWindowEvent(name, detail) {
     if (typeof window === "undefined") return;
@@ -76,11 +78,18 @@ function openLiveSocket() {
             connected: true,
             connecting: false,
         });
+        startLivePings(socket);
     };
 
     socket.onmessage = (event) => {
         try {
             const payload = JSON.parse(event.data);
+            if (payload.type === "pong" && livePingSentAt !== null) {
+                const rtt = Date.now() - livePingSentAt;
+                livePingSentAt = null;
+                dispatchWindowEvent("live:latency", { ms: rtt });
+                return;
+            }
             dispatchWindowEvent("live:message", payload);
         } catch (error) {
             console.error("live message parse failed", error);
@@ -95,12 +104,34 @@ function openLiveSocket() {
         if (liveSocket === socket) {
             liveSocket = null;
         }
+        stopLivePings();
         dispatchWindowEvent("live:status", {
             connected: false,
             connecting: false,
         });
         scheduleLiveReconnect();
     };
+}
+
+function startLivePings(socket) {
+    stopLivePings();
+    livePingTimer = window.setInterval(() => {
+        if (
+            socket.readyState === WebSocket.OPEN &&
+            livePingSentAt === null
+        ) {
+            livePingSentAt = Date.now();
+            socket.send(JSON.stringify({ type: "ping" }));
+        }
+    }, 1000);
+}
+
+function stopLivePings() {
+    livePingSentAt = null;
+    if (livePingTimer) {
+        window.clearInterval(livePingTimer);
+        livePingTimer = null;
+    }
 }
 
 export function startLiveUpdates() {
@@ -111,6 +142,7 @@ export function startLiveUpdates() {
 export function stopLiveUpdates() {
     liveConnectionDesired = false;
     liveReconnectAttempt = 0;
+    stopLivePings();
     if (liveReconnectTimer) {
         window.clearTimeout(liveReconnectTimer);
         liveReconnectTimer = null;
