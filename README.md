@@ -154,6 +154,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] Setup building pipeline
+- [ ] In note edit add "//" to search and add a page link to the note
 - [x] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
 - [ ] Add automatic tags in a new "Auto Tags" to the NoteType. 
 - [x] Connected/Disconnected and ping indicator.

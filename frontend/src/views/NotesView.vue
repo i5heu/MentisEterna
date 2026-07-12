@@ -421,12 +421,23 @@
                                         v-for="section in parentSectionGroups"
                                         :key="section.key"
                                     >
-                                        <button
-                                            type="button"
-                                            class="parent-dropdown-section-label"
-                                            :class="{ collapsed: section.collapsed }"
-                                            @click="toggleParentSearchSection(section.key)"
-                                        >
+                                                                        <button
+                                                                            type="button"
+                                                                            class="parent-dropdown-section-label"
+                                                                            :class="{
+                                                                                collapsed: section.collapsed,
+                                                                                highlighted:
+                                                                                    parentKeyboardMode &&
+                                                                                    parentHighlightedIndex >= 0 &&
+                                                                                    parentSelectableEntries[
+                                                                                        parentHighlightedIndex
+                                                                                    ]?.kind === 'section' &&
+                                                                                    parentSelectableEntries[
+                                                                                        parentHighlightedIndex
+                                                                                    ]?.key === section.key,
+                                                                            }"
+                                                                            @click="toggleParentSearchSection(section.key)"
+                                                                        >
                                             <span class="parent-dropdown-section-heading">
                                                 <span class="parent-dropdown-caret">{{
                                                     section.collapsed ? '▸' : '▾'
@@ -444,8 +455,14 @@
                                             class="parent-dropdown-item"
                                             :class="{
                                                 highlighted:
-                                                    parentHighlightedIndex ===
-                                                    item.flatIndex,
+                                                    parentKeyboardMode &&
+                                                    parentHighlightedIndex >= 0 &&
+                                                    parentSelectableEntries[
+                                                        parentHighlightedIndex
+                                                    ]?.kind === 'result' &&
+                                                    parentSelectableEntries[
+                                                        parentHighlightedIndex
+                                                    ]?.item?.key === item.key,
                                             }"
                                             @click="selectParent(item.result)"
                                             @mouseenter="
@@ -1681,6 +1698,7 @@ const ancestors = ref([]);
 const parentSearching = ref(false);
 const showParentPicker = ref(false);
 const parentSearchActive = ref(false);
+const parentKeyboardMode = ref(false);
 const parentHighlightedIndex = ref(-1);
 let parentSearchTimeout = null;
 const parentSearchRequest = { controller: null };
@@ -1697,21 +1715,22 @@ const hasSidebarSearch = computed(() => Boolean(searchMode.value.query));
 const searchSelectableEntries = computed(() => {
     const entries = [];
     for (const section of searchSectionGroups.value) {
-        entries.push({
-            kind: "section",
-            key: section.key,
-            collapsed: section.collapsed,
-            section,
-        });
-        if (!section.collapsed) {
-            for (const item of section.items) {
-                entries.push({
-                    kind: "result",
-                    key: item.key,
-                    item,
-                    section,
-                });
-            }
+        if (section.collapsed) {
+            entries.push({
+                kind: "section",
+                key: section.key,
+                collapsed: true,
+                section,
+            });
+            continue;
+        }
+        for (const item of section.items) {
+            entries.push({
+                kind: "result",
+                key: item.key,
+                item,
+                section,
+            });
         }
     }
     return entries;
@@ -1750,6 +1769,28 @@ const parentSectionGroups = computed(() =>
         collapsedMap: parentSearchCollapsedSections.value,
     }),
 );
+const parentSelectableEntries = computed(() => {
+    const entries = [];
+    for (const section of parentSectionGroups.value) {
+        entries.push({
+            kind: "section",
+            key: section.key,
+            collapsed: section.collapsed,
+            section,
+        });
+        if (!section.collapsed) {
+            for (const item of section.items) {
+                entries.push({
+                    kind: "result",
+                    key: item.key,
+                    item,
+                    section,
+                });
+            }
+        }
+    }
+    return entries;
+});
 const linkSearchSectionGroups = computed(() =>
     buildSectionGroups(linkSearchSections.value, {
         collapsedMap: linkSearchCollapsedSections.value,
@@ -1896,6 +1937,39 @@ function toggleParentSearchSection(key) {
     parentHighlightedIndex.value = -1;
 }
 
+function selectableParentEntryKeyForIndex(index) {
+    const entry = parentSelectableEntries.value[index];
+    if (!entry) return "";
+    if (entry.kind === "section") {
+        return entry.key || "";
+    }
+    return entry.section?.key || "";
+}
+
+function collapseActiveParentSection() {
+    if (!parentKeyboardMode.value || parentHighlightedIndex.value < 0) return false;
+    const entry = parentSelectableEntries.value[parentHighlightedIndex.value];
+    const key = entry?.kind === "section" ? entry.key : entry?.section?.key;
+    if (!key || parentSearchCollapsedSections.value?.[key]) return false;
+    setCollapsedSection(parentSearchCollapsedSections, key, true);
+    parentHighlightedIndex.value = parentSelectableEntries.value.findIndex(
+        (candidate) => candidate.kind === "section" && candidate.key === key,
+    );
+    return parentHighlightedIndex.value >= 0;
+}
+
+function expandActiveParentSection() {
+    if (!parentKeyboardMode.value || parentHighlightedIndex.value < 0) return false;
+    const entry = parentSelectableEntries.value[parentHighlightedIndex.value];
+    const key = entry?.kind === "section" ? entry.key : entry?.section?.key;
+    if (!key || !parentSearchCollapsedSections.value?.[key]) return false;
+    setCollapsedSection(parentSearchCollapsedSections, key, false);
+    parentHighlightedIndex.value = parentSelectableEntries.value.findIndex(
+        (candidate) => candidate.kind === "section" && candidate.key === key,
+    );
+    return parentHighlightedIndex.value >= 0;
+}
+
 function toggleLinkSearchSection(key) {
     toggleCollapsedSection(linkSearchCollapsedSections, key);
     linkSearchIndex.value = -1;
@@ -1984,11 +2058,27 @@ function onSearchFieldKeydown(event) {
 function onParentFieldKeydown(event) {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        parentKeyboardMode.value = true;
         handleArrowShortcut(event);
         return;
     }
     if (event.key === "Enter") {
         handleEnterShortcut(event);
+        return;
+    }
+    if (!parentKeyboardMode.value) {
+        return;
+    }
+    if (event.key === "ArrowLeft") {
+        if (collapseActiveParentSection()) {
+            event.preventDefault();
+        }
+        return;
+    }
+    if (event.key === "ArrowRight") {
+        if (expandActiveParentSection()) {
+            event.preventDefault();
+        }
     }
 }
 
@@ -2720,7 +2810,12 @@ async function selectNote(
 
 async function selectSearchResult(
     sr,
-    { skipDirtyCheck = false, updateURL = true } = {},
+    {
+        skipDirtyCheck = false,
+        updateURL = true,
+        preserveHighlight = false,
+        highlightIndex = -1,
+    } = {},
 ) {
     if (!skipDirtyCheck && !confirmLeaveCurrentNote()) {
         return false;
@@ -2749,7 +2844,11 @@ async function selectSearchResult(
     showHistory.value = false;
     history.value = [];
     isEditing.value = false;
-    highlightedIndex.value = searchResults.value.indexOf(sr);
+    if (preserveHighlight && highlightIndex >= 0) {
+        highlightedIndex.value = highlightIndex;
+    } else {
+        highlightedIndex.value = searchResults.value.indexOf(sr);
+    }
     const noteTypeVal = noteType.value || "standard";
     if (isLazyChildren(noteTypeVal)) {
         children.value = [];
@@ -2768,6 +2867,7 @@ async function selectSearchResult(
 function populateParentSearch(note) {
     abortSearchRequest(parentSearchRequest);
     parentSearchActive.value = false;
+    parentKeyboardMode.value = false;
     parentHighlightedIndex.value = -1;
     parentSearchSections.value = [];
     parentSearchCollapsedSections.value = {};
@@ -2915,6 +3015,7 @@ async function loadThreadChildren() {
 
 function onParentSearchInput() {
     parentSearchActive.value = Boolean(parentSearch.value.trim());
+    parentKeyboardMode.value = false;
     parentHighlightedIndex.value = -1;
     clearTimeout(parentSearchTimeout);
     parentSearchTimeout = setTimeout(doParentSearch, 200);
@@ -2941,6 +3042,7 @@ async function doParentSearch() {
         onReset: () => {
             parentSearchSections.value = [];
             parentSearchCollapsedSections.value = {};
+            parentKeyboardMode.value = false;
             parentHighlightedIndex.value = -1;
         },
         onDone: () => {
@@ -2953,12 +3055,9 @@ function selectParent(note) {
     selected.value = { ...selected.value, parent_id: note.id };
     parentSearch.value = note.title;
     parentSearchActive.value = false;
-    parentHighlightedIndex.value = -1;
-    parentSearchSections.value = [];
-    parentSearchCollapsedSections.value = {};
     parentSearchStatusMessage.value = "";
     abortSearchRequest(parentSearchRequest);
-    showParentPicker.value = false;
+    showParentPicker.value = true;
     dirty.value = true;
 }
 
@@ -2966,6 +3065,7 @@ function clearParent() {
     selected.value = { ...selected.value, parent_id: null };
     parentSearch.value = "";
     parentSearchActive.value = false;
+    parentKeyboardMode.value = false;
     parentHighlightedIndex.value = -1;
     ancestors.value = [];
     parentSearchSections.value = [];
@@ -3743,7 +3843,9 @@ function handleArrowShortcut(event) {
     const inParentSearch = active?.classList.contains("parent-input");
 
     if (inParentSearch) {
-        const list = parentOptions.value;
+        const list = parentKeyboardMode.value
+            ? parentSelectableEntries.value
+            : parentOptions.value;
         if (list.length === 0) return;
         event.preventDefault();
         showParentPicker.value = true;
@@ -3758,9 +3860,10 @@ function handleArrowShortcut(event) {
                 (parentHighlightedIndex.value - 1 + list.length) % list.length;
         }
         requestAnimationFrame(() => {
-            const el = document.querySelector(
-                ".parent-dropdown-item.highlighted",
-            );
+            const selector = parentKeyboardMode.value
+                ? ".parent-dropdown-section-label.highlighted, .parent-dropdown-item.highlighted"
+                : ".parent-dropdown-item.highlighted";
+            const el = document.querySelector(selector);
             if (el) el.scrollIntoView({ block: "nearest" });
         });
         return;
@@ -3813,12 +3916,21 @@ function handleEnterShortcut(event) {
     const inParentSearch = active?.classList.contains("parent-input");
 
     if (inParentSearch) {
+        const list = parentKeyboardMode.value
+            ? parentSelectableEntries.value
+            : parentOptions.value;
         const idx =
             parentHighlightedIndex.value >= 0 ? parentHighlightedIndex.value : 0;
-        if (idx < 0 || idx >= parentOptions.value.length) return;
+        if (idx < 0 || idx >= list.length) return;
         event.preventDefault();
-        selectParent(parentOptions.value[idx]);
-        active?.blur();
+        const item = list[idx];
+        if (parentKeyboardMode.value && item?.kind === "section") {
+            toggleParentSearchSection(item.key);
+            return;
+        }
+        const result = parentKeyboardMode.value ? item?.item?.result : item;
+        if (!result) return;
+        selectParent(result);
         return;
     }
 
@@ -3842,12 +3954,20 @@ function handleEnterShortcut(event) {
         }
         const result = searchKeyboardMode.value ? item?.item?.result : item;
         if (!result) return;
-        selectSearchResult(result);
+        const preservedIndex = highlightedIndex.value;
+        Promise.resolve(
+            selectSearchResult(result, {
+                preserveHighlight: inSearch && searchKeyboardMode.value,
+                highlightIndex: preservedIndex,
+            }),
+        ).then((opened) => {
+            if (!opened || !inSearch) return;
+            requestAnimationFrame(() => {
+                searchInputEl.value?.focus();
+            });
+        });
     } else {
         selectNote(item);
-    }
-    if (inSearch) {
-        active?.blur();
     }
 }
 
@@ -4752,6 +4872,11 @@ function onPopstate() {
 
 .parent-dropdown-item:hover {
     background: var(--panel-bg);
+}
+
+.parent-dropdown-section-label.highlighted {
+    color: color-mix(in srgb, var(--accent-teal) 78%, var(--font-color));
+    box-shadow: inset 4px 0 0 var(--accent-teal);
 }
 
 .parent-dropdown-item.highlighted {
