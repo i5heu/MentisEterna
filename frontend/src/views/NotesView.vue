@@ -54,6 +54,7 @@
                         class="search-input"
                         :title="getShortcutLabel('focus-search')"
                         @input="onSearchInput"
+                        @keydown="onSearchFieldKeydown"
                     />
                     <button
                         v-if="searchQuery.trim()"
@@ -135,15 +136,33 @@
                 <!-- Search results mode -->
                 <template v-if="hasSidebarSearch">
                     <div
-                        v-for="section in searchSectionGroups"
+                        v-for="(section, sectionIdx) in searchSectionGroups"
                         :key="section.key"
                         class="search-section"
-                        :class="{ collapsed: section.collapsed }"
+                        :class="{
+                            collapsed: section.collapsed,
+                            highlighted:
+                                searchKeyboardMode &&
+                                highlightedIndex >= 0 &&
+                                searchSelectableEntries[highlightedIndex]?.kind ===
+                                    'section' &&
+                                searchSelectableEntries[highlightedIndex]?.key ===
+                                    section.key,
+                        }"
                     >
                         <button
                             type="button"
                             class="search-section-header"
-                            :class="{ collapsed: section.collapsed }"
+                            :class="{
+                                collapsed: section.collapsed,
+                                highlighted:
+                                    searchKeyboardMode &&
+                                    highlightedIndex >= 0 &&
+                                    searchSelectableEntries[highlightedIndex]?.kind ===
+                                        'section' &&
+                                    searchSelectableEntries[highlightedIndex]?.key ===
+                                        section.key,
+                            }"
                             @click="toggleSearchSection(section.key)"
                         >
                             <span class="search-section-heading">
@@ -164,12 +183,18 @@
                         </div>
                         <div
                             v-if="!section.collapsed"
-                            v-for="item in section.items"
+                            v-for="(item, itemIdx) in section.items"
                             :key="item.key"
                             class="note-item search-note-item"
                             :class="{
                                 active: selected?.id === item.result.id,
-                                highlighted: highlightedIndex === item.flatIndex,
+                                highlighted:
+                                    searchKeyboardMode &&
+                                    highlightedIndex >= 0 &&
+                                    searchSelectableEntries[highlightedIndex]?.kind ===
+                                        'result' &&
+                                    searchSelectableEntries[highlightedIndex]?.item?.key ===
+                                        item.key,
                             }"
                             @click="selectSearchResult(item.result)"
                         >
@@ -367,6 +392,7 @@
                                     placeholder="Search parent…"
                                     @focus="showParentPicker = true"
                                     @input="onParentSearchInput()"
+                                    @keydown="onParentFieldKeydown"
                                 />
                                 <button
                                     v-if="selected.parent_id"
@@ -416,7 +442,16 @@
                                             v-for="item in section.items"
                                             :key="item.key"
                                             class="parent-dropdown-item"
+                                            :class="{
+                                                highlighted:
+                                                    parentHighlightedIndex ===
+                                                    item.flatIndex,
+                                            }"
                                             @click="selectParent(item.result)"
+                                            @mouseenter="
+                                                parentHighlightedIndex =
+                                                    item.flatIndex
+                                            "
                                         >
                                             <span class="parent-dropdown-title-row">
                                                 <span class="parent-dropdown-title">{{
@@ -1513,7 +1548,9 @@ const searchStatusMessage = ref("");
 const searchError = ref("");
 const searching = ref(false);
 const highlightedIndex = ref(-1);
+const searchKeyboardMode = ref(false);
 const searchSelectedTypes = ref(["standard"]);
+const activeSearchSectionKey = ref("");
 const searchResults = computed(() =>
     flattenVisibleSectionGroups(searchSectionGroups.value),
 );
@@ -1644,6 +1681,7 @@ const ancestors = ref([]);
 const parentSearching = ref(false);
 const showParentPicker = ref(false);
 const parentSearchActive = ref(false);
+const parentHighlightedIndex = ref(-1);
 let parentSearchTimeout = null;
 const parentSearchRequest = { controller: null };
 
@@ -1656,9 +1694,37 @@ const rootNotes = computed(() =>
 const allSearchTypeValues = computed(() => typeOptions.map((opt) => opt.value));
 const searchMode = computed(() => parseSearchMode(searchQuery.value));
 const hasSidebarSearch = computed(() => Boolean(searchMode.value.query));
-const sidebarList = computed(() =>
-    hasSidebarSearch.value ? searchResults.value : rootNotes.value,
-);
+const searchSelectableEntries = computed(() => {
+    const entries = [];
+    for (const section of searchSectionGroups.value) {
+        entries.push({
+            kind: "section",
+            key: section.key,
+            collapsed: section.collapsed,
+            section,
+        });
+        if (!section.collapsed) {
+            for (const item of section.items) {
+                entries.push({
+                    kind: "result",
+                    key: item.key,
+                    item,
+                    section,
+                });
+            }
+        }
+    }
+    return entries;
+});
+
+const sidebarList = computed(() => {
+    if (hasSidebarSearch.value) {
+        return searchKeyboardMode.value
+            ? searchSelectableEntries.value
+            : searchResults.value;
+    }
+    return rootNotes.value;
+});
 const searchTypePickerVisible = computed(() => searchMode.value.useTypePicker);
 const searchFilterSummary = computed(() => {
     if (!searchQuery.value.trim()) return "";
@@ -1681,7 +1747,6 @@ const searchSectionGroups = computed(() =>
 );
 const parentSectionGroups = computed(() =>
     buildSectionGroups(parentSearchSections.value, {
-        includeFlatIndex: false,
         collapsedMap: parentSearchCollapsedSections.value,
     }),
 );
@@ -1800,25 +1865,131 @@ function buildSectionGroups(
     });
 }
 
-function toggleCollapsedSection(collapsedRef, key) {
+function setCollapsedSection(collapsedRef, key, collapsed) {
     collapsedRef.value = {
         ...collapsedRef.value,
-        [key]: !collapsedRef.value?.[key],
+        [key]: collapsed,
     };
 }
 
+function toggleCollapsedSection(collapsedRef, key) {
+    setCollapsedSection(collapsedRef, key, !collapsedRef.value?.[key]);
+}
+
 function toggleSearchSection(key) {
+    activeSearchSectionKey.value = key || "";
     toggleCollapsedSection(searchCollapsedSections, key);
     highlightedIndex.value = -1;
 }
 
+function selectableEntryKeyForIndex(index) {
+    const entry = searchSelectableEntries.value[index];
+    if (!entry) return "";
+    if (entry.kind === "section") {
+        return entry.key || "";
+    }
+    return entry.section?.key || "";
+}
+
 function toggleParentSearchSection(key) {
     toggleCollapsedSection(parentSearchCollapsedSections, key);
+    parentHighlightedIndex.value = -1;
 }
 
 function toggleLinkSearchSection(key) {
     toggleCollapsedSection(linkSearchCollapsedSections, key);
     linkSearchIndex.value = -1;
+}
+
+function sectionKeyForFlatIndex(groups, flatIndex) {
+    if (flatIndex == null || flatIndex < 0) return "";
+    for (const section of groups || []) {
+        if (section?.collapsed) continue;
+        for (const item of section?.items || []) {
+            if (item.flatIndex === flatIndex) {
+                return section.key || "";
+            }
+        }
+    }
+    return "";
+}
+
+function firstFlatIndexForSection(groups, key) {
+    for (const section of groups || []) {
+        if (section?.key !== key || section?.collapsed) continue;
+        return section?.items?.[0]?.flatIndex ?? -1;
+    }
+    return -1;
+}
+
+function collapseActiveSearchSection() {
+    if (!searchKeyboardMode.value || highlightedIndex.value < 0) return false;
+    const entry = searchSelectableEntries.value[highlightedIndex.value];
+    const key =
+        entry?.kind === "section"
+            ? entry.key
+            : entry?.section?.key || activeSearchSectionKey.value;
+    if (!key || searchCollapsedSections.value?.[key]) return false;
+    activeSearchSectionKey.value = key;
+    setCollapsedSection(searchCollapsedSections, key, true);
+    highlightedIndex.value = searchSelectableEntries.value.findIndex(
+        (candidate) => candidate.kind === "section" && candidate.key === key,
+    );
+    return highlightedIndex.value >= 0;
+}
+
+function expandActiveSearchSection() {
+    if (!searchKeyboardMode.value || highlightedIndex.value < 0) return false;
+    const entry = searchSelectableEntries.value[highlightedIndex.value];
+    const key =
+        entry?.kind === "section"
+            ? entry.key
+            : entry?.section?.key || activeSearchSectionKey.value;
+    if (!key || !searchCollapsedSections.value?.[key]) return false;
+    activeSearchSectionKey.value = key;
+    setCollapsedSection(searchCollapsedSections, key, false);
+    highlightedIndex.value = searchSelectableEntries.value.findIndex(
+        (candidate) => candidate.kind === "section" && candidate.key === key,
+    );
+    return highlightedIndex.value >= 0;
+}
+
+function onSearchFieldKeydown(event) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        searchKeyboardMode.value = true;
+        handleArrowShortcut(event);
+        return;
+    }
+    if (event.key === "Enter") {
+        handleEnterShortcut(event);
+        return;
+    }
+    if (!searchKeyboardMode.value) {
+        return;
+    }
+    if (event.key === "ArrowLeft") {
+        if (collapseActiveSearchSection()) {
+            event.preventDefault();
+        }
+        return;
+    }
+    if (event.key === "ArrowRight") {
+        if (expandActiveSearchSection()) {
+            event.preventDefault();
+        }
+    }
+}
+
+function onParentFieldKeydown(event) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        handleArrowShortcut(event);
+        return;
+    }
+    if (event.key === "Enter") {
+        handleEnterShortcut(event);
+    }
 }
 
 function normalizeSearchSection(section, { filterResult = null } = {}) {
@@ -1959,6 +2130,8 @@ function clearSearchInput({ focus = false } = {}) {
     searchQuery.value = "";
     searchSections.value = [];
     searchCollapsedSections.value = {};
+    activeSearchSectionKey.value = "";
+    searchKeyboardMode.value = false;
     searchStatusMessage.value = "";
     searchError.value = "";
     abortSearchRequest(sidebarSearchRequest);
@@ -2595,6 +2768,7 @@ async function selectSearchResult(
 function populateParentSearch(note) {
     abortSearchRequest(parentSearchRequest);
     parentSearchActive.value = false;
+    parentHighlightedIndex.value = -1;
     parentSearchSections.value = [];
     parentSearchCollapsedSections.value = {};
     parentSearchStatusMessage.value = "";
@@ -2741,6 +2915,7 @@ async function loadThreadChildren() {
 
 function onParentSearchInput() {
     parentSearchActive.value = Boolean(parentSearch.value.trim());
+    parentHighlightedIndex.value = -1;
     clearTimeout(parentSearchTimeout);
     parentSearchTimeout = setTimeout(doParentSearch, 200);
 }
@@ -2755,9 +2930,18 @@ async function doParentSearch() {
         searchingRef: parentSearching,
         requestStore: parentSearchRequest,
         filterResult: (result) => result.id !== selected.value?.id,
+        onFirstResult: () => {
+            if (
+                parentHighlightedIndex.value < 0 &&
+                parentOptions.value.length > 0
+            ) {
+                parentHighlightedIndex.value = 0;
+            }
+        },
         onReset: () => {
             parentSearchSections.value = [];
             parentSearchCollapsedSections.value = {};
+            parentHighlightedIndex.value = -1;
         },
         onDone: () => {
             parentSearchStatusMessage.value = "";
@@ -2769,6 +2953,7 @@ function selectParent(note) {
     selected.value = { ...selected.value, parent_id: note.id };
     parentSearch.value = note.title;
     parentSearchActive.value = false;
+    parentHighlightedIndex.value = -1;
     parentSearchSections.value = [];
     parentSearchCollapsedSections.value = {};
     parentSearchStatusMessage.value = "";
@@ -2781,6 +2966,7 @@ function clearParent() {
     selected.value = { ...selected.value, parent_id: null };
     parentSearch.value = "";
     parentSearchActive.value = false;
+    parentHighlightedIndex.value = -1;
     ancestors.value = [];
     parentSearchSections.value = [];
     parentSearchCollapsedSections.value = {};
@@ -3231,6 +3417,7 @@ async function doSearch() {
     const mode = searchMode.value;
     const q = mode.query;
     searchCollapsedSections.value = {};
+    activeSearchSectionKey.value = "";
     await runStreamedSearch({
         query: q,
         types: mode.types,
@@ -3247,6 +3434,8 @@ async function doSearch() {
         onReset: () => {
             searchSections.value = [];
             searchCollapsedSections.value = {};
+            activeSearchSectionKey.value = "";
+            searchKeyboardMode.value = false;
             searchStatusMessage.value = "";
             highlightedIndex.value = -1;
         },
@@ -3519,6 +3708,7 @@ function handleEscapeShortcut(event) {
     }
     if (highlightedIndex.value >= 0) {
         highlightedIndex.value = -1;
+        searchKeyboardMode.value = false;
         return;
     }
     if (isEditableElement(active)) {
@@ -3550,6 +3740,32 @@ function handleArrowShortcut(event) {
 
     const active = document.activeElement;
     const inSearch = active?.classList.contains("search-input");
+    const inParentSearch = active?.classList.contains("parent-input");
+
+    if (inParentSearch) {
+        const list = parentOptions.value;
+        if (list.length === 0) return;
+        event.preventDefault();
+        showParentPicker.value = true;
+        if (parentHighlightedIndex.value < 0) {
+            parentHighlightedIndex.value =
+                event.key === "ArrowDown" ? 0 : list.length - 1;
+        } else if (event.key === "ArrowDown") {
+            parentHighlightedIndex.value =
+                (parentHighlightedIndex.value + 1) % list.length;
+        } else {
+            parentHighlightedIndex.value =
+                (parentHighlightedIndex.value - 1 + list.length) % list.length;
+        }
+        requestAnimationFrame(() => {
+            const el = document.querySelector(
+                ".parent-dropdown-item.highlighted",
+            );
+            if (el) el.scrollIntoView({ block: "nearest" });
+        });
+        return;
+    }
+
     if (!inSearch && isEditableElement(active)) {
         return;
     }
@@ -3566,8 +3782,14 @@ function handleArrowShortcut(event) {
         highlightedIndex.value =
             (highlightedIndex.value - 1 + list.length) % list.length;
     }
+    activeSearchSectionKey.value = searchKeyboardMode.value
+        ? selectableEntryKeyForIndex(highlightedIndex.value)
+        : sectionKeyForFlatIndex(searchSectionGroups.value, highlightedIndex.value);
     requestAnimationFrame(() => {
-        const el = document.querySelector(".note-item.highlighted");
+        const selector = searchKeyboardMode.value
+            ? ".search-section-header.highlighted, .search-note-item.highlighted"
+            : ".note-item.highlighted";
+        const el = document.querySelector(selector);
         if (el) el.scrollIntoView({ block: "nearest" });
     });
 }
@@ -3588,17 +3810,39 @@ function handleEnterShortcut(event) {
 
     const active = document.activeElement;
     const inSearch = active?.classList.contains("search-input");
+    const inParentSearch = active?.classList.contains("parent-input");
+
+    if (inParentSearch) {
+        const idx =
+            parentHighlightedIndex.value >= 0 ? parentHighlightedIndex.value : 0;
+        if (idx < 0 || idx >= parentOptions.value.length) return;
+        event.preventDefault();
+        selectParent(parentOptions.value[idx]);
+        active?.blur();
+        return;
+    }
+
     if (!inSearch && isEditableElement(active)) {
         return;
     }
 
-    const idx = inSearch ? 0 : highlightedIndex.value;
+    const idx = inSearch
+        ? highlightedIndex.value >= 0
+            ? highlightedIndex.value
+            : 0
+        : highlightedIndex.value;
     if (idx < 0 || idx >= sidebarList.value.length) return;
 
     event.preventDefault();
     const item = sidebarList.value[idx];
     if (hasSidebarSearch.value) {
-        selectSearchResult(item);
+        if (searchKeyboardMode.value && item?.kind === "section") {
+            toggleSearchSection(item.key);
+            return;
+        }
+        const result = searchKeyboardMode.value ? item?.item?.result : item;
+        if (!result) return;
+        selectSearchResult(result);
     } else {
         selectNote(item);
     }
@@ -4119,6 +4363,14 @@ function onPopstate() {
     opacity: 0.92;
 }
 
+.search-section.highlighted .search-section-header,
+.search-section-header.highlighted {
+    border-color: color-mix(in srgb, var(--accent-teal) 55%, var(--border-color));
+    box-shadow:
+        inset 4px 0 0 var(--accent-teal),
+        0 0 0 1px color-mix(in srgb, var(--accent-teal) 18%, transparent);
+}
+
 .search-section-heading {
     display: inline-flex;
     align-items: center;
@@ -4500,6 +4752,11 @@ function onPopstate() {
 
 .parent-dropdown-item:hover {
     background: var(--panel-bg);
+}
+
+.parent-dropdown-item.highlighted {
+    background: color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg));
+    box-shadow: inset 3px 0 0 var(--accent-teal);
 }
 
 .parent-dropdown-item.muted {
