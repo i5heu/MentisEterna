@@ -125,6 +125,8 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 
 ## TODO Bugs
 - [ ] If the .options-card model is oppened, the .ws-indicator > .ws-dot is red altohugh the ping is changing.
+- [ ] note-list shortcut keys are not shown properly (z-index) and they also do not work 
+- [ ] links in a not need shortcut support
 - [x] If search input focus, and up or down is pressed, it should allow to select a search result and open it via enter. with .search-input and .parent-input 
 - [x] Files Attached via drag and drop do not appear in the 'Attachments' section of the note.
 - [x] Remove Light Mode, Only Dark Mode is supported.
