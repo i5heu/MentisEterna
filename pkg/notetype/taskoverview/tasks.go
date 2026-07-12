@@ -21,14 +21,15 @@ func loadAllTasks(db *sql.DB) ([]TaskSummary, error) {
 		       COALESCE(tc.time_estimation, ''),
 		       COALESCE(tc.time_used, ''),
 		       COALESCE(tc.recurring, 'none'),
-		       COALESCE(tc.completed_at, '')
+		       COALESCE(tc.completed_at, ''),
+		       COALESCE(tc.pending_does_not_force_daily_inclusion, 0)
 		FROM notes n
 		LEFT JOIN updates u ON u.id = (
 			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
 		)
 		LEFT JOIN ct_task_config tc ON tc.note_id = n.id
 		WHERE n.type = 'task'
-		ORDER BY tc.priority DESC, tc.due_date ASC, n.created_at DESC
+		ORDER BY tc.due_date ASC, tc.priority DESC, n.created_at DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("task_overview: load tasks: %w", err)
@@ -40,7 +41,8 @@ func loadAllTasks(db *sql.DB) ([]TaskSummary, error) {
 		var t TaskSummary
 		if err := rows.Scan(&t.NoteID, &t.Title, &t.CreatedAt, &t.Body, &t.UpdatedAt,
 			&t.Status, &t.Priority, &t.Difficulty, &t.Fun,
-			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt); err != nil {
+			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt,
+			&t.PendingDoesNotForceDailyInclusion); err != nil {
 			return nil, fmt.Errorf("task_overview: scan task: %w", err)
 		}
 		tasks = append(tasks, t)

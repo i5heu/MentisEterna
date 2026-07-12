@@ -4,13 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"time"
 )
 
 // --- Daily task generation & persistence ---
 
-// regenerateAllDailyTasks is the cron job that repicks daily tasks
+// regenerateAllDailyTasks is the cron job that regenerates daily tasks
 // for every task_overview note at midnight UTC.
 func regenerateAllDailyTasks(db *sql.DB, payload []byte) (string, error) {
 	tasks, err := loadAllTasks(db)
@@ -37,8 +36,14 @@ func regenerateAllDailyTasks(db *sql.DB, payload []byte) (string, error) {
 	}
 
 	regenCount := 0
+	now := nowUTC()
 	for _, noteID := range noteIDs {
-		picked := pickRandomTasks(tasks, 3)
+		cfg, err := loadOverviewConfig(db, noteID)
+		if err != nil {
+			return "", fmt.Errorf("load config for note %d: %w", noteID, err)
+		}
+		scoredOpenTasks := scoreOpenTasks(tasks, cfg, now)
+		picked := selectDailyTasks(scoredOpenTasks, cfg, 0)
 		if err := storeDailyTasks(db, noteID, picked); err != nil {
 			return "", fmt.Errorf("store daily for note %d: %w", noteID, err)
 		}
@@ -63,7 +68,8 @@ func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 		       COALESCE(tc.time_estimation, ''),
 		       COALESCE(tc.time_used, ''),
 		       COALESCE(tc.recurring, 'none'),
-		       COALESCE(tc.completed_at, '')
+		       COALESCE(tc.completed_at, ''),
+		       COALESCE(tc.pending_does_not_force_daily_inclusion, 0)
 		FROM ct_taskoverview_daily d
 		JOIN notes n ON n.id = d.task_note_id
 		LEFT JOIN updates u ON u.id = (
@@ -74,7 +80,7 @@ func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 		AND d.assigned_at = (
 			SELECT MAX(assigned_at) FROM ct_taskoverview_daily WHERE overview_note_id = ?
 		)
-		ORDER BY d.assigned_at ASC
+		ORDER BY d.position ASC, d.assigned_at ASC, n.id ASC
 	`, overviewNoteID, overviewNoteID)
 	if err != nil {
 		return nil, fmt.Errorf("task_overview: load daily: %w", err)
@@ -86,7 +92,8 @@ func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 		var t TaskSummary
 		if err := rows.Scan(&t.NoteID, &t.Title, &t.CreatedAt, &t.Body, &t.UpdatedAt,
 			&t.Status, &t.Priority, &t.Difficulty, &t.Fun,
-			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt); err != nil {
+			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt,
+			&t.PendingDoesNotForceDailyInclusion); err != nil {
 			return nil, fmt.Errorf("task_overview: scan daily: %w", err)
 		}
 		tasks = append(tasks, t)
@@ -102,10 +109,10 @@ func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 // Each call creates a new generation — all tasks share the same assigned_at timestamp.
 func storeDailyTasks(db *sql.DB, overviewNoteID int64, tasks []TaskSummary) error {
 	now := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-	for _, t := range tasks {
+	for idx, t := range tasks {
 		if _, err := db.Exec(
-			`INSERT INTO ct_taskoverview_daily (overview_note_id, task_note_id, assigned_at) VALUES (?, ?, ?)`,
-			overviewNoteID, t.NoteID, now,
+			`INSERT INTO ct_taskoverview_daily (overview_note_id, task_note_id, assigned_at, position) VALUES (?, ?, ?, ?)`,
+			overviewNoteID, t.NoteID, now, idx,
 		); err != nil {
 			return err
 		}
@@ -139,7 +146,8 @@ func loadDailyHistory(db *sql.DB, overviewNoteID int64) ([]DailyHistoryEntry, er
 		       COALESCE(tc.time_estimation, ''),
 		       COALESCE(tc.time_used, ''),
 		       COALESCE(tc.recurring, 'none'),
-		       COALESCE(tc.completed_at, '')
+		       COALESCE(tc.completed_at, ''),
+		       COALESCE(tc.pending_does_not_force_daily_inclusion, 0)
 		FROM ct_taskoverview_daily d
 		JOIN notes n ON n.id = d.task_note_id
 		LEFT JOIN updates u ON u.id = (
@@ -147,7 +155,7 @@ func loadDailyHistory(db *sql.DB, overviewNoteID int64) ([]DailyHistoryEntry, er
 		)
 		LEFT JOIN ct_task_config tc ON tc.note_id = n.id
 		WHERE d.overview_note_id = ? AND d.assigned_at != ?
-		ORDER BY d.assigned_at DESC, n.title ASC
+		ORDER BY d.assigned_at DESC, d.position ASC, n.title ASC
 	`, overviewNoteID, latest)
 	if err != nil {
 		return nil, fmt.Errorf("task_overview: load history: %w", err)
@@ -165,7 +173,8 @@ func loadDailyHistory(db *sql.DB, overviewNoteID int64) ([]DailyHistoryEntry, er
 		var t TaskSummary
 		if err := rows.Scan(&assignedAt, &t.NoteID, &t.Title, &t.CreatedAt, &t.Body, &t.UpdatedAt,
 			&t.Status, &t.Priority, &t.Difficulty, &t.Fun,
-			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt); err != nil {
+			&t.DueDate, &t.TimeEstimation, &t.TimeUsed, &t.Recurring, &t.CompletedAt,
+			&t.PendingDoesNotForceDailyInclusion); err != nil {
 			return nil, fmt.Errorf("task_overview: scan history: %w", err)
 		}
 		all = append(all, row{assignedAt, t})
@@ -203,8 +212,10 @@ func handleDailyTasks(db *sql.DB, noteID int64, params json.RawMessage) (any, er
 			return nil, fmt.Errorf("task_overview: invalid params: %w", err)
 		}
 	}
-	if p.Count <= 0 {
-		p.Count = 3
+
+	cfg, err := loadOverviewConfig(db, noteID)
+	if err != nil {
+		return nil, err
 	}
 
 	tasks, err := loadAllTasks(db)
@@ -212,7 +223,8 @@ func handleDailyTasks(db *sql.DB, noteID int64, params json.RawMessage) (any, er
 		return nil, err
 	}
 
-	picked := pickRandomTasks(tasks, p.Count)
+	scoredOpenTasks := scoreOpenTasks(tasks, cfg, nowUTC())
+	picked := selectDailyTasks(scoredOpenTasks, cfg, p.Count)
 
 	// Persist so BuildView returns the same set.
 	if err := storeDailyTasks(db, noteID, picked); err != nil {
@@ -221,34 +233,7 @@ func handleDailyTasks(db *sql.DB, noteID int64, params json.RawMessage) (any, er
 	}
 
 	return map[string]any{
-		"daily_tasks": picked,
+		"daily_tasks":       picked,
+		"scored_open_tasks": scoredOpenTasks,
 	}, nil
-}
-
-// pickRandomTasks selects up to count tasks, prioritising in_progress (Doing)
-// tasks first, then filling remaining slots from other non-done tasks.
-func pickRandomTasks(tasks []TaskSummary, count int) []TaskSummary {
-	var inProgress, candidates []TaskSummary
-	for _, t := range tasks {
-		switch t.Status {
-		case "in_progress":
-			inProgress = append(inProgress, t)
-		case "done":
-			// skip
-		default:
-			candidates = append(candidates, t)
-		}
-	}
-
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	rng.Shuffle(len(inProgress), func(i, j int) { inProgress[i], inProgress[j] = inProgress[j], inProgress[i] })
-	rng.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
-
-	result := make([]TaskSummary, 0, count)
-	result = append(result, inProgress...)
-	result = append(result, candidates...)
-	if len(result) > count {
-		result = result[:count]
-	}
-	return result
 }

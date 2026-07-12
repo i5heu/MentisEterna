@@ -27,18 +27,19 @@ func (p *TaskPlugin) ID() string { return pluginID }
 func (p *TaskPlugin) InitSchema(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_task_config (
-			note_id         INTEGER PRIMARY KEY,
-			status          TEXT    NOT NULL DEFAULT 'todo',
-			difficulty      INTEGER NOT NULL DEFAULT 0,
-			fun             INTEGER NOT NULL DEFAULT 0,
-			priority        INTEGER NOT NULL DEFAULT 0,
-			description     TEXT    NOT NULL DEFAULT '',
-			due_date        TEXT    NOT NULL DEFAULT '',
-			time_estimation TEXT    NOT NULL DEFAULT '',
-			time_used       TEXT    NOT NULL DEFAULT '',
-			recurring       TEXT    NOT NULL DEFAULT 'none',
-			recurring_days  INTEGER NOT NULL DEFAULT 0,
-			completed_at    TEXT    NOT NULL DEFAULT '',
+			note_id                                    INTEGER PRIMARY KEY,
+			status                                     TEXT    NOT NULL DEFAULT 'todo',
+			difficulty                                 INTEGER NOT NULL DEFAULT 0,
+			fun                                        INTEGER NOT NULL DEFAULT 0,
+			priority                                   INTEGER NOT NULL DEFAULT 0,
+			description                                TEXT    NOT NULL DEFAULT '',
+			due_date                                   TEXT    NOT NULL DEFAULT '',
+			time_estimation                            TEXT    NOT NULL DEFAULT '',
+			time_used                                  TEXT    NOT NULL DEFAULT '',
+			recurring                                  TEXT    NOT NULL DEFAULT 'none',
+			recurring_days                             INTEGER NOT NULL DEFAULT 0,
+			completed_at                               TEXT    NOT NULL DEFAULT '',
+			pending_does_not_force_daily_inclusion     INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
 		CREATE INDEX IF NOT EXISTS idx_ct_task_config_status
@@ -48,22 +49,27 @@ func (p *TaskPlugin) InitSchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_ct_task_config_priority
 			ON ct_task_config(priority);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	db.Exec(`ALTER TABLE ct_task_config ADD COLUMN pending_does_not_force_daily_inclusion INTEGER NOT NULL DEFAULT 0`)
+	return nil
 }
 
 // TaskConfig is the JSON structure for task configuration.
 type TaskConfig struct {
-	Status         string `json:"status"`          // "todo", "in_progress", "done"
-	Difficulty     int    `json:"difficulty"`      // 0 to 10
-	Fun            int    `json:"fun"`             // -5 to 5
-	Priority       int    `json:"priority"`        // 0 to 10
-	Description    string `json:"description"`     // detailed task description
-	DueDate        string `json:"due_date"`        // ISO 8601 date or empty
-	TimeEstimation string `json:"time_estimation"` // e.g. "2h", "30m", "1d"
-	TimeUsed       string `json:"time_used"`       // e.g. "1h30m"
-	Recurring      string `json:"recurring"`       // "none", "daily", "weekly", "monthly", "custom"
-	RecurringDays  int    `json:"recurring_days"`  // custom interval in days
-	CompletedAt    string `json:"completed_at"`    // ISO 8601 timestamp
+	Status                            string `json:"status"`          // "todo", "in_progress", "done"
+	Difficulty                        int    `json:"difficulty"`      // 0 to 10
+	Fun                               int    `json:"fun"`             // -5 to 5
+	Priority                          int    `json:"priority"`        // 0 to 10
+	Description                       string `json:"description"`     // detailed task description
+	DueDate                           string `json:"due_date"`        // ISO 8601 date or empty
+	TimeEstimation                    string `json:"time_estimation"` // e.g. "2h", "30m", "1d"
+	TimeUsed                          string `json:"time_used"`       // e.g. "1h30m"
+	Recurring                         string `json:"recurring"`       // "none", "daily", "weekly", "monthly", "custom"
+	RecurringDays                     int    `json:"recurring_days"`  // custom interval in days
+	CompletedAt                       string `json:"completed_at"`    // ISO 8601 timestamp
+	PendingDoesNotForceDailyInclusion bool   `json:"pending_does_not_force_daily_inclusion"`
 }
 
 // SetStatusParams is the JSON body for the set_status action.
@@ -96,7 +102,7 @@ func (p *TaskPlugin) Manifest() notetype.Manifest {
 		Description:   "A task with priority, difficulty, fun, due date, time tracking, and recurrence",
 		Category:      "Productivity",
 		SortOrder:     400,
-		DefaultConfig: json.RawMessage(`{"status":"todo","difficulty":0,"fun":0,"priority":0,"description":"","due_date":"","time_estimation":"","time_used":"","recurring":"none","recurring_days":0,"completed_at":""}`),
+		DefaultConfig: json.RawMessage(`{"status":"todo","difficulty":0,"fun":0,"priority":0,"description":"","due_date":"","time_estimation":"","time_used":"","recurring":"none","recurring_days":0,"completed_at":"","pending_does_not_force_daily_inclusion":false}`),
 		Editor: notetype.EditorMeta{
 			Mode: "custom",
 			Schema: json.RawMessage(`[
@@ -136,6 +142,11 @@ func (p *TaskPlugin) Manifest() notetype.Manifest {
 		"max": "5",
 		"step": "1",
 		"help": "-5 = dreadful, 0 = neutral, 5 = amazing"
+	},
+	{
+		"$formkit": "checkbox",
+		"name": "pending_does_not_force_daily_inclusion",
+		"label": "Don't auto-include this task in Daily Tasks while it is In Progress"
 	},
 	{
 		"$formkit": "textarea",
@@ -254,14 +265,14 @@ func (p *TaskPlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, not
 	}
 
 	query := fmt.Sprintf(
-		`INSERT INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)`, completedAtSQL)
+		`INSERT INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at, pending_does_not_force_daily_inclusion)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s, ?)`, completedAtSQL)
 
 	args := []interface{}{
 		noteID, cfg.Status, cfg.Difficulty, cfg.Fun, cfg.Priority,
 		strings.TrimSpace(cfg.Description), strings.TrimSpace(cfg.DueDate),
 		strings.TrimSpace(cfg.TimeEstimation), strings.TrimSpace(cfg.TimeUsed),
-		cfg.Recurring, cfg.RecurringDays,
+		cfg.Recurring, cfg.RecurringDays, cfg.PendingDoesNotForceDailyInclusion,
 	}
 	if completedAtArg != nil {
 		args = append(args, completedAtArg)
@@ -277,12 +288,12 @@ func (p *TaskPlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, not
 func (p *TaskPlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, noteID int64) (json.RawMessage, error) {
 	var cfg TaskConfig
 	err := db.QueryRow(
-		`SELECT status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, COALESCE(completed_at, '')
+		`SELECT status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, COALESCE(completed_at, ''), COALESCE(pending_does_not_force_daily_inclusion, 0)
 		 FROM ct_task_config WHERE note_id = ?`,
 		noteID,
 	).Scan(&cfg.Status, &cfg.Difficulty, &cfg.Fun, &cfg.Priority,
 		&cfg.Description, &cfg.DueDate, &cfg.TimeEstimation, &cfg.TimeUsed,
-		&cfg.Recurring, &cfg.RecurringDays, &cfg.CompletedAt)
+		&cfg.Recurring, &cfg.RecurringDays, &cfg.CompletedAt, &cfg.PendingDoesNotForceDailyInclusion)
 	if err == sql.ErrNoRows {
 		defaultCfg := TaskConfig{Status: "todo"}
 		return json.Marshal(defaultCfg)
@@ -319,11 +330,11 @@ func setTaskStatus(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 	// Read current config to preserve all fields.
 	var cfg TaskConfig
 	err := db.QueryRow(
-		`SELECT status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, COALESCE(completed_at, '')
-		 FROM ct_task_config WHERE note_id = ?`, noteID,
+		`SELECT status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, COALESCE(completed_at, ''), COALESCE(pending_does_not_force_daily_inclusion, 0)
+	 FROM ct_task_config WHERE note_id = ?`, noteID,
 	).Scan(&cfg.Status, &cfg.Difficulty, &cfg.Fun, &cfg.Priority,
 		&cfg.Description, &cfg.DueDate, &cfg.TimeEstimation, &cfg.TimeUsed,
-		&cfg.Recurring, &cfg.RecurringDays, &cfg.CompletedAt)
+		&cfg.Recurring, &cfg.RecurringDays, &cfg.CompletedAt, &cfg.PendingDoesNotForceDailyInclusion)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No config yet — use defaults.
@@ -339,11 +350,11 @@ func setTaskStatus(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 	}
 
 	_, err = db.Exec(
-		`INSERT OR REPLACE INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at, pending_does_not_force_daily_inclusion)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		noteID, cfg.Status, cfg.Difficulty, cfg.Fun, cfg.Priority,
 		cfg.Description, cfg.DueDate, cfg.TimeEstimation, cfg.TimeUsed,
-		cfg.Recurring, cfg.RecurringDays, cfg.CompletedAt,
+		cfg.Recurring, cfg.RecurringDays, cfg.CompletedAt, cfg.PendingDoesNotForceDailyInclusion,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("task: update status: %w", err)
