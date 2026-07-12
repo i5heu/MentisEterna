@@ -150,8 +150,9 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] Get rid of the auth proxy, rather harden code
 
 ## TODO Future
-- [ ] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
+- [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] Setup building pipeline
+- [ ] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
 - [x] Connected/Disconnected and ping indicator.
 - [x] Websocket for real time updates of notes, jobs and other stuff
 - [x] OCR for images and pdfs

@@ -24,6 +24,7 @@ func (p *TaskOverviewPlugin) InitSchema(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_taskoverview_daily (
 			overview_note_id INTEGER NOT NULL,
+			generation_id    TEXT    NOT NULL DEFAULT '',
 			task_note_id     INTEGER NOT NULL,
 			assigned_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
 			position         INTEGER NOT NULL DEFAULT 0,
@@ -32,6 +33,8 @@ func (p *TaskOverviewPlugin) InitSchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_ov
 			ON ct_taskoverview_daily(overview_note_id, assigned_at);
+		CREATE INDEX IF NOT EXISTS idx_ct_taskoverview_daily_generation
+			ON ct_taskoverview_daily(overview_note_id, generation_id);
 		CREATE TABLE IF NOT EXISTS ct_taskoverview_config (
 			note_id                 INTEGER PRIMARY KEY,
 			daily_task_count        INTEGER NOT NULL DEFAULT 3,
@@ -50,6 +53,7 @@ func (p *TaskOverviewPlugin) InitSchema(db *sql.DB) error {
 	}
 
 	// Best-effort migrations for older databases.
+	db.Exec(`ALTER TABLE ct_taskoverview_daily ADD COLUMN generation_id TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE ct_taskoverview_daily ADD COLUMN position INTEGER NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE ct_taskoverview_config ADD COLUMN daily_task_count INTEGER NOT NULL DEFAULT 3`)
 	db.Exec(`ALTER TABLE ct_taskoverview_config ADD COLUMN urgent_due_days INTEGER NOT NULL DEFAULT 3`)
