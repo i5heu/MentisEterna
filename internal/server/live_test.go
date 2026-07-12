@@ -308,3 +308,48 @@ func TestGenerateTitleTaskBroadcastsNoteChange(t *testing.T) {
 	}
 	assertNoteIDsEqual(t, msg.NoteIDs, note.ID)
 }
+
+func TestWebSocketAppPingPong(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer(t)
+	token := createTestSession(t, s)
+	httpServer, wsURL := newLiveTestHTTPServer(t, s)
+
+	conn, _, err := dialLiveWebSocket(t, wsURL, token, httpServer.URL)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	requireLiveMessageType(t, conn, liveTypeReady)
+
+	// Send application-level ping.
+	beforeSend := time.Now()
+	if err := conn.WriteJSON(map[string]string{"type": "ping"}); err != nil {
+		t.Fatalf("write ping: %v", err)
+	}
+
+	// Expect a pong response.
+	msg := requireLiveMessageType(t, conn, "pong")
+	rtt := time.Since(beforeSend)
+	if rtt > 2*time.Second {
+		t.Errorf("pong RTT too high: %v", rtt)
+	}
+	if msg.Timestamp == "" {
+		t.Error("pong message has empty timestamp")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, msg.Timestamp); err != nil {
+		t.Errorf("pong timestamp %q is not valid RFC3339Nano: %v", msg.Timestamp, err)
+	}
+
+	// Verify the connection is still healthy by sending another ping and
+	// checking the channel is not closed.
+	if err := conn.WriteJSON(map[string]string{"type": "ping"}); err != nil {
+		t.Fatalf("write second ping: %v", err)
+	}
+	msg2 := requireLiveMessageType(t, conn, "pong")
+	if msg2.Timestamp == "" {
+		t.Error("second pong message has empty timestamp")
+	}
+}

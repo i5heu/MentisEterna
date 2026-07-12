@@ -152,6 +152,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 ## TODO Future
 - [ ] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] Setup building pipeline
+- [ ] Connected/Disconnected and ping indicator.
 - [x] Websocket for real time updates of notes, jobs and other stuff
 - [x] OCR for images and pdfs
 - [x] If not selecting or focusing somethign, pressing "u" should open the parent in main.
