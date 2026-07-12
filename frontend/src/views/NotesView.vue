@@ -2023,7 +2023,8 @@ function expandActiveSearchSection() {
     activeSearchSectionKey.value = key;
     setCollapsedSection(searchCollapsedSections, key, false);
     highlightedIndex.value = searchSelectableEntries.value.findIndex(
-        (candidate) => candidate.kind === "section" && candidate.key === key,
+        (candidate) =>
+            candidate.kind === "result" && candidate.section?.key === key,
     );
     return highlightedIndex.value >= 0;
 }
@@ -2043,16 +2044,16 @@ function onSearchFieldKeydown(event) {
         return;
     }
     if (event.key === "ArrowLeft") {
-        if (collapseActiveSearchSection()) {
-            event.preventDefault();
-        }
+        event.preventDefault();
+        collapseActiveSearchSection();
         return;
     }
     if (event.key === "ArrowRight") {
-        if (expandActiveSearchSection()) {
-            event.preventDefault();
-        }
+        event.preventDefault();
+        expandActiveSearchSection();
+        return;
     }
+    exitSearchSelectionMode();
 }
 
 function onParentFieldKeydown(event) {
@@ -2070,15 +2071,13 @@ function onParentFieldKeydown(event) {
         return;
     }
     if (event.key === "ArrowLeft") {
-        if (collapseActiveParentSection()) {
-            event.preventDefault();
-        }
+        event.preventDefault();
+        collapseActiveParentSection();
         return;
     }
     if (event.key === "ArrowRight") {
-        if (expandActiveParentSection()) {
-            event.preventDefault();
-        }
+        event.preventDefault();
+        expandActiveParentSection();
     }
 }
 
@@ -2211,7 +2210,13 @@ function openOptions() {
     emit("navigate-options");
 }
 
+function exitSearchSelectionMode() {
+    searchKeyboardMode.value = false;
+    highlightedIndex.value = -1;
+}
+
 function focusSearchInput() {
+    exitSearchSelectionMode();
     const input = searchInputEl.value || document.querySelector(".search-input");
     if (input) input.focus();
 }
@@ -2295,7 +2300,7 @@ const shortcutDefinitions = computed(() => [
         id: "focus-search",
         description: "Focus the search bar",
         hintKey: "/",
-        keys: ["Mod+K"],
+        keys: ["Mod+K", "Ctrl+/"],
         allowInInput: true,
         handler: () => focusSearchInput(),
     },
@@ -3807,8 +3812,7 @@ function handleEscapeShortcut(event) {
         return;
     }
     if (highlightedIndex.value >= 0) {
-        highlightedIndex.value = -1;
-        searchKeyboardMode.value = false;
+        exitSearchSelectionMode();
         return;
     }
     if (isEditableElement(active)) {
