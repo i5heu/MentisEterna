@@ -620,14 +620,29 @@ func TestHandleWebSocketMethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestHandleWebSocketRequiresAuth(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	s.handleWebSocket(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestHandleWebSocketNilLiveHub(t *testing.T) {
 	t.Parallel()
 
 	// Guards against handleWebSocket called on a Server with no liveHub.
 	// Failure mode: nil pointer dereference on s.liveHub access.
-	s := &Server{liveHub: nil}
+	s := newTestServer(t)
+	token := createTestSession(t, s)
+	s.liveHub = nil
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	r.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
 	s.handleWebSocket(w, r)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
