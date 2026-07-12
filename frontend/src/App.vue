@@ -16,8 +16,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from "vue";
-import { fetchSession } from "./api.js";
+import { ref, watch, onMounted, onUnmounted } from "vue";
+import { fetchSession, startLiveUpdates, stopLiveUpdates } from "./api.js";
 import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
 import OptionsView from "./views/OptionsView.vue";
@@ -53,6 +53,18 @@ async function bootstrapSession() {
     }
 }
 
+watch(
+    token,
+    (nextToken) => {
+        if (nextToken) {
+            startLiveUpdates();
+        } else {
+            stopLiveUpdates();
+        }
+    },
+    { immediate: true },
+);
+
 onMounted(() => {
     window.addEventListener("auth:unauthorized", onAuthUnauthorized);
     bootstrapSession();
@@ -60,6 +72,7 @@ onMounted(() => {
 
 onUnmounted(() => {
     window.removeEventListener("auth:unauthorized", onAuthUnauthorized);
+    stopLiveUpdates();
 });
 </script>
 

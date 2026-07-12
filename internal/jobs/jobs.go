@@ -48,6 +48,17 @@ type Run struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
+// RunEvent is a lightweight lifecycle notification for a job run.
+type RunEvent struct {
+	Type     string  `json:"type"`
+	RunID    int64   `json:"run_id"`
+	PluginID string  `json:"plugin_id"`
+	JobName  string  `json:"job_name"`
+	Status   string  `json:"status"`
+	Result   *string `json:"result,omitempty"`
+	Error    *string `json:"error,omitempty"`
+}
+
 // ListResponse is the response for GET /jobs.
 type ListResponse struct {
 	Runs         []Run `json:"runs"`
@@ -73,6 +84,9 @@ type Manager struct {
 	tasks   map[int64]func(*sql.DB, []byte) (string, error)
 	defs    map[int64]jobDefMeta
 	tasksMu sync.RWMutex
+
+	observerMu sync.RWMutex
+	observer   func(RunEvent)
 }
 
 // NewManager creates a new job Manager with the given number of workers.
@@ -97,6 +111,16 @@ func (m *Manager) WorkerCount() int {
 		return 0
 	}
 	return m.workers
+}
+
+// SetObserver registers a callback for job lifecycle notifications.
+func (m *Manager) SetObserver(fn func(RunEvent)) {
+	if m == nil {
+		return
+	}
+	m.observerMu.Lock()
+	m.observer = fn
+	m.observerMu.Unlock()
 }
 
 // UpsertDefinitions upserts job_definitions rows from the provided cron jobs.
@@ -340,6 +364,7 @@ func (m *Manager) Enqueue(pluginID, jobName string, payload []byte) (int64, erro
 	id, _ := res.LastInsertId()
 	meta := m.lookupDefinition(jobID)
 	log.Printf("jobs: enqueued run=%d %s payload_bytes=%d payload_preview=%q", id, formatJobMeta(meta), len(payload), previewText(string(payload), 160))
+	m.emitEvent(RunEvent{Type: "enqueued", RunID: id, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
 	return id, nil
 }
 
@@ -428,6 +453,7 @@ func (m *Manager) RetryRun(runID int64) (int64, error) {
 	id, _ := res.LastInsertId()
 	meta := m.lookupDefinition(jobID)
 	log.Printf("jobs: retried run=%d as run=%d %s payload_bytes=%d payload_preview=%q", runID, id, formatJobMeta(meta), len(derefString(payload)), previewText(derefString(payload), 160))
+	m.emitEvent(RunEvent{Type: "retried", RunID: id, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
 	return id, nil
 }
 
@@ -450,6 +476,7 @@ func (m *Manager) CancelRun(runID int64) error {
 	_ = m.db.QueryRow(`SELECT job_id FROM job_runs WHERE id = ?`, runID).Scan(&jobID)
 	meta := m.lookupDefinition(jobID)
 	log.Printf("jobs: cancelled run=%d %s", runID, formatJobMeta(meta))
+	m.emitEvent(RunEvent{Type: "cancelled", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusCancelled})
 	return nil
 }
 
@@ -506,6 +533,7 @@ func (m *Manager) runScheduler(defID int64, schedule string, wg *sync.WaitGroup)
 		}
 		runID, _ := res.LastInsertId()
 		log.Printf("jobs: scheduler enqueued run=%d %s", runID, formatJobMeta(meta))
+		m.emitEvent(RunEvent{Type: "enqueued", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
 	}
 }
 
@@ -541,6 +569,7 @@ func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 			meta = m.lookupDefinition(jobID)
 		}
 		log.Printf("jobs: worker=%d claimed run=%d %s payload_bytes=%d payload_preview=%q", id, runID, formatJobMeta(meta), len(payload), previewText(string(payload), 160))
+		m.emitEvent(RunEvent{Type: "running", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusRunning})
 
 		if !hasTask || task == nil {
 			log.Printf("jobs: worker=%d no task registered run=%d %s", id, runID, formatJobMeta(meta))
@@ -548,6 +577,8 @@ func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 				`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
 				StatusErrored, "No task registered for this job definition", runID,
 			)
+			errMsg := "No task registered for this job definition"
+			m.emitEvent(RunEvent{Type: "errored", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusErrored, Error: &errMsg})
 			continue
 		}
 
@@ -562,6 +593,7 @@ func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 						`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
 						StatusErrored, errMsg, runID,
 					)
+					m.emitEvent(RunEvent{Type: "errored", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusErrored, Error: &errMsg})
 				}
 			}()
 
@@ -575,12 +607,14 @@ func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
 					`UPDATE job_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?`,
 					StatusErrored, now, errStr, runID,
 				)
+				m.emitEvent(RunEvent{Type: "errored", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusErrored, Error: &errStr})
 			} else {
 				log.Printf("jobs: worker=%d done run=%d %s duration=%s result=%q", id, runID, formatJobMeta(meta), duration, previewText(result, 240))
 				m.db.Exec(
 					`UPDATE job_runs SET status = ?, finished_at = ?, result = ? WHERE id = ?`,
 					StatusDone, now, result, runID,
 				)
+				m.emitEvent(RunEvent{Type: "done", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusDone, Result: &result})
 			}
 		}()
 	}
@@ -653,6 +687,18 @@ func (m *Manager) taskAndDefinition(jobID int64) (func(*sql.DB, []byte) (string,
 	task, ok := m.tasks[jobID]
 	meta := m.defs[jobID]
 	return task, meta, ok
+}
+
+func (m *Manager) emitEvent(evt RunEvent) {
+	if m == nil {
+		return
+	}
+	m.observerMu.RLock()
+	observer := m.observer
+	m.observerMu.RUnlock()
+	if observer != nil {
+		observer(evt)
+	}
 }
 
 func (m *Manager) lookupDefinition(jobID int64) jobDefMeta {

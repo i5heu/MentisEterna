@@ -178,7 +178,7 @@ func cleanRequestPath(p string) string {
 
 func isAPIPath(p string) bool {
 	p = cleanRequestPath(p)
-	return p == "/health" || p == "/session" || p == "/logout" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
+	return p == "/health" || p == "/session" || p == "/logout" || p == "/ws" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
 		p == "/note-types" ||
 		p == "/jobs" || strings.HasPrefix(p, "/jobs/") ||
 		strings.HasPrefix(p, "/webauthn/") || strings.HasPrefix(p, "/file/") ||

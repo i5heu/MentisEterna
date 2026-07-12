@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	appContentSecurityPolicy  = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'"
+	appContentSecurityPolicy  = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:; form-action 'self'"
 	fileContentSecurityPolicy = "default-src 'none'; frame-ancestors 'none'; sandbox"
 )
 

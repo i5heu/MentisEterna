@@ -38,6 +38,7 @@ type Server struct {
 	jobManager    *jobs.Manager
 	mediaService  *media.Service
 	backupService *backup.Service
+	liveHub       *liveHub
 }
 
 func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
@@ -71,6 +72,14 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 	}
 
 	jobMgr := jobs.NewManager(d.DB, envOrInt("JOB_WORKERS", 10))
+	liveHub := newLiveHub()
+	jobMgr.SetObserver(func(evt jobs.RunEvent) {
+		liveHub.broadcast(liveMessage{
+			Type:      liveTypeJobsChange,
+			Timestamp: liveTimestamp(),
+			Job:       &evt,
+		})
+	})
 
 	// Media subsystem: set up cache, S3 store, and the service orchestrator.
 	var mediaSvc *media.Service
@@ -115,6 +124,7 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		jobManager:    jobMgr,
 		mediaService:  mediaSvc,
 		backupService: backupSvc,
+		liveHub:       liveHub,
 	}
 }
 
@@ -247,6 +257,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.Handle("/session", protected(s.handleSession))
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.Handle("/ws", protected(s.handleWebSocket))
 	mux.Handle("/notes", protected(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

@@ -35,7 +35,9 @@ func (s *Server) classifyRecipeIngredientsForNotes(noteIDs ...int64) {
 		defer release()
 		if err := recipeplugin.CategorizeIngredientsForNotesWithWorkers(context.Background(), dbConn, embedder, ids, workers); err != nil {
 			log.Printf("recipe: categorize ingredients for notes %v: %v", ids, err)
+			return
 		}
+		s.notifyNotesChanged("recipe_categories_updated", ids...)
 	}()
 }
 
@@ -113,10 +115,36 @@ func (s *Server) classifyAllRecipeIngredients(ctx context.Context, dbConn *sql.D
 	return len(noteIDs), ingredientCount, nil
 }
 
+func (s *Server) recipeNoteIDs(ctx context.Context, dbConn *sql.DB) ([]int64, error) {
+	rows, err := dbConn.QueryContext(ctx, `SELECT id FROM notes WHERE type = 'recipe' ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("load recipe note ids: %w", err)
+	}
+	defer rows.Close()
+
+	noteIDs := make([]int64, 0)
+	for rows.Next() {
+		var noteID int64
+		if err := rows.Scan(&noteID); err != nil {
+			return nil, fmt.Errorf("scan recipe note id: %w", err)
+		}
+		noteIDs = append(noteIDs, noteID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return noteIDs, nil
+}
+
 func (s *Server) recalculateRecipeIngredientCategoriesTask(dbConn *sql.DB, _ []byte) (string, error) {
+	noteIDs, err := s.recipeNoteIDs(context.Background(), dbConn)
+	if err != nil {
+		return "", err
+	}
 	recipeCount, ingredientCount, err := s.classifyAllRecipeIngredients(context.Background(), dbConn)
 	if err != nil {
 		return "", err
 	}
+	s.notifyNotesChanged("recipe_categories_recalculated", noteIDs...)
 	return fmt.Sprintf("Recalculated grocery categories for %d ingredients across %d recipe notes", ingredientCount, recipeCount), nil
 }

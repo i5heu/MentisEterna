@@ -25,6 +25,113 @@ function authOnlyHeaders(_token) {
     return {};
 }
 
+let liveSocket = null;
+let liveReconnectTimer = null;
+let liveReconnectAttempt = 0;
+let liveConnectionDesired = false;
+
+function dispatchWindowEvent(name, detail) {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+function buildLiveURL() {
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${scheme}://${window.location.host}/ws`;
+}
+
+function scheduleLiveReconnect() {
+    if (!liveConnectionDesired || liveReconnectTimer) return;
+    const delay = Math.min(1000 * 2 ** liveReconnectAttempt, 10000);
+    liveReconnectAttempt += 1;
+    liveReconnectTimer = window.setTimeout(() => {
+        liveReconnectTimer = null;
+        openLiveSocket();
+    }, delay);
+}
+
+function openLiveSocket() {
+    if (typeof window === "undefined" || typeof WebSocket === "undefined") {
+        return;
+    }
+    if (
+        liveSocket &&
+        (liveSocket.readyState === WebSocket.OPEN ||
+            liveSocket.readyState === WebSocket.CONNECTING)
+    ) {
+        return;
+    }
+
+    const socket = new WebSocket(buildLiveURL());
+    liveSocket = socket;
+    dispatchWindowEvent("live:status", { connected: false, connecting: true });
+
+    socket.onopen = () => {
+        if (liveSocket !== socket) {
+            socket.close();
+            return;
+        }
+        liveReconnectAttempt = 0;
+        dispatchWindowEvent("live:status", {
+            connected: true,
+            connecting: false,
+        });
+    };
+
+    socket.onmessage = (event) => {
+        try {
+            const payload = JSON.parse(event.data);
+            dispatchWindowEvent("live:message", payload);
+        } catch (error) {
+            console.error("live message parse failed", error);
+        }
+    };
+
+    socket.onerror = () => {
+        socket.close();
+    };
+
+    socket.onclose = () => {
+        if (liveSocket === socket) {
+            liveSocket = null;
+        }
+        dispatchWindowEvent("live:status", {
+            connected: false,
+            connecting: false,
+        });
+        scheduleLiveReconnect();
+    };
+}
+
+export function startLiveUpdates() {
+    liveConnectionDesired = true;
+    openLiveSocket();
+}
+
+export function stopLiveUpdates() {
+    liveConnectionDesired = false;
+    liveReconnectAttempt = 0;
+    if (liveReconnectTimer) {
+        window.clearTimeout(liveReconnectTimer);
+        liveReconnectTimer = null;
+    }
+    if (liveSocket) {
+        const socket = liveSocket;
+        liveSocket = null;
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+        if (
+            socket.readyState === WebSocket.OPEN ||
+            socket.readyState === WebSocket.CONNECTING
+        ) {
+            socket.close();
+        }
+    }
+    dispatchWindowEvent("live:status", { connected: false, connecting: false });
+}
+
 export async function login(username, password) {
     return request("/login", {
         method: "POST",
