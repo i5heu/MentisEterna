@@ -222,6 +222,7 @@ const registry = [
             recurring: "none",
             recurring_days: 0,
             completed_at: "",
+            pending_does_not_force_daily_inclusion: false,
         }),
         normalizeCustomData(raw, _note) {
             if (!raw || typeof raw !== "object") {
@@ -237,6 +238,7 @@ const registry = [
                     recurring: "none",
                     recurring_days: 0,
                     completed_at: "",
+                    pending_does_not_force_daily_inclusion: false,
                 };
             }
             return {
@@ -251,6 +253,8 @@ const registry = [
                 recurring: raw.recurring || "none",
                 recurring_days: raw.recurring_days ?? 0,
                 completed_at: raw.completed_at || "",
+                pending_does_not_force_daily_inclusion:
+                    raw.pending_does_not_force_daily_inclusion ?? false,
             };
         },
         supportsSchemaFallback: false,
@@ -263,7 +267,16 @@ const registry = [
             () => import("./taskoverview/TaskOverviewNoteType.vue"),
         ),
         emptyCustomData: () => ({
+            daily_task_count: 3,
+            urgent_due_days: 3,
+            priority_weight: 4,
+            due_urgency_weight: 6,
+            difficulty_weight: -1,
+            fun_weight: 0.75,
+            time_estimation_weight: -0.5,
+            fun_time_weight: 0.1,
             tasks: [],
+            scored_open_tasks: [],
             daily_tasks: [],
             daily_history: [],
             stats: {},
@@ -271,14 +284,34 @@ const registry = [
         normalizeCustomData(raw, _note) {
             if (!raw || typeof raw !== "object") {
                 return {
+                    daily_task_count: 3,
+                    urgent_due_days: 3,
+                    priority_weight: 4,
+                    due_urgency_weight: 6,
+                    difficulty_weight: -1,
+                    fun_weight: 0.75,
+                    time_estimation_weight: -0.5,
+                    fun_time_weight: 0.1,
                     tasks: [],
+                    scored_open_tasks: [],
                     daily_tasks: [],
                     daily_history: [],
                     stats: {},
                 };
             }
             return {
+                daily_task_count: raw.daily_task_count ?? 3,
+                urgent_due_days: raw.urgent_due_days ?? 3,
+                priority_weight: raw.priority_weight ?? 4,
+                due_urgency_weight: raw.due_urgency_weight ?? 6,
+                difficulty_weight: raw.difficulty_weight ?? -1,
+                fun_weight: raw.fun_weight ?? 0.75,
+                time_estimation_weight: raw.time_estimation_weight ?? -0.5,
+                fun_time_weight: raw.fun_time_weight ?? 0.1,
                 tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
+                scored_open_tasks: Array.isArray(raw.scored_open_tasks)
+                    ? raw.scored_open_tasks
+                    : [],
                 daily_tasks: Array.isArray(raw.daily_tasks)
                     ? raw.daily_tasks
                     : [],

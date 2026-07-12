@@ -9,6 +9,16 @@ import (
 
 func TestTaskOverviewPlugin(t *testing.T) {
 	plugintest.Run(t, &TaskOverviewPlugin{}, plugintest.TestData{
-		// Task overview has no config, but the harness still checks ViewBuilder and ActionHandler.
+		ValidPayload: `{
+			"daily_task_count": 4,
+			"urgent_due_days": 2,
+			"priority_weight": 5,
+			"due_urgency_weight": 7,
+			"difficulty_weight": -1,
+			"fun_weight": 0.5,
+			"time_estimation_weight": -0.25,
+			"fun_time_weight": 0.2
+		}`,
+		InvalidPayload: `{"daily_task_count":0,"priority_weight":1000}`,
 	})
 }

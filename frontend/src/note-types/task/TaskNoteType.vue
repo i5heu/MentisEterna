@@ -54,6 +54,25 @@
             }}</span>
         </div>
 
+        <!-- Daily generation inclusion -->
+        <div class="task-field">
+            <label class="task-label">Daily Task Generation</label>
+            <label v-if="editing" class="task-checkbox-row">
+                <input
+                    v-model="localPendingDoesNotForceDailyInclusion"
+                    type="checkbox"
+                />
+                <span>Don't auto-include this task while it is In Progress</span>
+            </label>
+            <span v-else class="task-value">
+                {{
+                    localPendingDoesNotForceDailyInclusion
+                        ? "In-progress does not force daily inclusion"
+                        : "In-progress will always be included in daily generation"
+                }}
+            </span>
+        </div>
+
         <!-- Priority -->
         <div class="task-field">
             <label class="task-label">
@@ -256,6 +275,7 @@ const localTimeUsed = ref("");
 const localRecurring = ref("none");
 const localRecurringDays = ref(0);
 const localCompletedAt = ref("");
+const localPendingDoesNotForceDailyInclusion = ref(false);
 
 let hydrating = false;
 
@@ -273,6 +293,8 @@ function hydrateFromProp() {
     localRecurring.value = cd.recurring || "none";
     localRecurringDays.value = cd.recurring_days ?? 0;
     localCompletedAt.value = cd.completed_at || "";
+    localPendingDoesNotForceDailyInclusion.value =
+        cd.pending_does_not_force_daily_inclusion ?? false;
     hydrating = false;
 }
 
@@ -304,6 +326,8 @@ function emitCustomData() {
         recurring: localRecurring.value,
         recurring_days: localRecurringDays.value,
         completed_at: localCompletedAt.value,
+        pending_does_not_force_daily_inclusion:
+            localPendingDoesNotForceDailyInclusion.value,
     });
 }
 
@@ -319,6 +343,7 @@ watch(
         localTimeUsed,
         localRecurring,
         localRecurringDays,
+        localPendingDoesNotForceDailyInclusion,
     ],
     emitCustomData,
     { deep: false },
@@ -443,6 +468,14 @@ onBeforeUnmount(unsubStatus);
 .task-text:focus {
     border-color: var(--accent-teal);
     outline: none;
+}
+
+.task-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--font-color);
 }
 
 .task-number {

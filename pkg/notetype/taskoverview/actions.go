@@ -29,10 +29,11 @@ func handleQuickSetStatus(db *sql.DB, params json.RawMessage) (any, error) {
 	// Read current config to preserve other fields.
 	var status, completedAt, description, dueDate, timeEst, timeUsed, recurring string
 	var difficulty, fun, priority, recurringDays int
+	var pendingDoesNotForceDailyInclusion bool
 	err := db.QueryRow(
-		`SELECT status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, COALESCE(completed_at, '')
+		`SELECT status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, COALESCE(completed_at, ''), COALESCE(pending_does_not_force_daily_inclusion, 0)
 		 FROM ct_task_config WHERE note_id = ?`, p.TaskNoteID,
-	).Scan(&status, &difficulty, &fun, &priority, &description, &dueDate, &timeEst, &timeUsed, &recurring, &recurringDays, &completedAt)
+	).Scan(&status, &difficulty, &fun, &priority, &description, &dueDate, &timeEst, &timeUsed, &recurring, &recurringDays, &completedAt, &pendingDoesNotForceDailyInclusion)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No config yet — create one.
@@ -41,8 +42,8 @@ func handleQuickSetStatus(db *sql.DB, params json.RawMessage) (any, error) {
 				now = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 			}
 			_, err = db.Exec(
-				`INSERT INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at)
-				 VALUES (?, ?, 0, 0, 0, '', '', '', '', 'none', 0, ?)`,
+				`INSERT INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at, pending_does_not_force_daily_inclusion)
+				 VALUES (?, ?, 0, 0, 0, '', '', '', '', 'none', 0, ?, 0)`,
 				p.TaskNoteID, p.Status, now,
 			)
 		} else {
@@ -56,9 +57,9 @@ func handleQuickSetStatus(db *sql.DB, params json.RawMessage) (any, error) {
 			now = ""
 		}
 		_, err = db.Exec(
-			`INSERT OR REPLACE INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			p.TaskNoteID, p.Status, difficulty, fun, priority, description, dueDate, timeEst, timeUsed, recurring, recurringDays, now,
+			`INSERT OR REPLACE INTO ct_task_config (note_id, status, difficulty, fun, priority, description, due_date, time_estimation, time_used, recurring, recurring_days, completed_at, pending_does_not_force_daily_inclusion)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			p.TaskNoteID, p.Status, difficulty, fun, priority, description, dueDate, timeEst, timeUsed, recurring, recurringDays, now, pendingDoesNotForceDailyInclusion,
 		)
 	}
 	if err != nil {
