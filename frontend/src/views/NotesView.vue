@@ -678,6 +678,7 @@
                                     @keyup="
                                         onLinkEditorCaretMove('body', $event)
                                     "
+                                    @keydown="onLinkEditorKeydown('body', $event)"
                                     @scroll="onLinkEditorScroll('body')"
                                     @dragover.prevent
                                     @drop.prevent="onBodyDrop"
@@ -718,7 +719,18 @@
                                         <button
                                             type="button"
                                             class="link-search-section-header"
-                                            :class="{ collapsed: section.collapsed }"
+                                            :class="{
+                                                collapsed: section.collapsed,
+                                                highlighted:
+                                                    linkKeyboardMode &&
+                                                    linkSearchIndex >= 0 &&
+                                                    linkSelectableEntries[
+                                                        linkSearchIndex
+                                                    ]?.kind === 'section' &&
+                                                    linkSelectableEntries[
+                                                        linkSearchIndex
+                                                    ]?.key === section.key,
+                                            }"
                                             @click="toggleLinkSearchSection(section.key)"
                                         >
                                             <span class="link-search-section-heading">
@@ -736,8 +748,14 @@
                                             class="link-search-item"
                                             :class="{
                                                 highlighted:
-                                                    item.flatIndex ===
-                                                    linkSearchIndex,
+                                                    linkKeyboardMode &&
+                                                    linkSearchIndex >= 0 &&
+                                                    linkSelectableEntries[
+                                                        linkSearchIndex
+                                                    ]?.kind === 'result' &&
+                                                    linkSelectableEntries[
+                                                        linkSearchIndex
+                                                    ]?.item?.key === item.key,
                                             }"
                                             @click="selectLinkResult(item.result)"
                                             @mouseenter="
@@ -963,6 +981,7 @@
                             @input="onLinkEditorInput('reply')"
                             @click="onLinkEditorCaretMove('reply', $event)"
                             @keyup="onLinkEditorCaretMove('reply', $event)"
+                            @keydown="onLinkEditorKeydown('reply', $event)"
                             @scroll="onLinkEditorScroll('reply')"
                             @keydown.enter.meta.exact="sendReply"
                             @keydown.enter.ctrl.exact="sendReply"
@@ -1018,7 +1037,18 @@
                                 <button
                                     type="button"
                                     class="link-search-section-header"
-                                    :class="{ collapsed: section.collapsed }"
+                                    :class="{
+                                        collapsed: section.collapsed,
+                                        highlighted:
+                                            linkKeyboardMode &&
+                                            linkSearchIndex >= 0 &&
+                                            linkSelectableEntries[
+                                                linkSearchIndex
+                                            ]?.kind === 'section' &&
+                                            linkSelectableEntries[
+                                                linkSearchIndex
+                                            ]?.key === section.key,
+                                    }"
                                     @click="toggleLinkSearchSection(section.key)"
                                 >
                                     <span class="link-search-section-heading">
@@ -1036,8 +1066,14 @@
                                     class="link-search-item"
                                     :class="{
                                         highlighted:
-                                            item.flatIndex ===
-                                            linkSearchIndex,
+                                            linkKeyboardMode &&
+                                            linkSearchIndex >= 0 &&
+                                            linkSelectableEntries[
+                                                linkSearchIndex
+                                            ]?.kind === 'result' &&
+                                            linkSelectableEntries[
+                                                linkSearchIndex
+                                            ]?.item?.key === item.key,
                                     }"
                                     @click="selectLinkResult(item.result)"
                                     @mouseenter="
@@ -1280,6 +1316,7 @@
                         @input="onLinkEditorInput('threadReply')"
                         @click="onLinkEditorCaretMove('threadReply', $event)"
                         @keyup="onLinkEditorCaretMove('threadReply', $event)"
+                        @keydown="onLinkEditorKeydown('threadReply', $event)"
                         @scroll="onLinkEditorScroll('threadReply')"
                         @keydown.enter.meta.exact="sendThreadReply"
                         @keydown.enter.ctrl.exact="sendThreadReply"
@@ -1335,7 +1372,18 @@
                             <button
                                 type="button"
                                 class="link-search-section-header"
-                                :class="{ collapsed: section.collapsed }"
+                                :class="{
+                                    collapsed: section.collapsed,
+                                    highlighted:
+                                        linkKeyboardMode &&
+                                        linkSearchIndex >= 0 &&
+                                        linkSelectableEntries[
+                                            linkSearchIndex
+                                        ]?.kind === 'section' &&
+                                        linkSelectableEntries[
+                                            linkSearchIndex
+                                        ]?.key === section.key,
+                                }"
                                 @click="toggleLinkSearchSection(section.key)"
                             >
                                 <span class="link-search-section-heading">
@@ -1353,7 +1401,14 @@
                                 class="link-search-item"
                                 :class="{
                                     highlighted:
-                                        item.flatIndex === linkSearchIndex,
+                                        linkKeyboardMode &&
+                                        linkSearchIndex >= 0 &&
+                                        linkSelectableEntries[
+                                            linkSearchIndex
+                                        ]?.kind === 'result' &&
+                                        linkSelectableEntries[
+                                            linkSearchIndex
+                                        ]?.item?.key === item.key,
                                 }"
                                 @click="selectLinkResult(item.result)"
                                 @mouseenter="linkSearchIndex = item.flatIndex"
@@ -1574,7 +1629,7 @@ const searchResults = computed(() =>
 let searchTimeout = null;
 const sidebarSearchRequest = { controller: null };
 
-// [[ Link search state
+// [[ and // link search state
 const linkSearchQuery = ref("");
 const linkSearchSections = ref([]);
 const linkSearchCollapsedSections = ref({});
@@ -1583,9 +1638,12 @@ const linkSearchResults = computed(() =>
     flattenVisibleSectionGroups(linkSearchSectionGroups.value),
 );
 const linkSearching = ref(false);
+const linkKeyboardMode = ref(false);
 const linkSearchIndex = ref(-1);
 const linkSearchVisible = ref(false);
 const linkSearchTarget = ref(null);
+const linkSearchTriggerType = ref(null);
+const linkSearchTriggerStart = ref(-1);
 const linkPopupStyle = ref({ left: "20px", top: "20px" });
 let linkSearchTimeout = null;
 const linkSearchRequest = { controller: null };
@@ -1796,6 +1854,29 @@ const linkSearchSectionGroups = computed(() =>
         collapsedMap: linkSearchCollapsedSections.value,
     }),
 );
+const linkSelectableEntries = computed(() => {
+    const entries = [];
+    for (const section of linkSearchSectionGroups.value) {
+        if (section.collapsed) {
+            entries.push({
+                kind: "section",
+                key: section.key,
+                collapsed: true,
+                section,
+            });
+            continue;
+        }
+        for (const item of section.items) {
+            entries.push({
+                kind: "result",
+                key: item.key,
+                item,
+                section,
+            });
+        }
+    }
+    return entries;
+});
 
 watch(searchTypePickerVisible, (visible) => {
     if (visible && searchSelectedTypes.value.length === 0) {
@@ -1973,6 +2054,30 @@ function expandActiveParentSection() {
 function toggleLinkSearchSection(key) {
     toggleCollapsedSection(linkSearchCollapsedSections, key);
     linkSearchIndex.value = -1;
+}
+
+function collapseActiveLinkSection() {
+    if (!linkKeyboardMode.value || linkSearchIndex.value < 0) return false;
+    const entry = linkSelectableEntries.value[linkSearchIndex.value];
+    const key = entry?.kind === "section" ? entry.key : entry?.section?.key;
+    if (!key || linkSearchCollapsedSections.value?.[key]) return false;
+    setCollapsedSection(linkSearchCollapsedSections, key, true);
+    linkSearchIndex.value = linkSelectableEntries.value.findIndex(
+        (candidate) => candidate.kind === "section" && candidate.key === key,
+    );
+    return linkSearchIndex.value >= 0;
+}
+
+function expandActiveLinkSection() {
+    if (!linkKeyboardMode.value || linkSearchIndex.value < 0) return false;
+    const entry = linkSelectableEntries.value[linkSearchIndex.value];
+    const key = entry?.kind === "section" ? entry.key : entry?.section?.key;
+    if (!key || !linkSearchCollapsedSections.value?.[key]) return false;
+    setCollapsedSection(linkSearchCollapsedSections, key, false);
+    linkSearchIndex.value = linkSelectableEntries.value.findIndex(
+        (candidate) => candidate.kind === "result" && candidate.section?.key === key,
+    );
+    return linkSearchIndex.value >= 0;
 }
 
 function sectionKeyForFlatIndex(groups, flatIndex) {
@@ -3581,6 +3686,83 @@ function onLinkEditorScroll(target) {
     updateLinkPopupPosition();
 }
 
+function onLinkEditorKeydown(target, event) {
+    if (
+        !linkSearchVisible.value ||
+        linkSearchTarget.value !== target ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+    ) {
+        return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        linkKeyboardMode.value = true;
+        handleArrowShortcut(event);
+        return;
+    }
+    if (event.key === "Enter") {
+        handleEnterShortcut(event);
+        return;
+    }
+    if (event.key === "Escape") {
+        handleEscapeShortcut(event);
+        return;
+    }
+    if (!linkKeyboardMode.value) {
+        return;
+    }
+    if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        collapseActiveLinkSection();
+        return;
+    }
+    if (event.key === "ArrowRight") {
+        event.preventDefault();
+        expandActiveLinkSection();
+    }
+}
+
+function detectLinkSearchTrigger(textBefore) {
+    const lastOpen = textBefore.lastIndexOf("[[");
+    const lastClose = textBefore.lastIndexOf("]]"
+    );
+    if (lastOpen !== -1 && lastOpen > lastClose) {
+        const query = textBefore.slice(lastOpen + 2);
+        if (!query.includes("]]"
+        ) && !query.includes("\n")) {
+            return {
+                type: "wiki",
+                start: lastOpen,
+                query,
+            };
+        }
+    }
+
+    const lineStart = textBefore.lastIndexOf("\n") + 1;
+    const line = textBefore.slice(lineStart);
+    const slashMatch = line.match(/^(\s*)\/\/([^\n]*)$/);
+    if (slashMatch) {
+        return {
+            type: "slash",
+            start: lineStart + slashMatch[1].length,
+            query: slashMatch[2],
+        };
+    }
+
+    return null;
+}
+
+function resetLinkSearchResults() {
+    abortSearchRequest(linkSearchRequest);
+    linkSearching.value = false;
+    linkSearchSections.value = [];
+    linkSearchCollapsedSections.value = {};
+    linkSearchStatusMessage.value = "";
+    linkSearchIndex.value = -1;
+}
+
 function updateLinkSearchFromCursor() {
     const context = getLinkSearchContext();
     const el = context?.textarea.value;
@@ -3590,38 +3772,34 @@ function updateLinkSearchFromCursor() {
     }
     const pos = el.selectionStart ?? 0;
     const textBefore = context.text.value.slice(0, pos);
-    // Find the last [[ before the cursor that hasn't been closed with ]]
-    const lastOpen = textBefore.lastIndexOf("[[");
-    const lastClose = textBefore.lastIndexOf("]]");
-    if (lastOpen !== -1 && lastOpen > lastClose) {
-        const query = textBefore.slice(lastOpen + 2);
-        if (!query.includes("]]") && !query.includes("\n")) {
-            const queryUnchanged =
-                linkSearchVisible.value && query === linkSearchQuery.value;
-
-            linkSearchQuery.value = query;
-            linkSearchVisible.value = true;
-            updateLinkPopupPosition();
-
-            if (queryUnchanged) {
-                return;
-            }
-
-            clearTimeout(linkSearchTimeout);
-            if (!query.trim()) {
-                abortSearchRequest(linkSearchRequest);
-                linkSearching.value = false;
-                linkSearchSections.value = [];
-                linkSearchCollapsedSections.value = {};
-                linkSearchStatusMessage.value = "";
-                linkSearchIndex.value = -1;
-                return;
-            }
-            linkSearchTimeout = setTimeout(doLinkSearch, 150);
-            return;
-        }
+    const trigger = detectLinkSearchTrigger(textBefore);
+    if (!trigger) {
+        closeLinkSearch();
+        return;
     }
-    closeLinkSearch();
+
+    const queryUnchanged =
+        linkSearchVisible.value &&
+        trigger.type === linkSearchTriggerType.value &&
+        trigger.start === linkSearchTriggerStart.value &&
+        trigger.query === linkSearchQuery.value;
+
+    linkSearchTriggerType.value = trigger.type;
+    linkSearchTriggerStart.value = trigger.start;
+    linkSearchQuery.value = trigger.query;
+    linkSearchVisible.value = true;
+    updateLinkPopupPosition();
+
+    if (queryUnchanged) {
+        return;
+    }
+
+    clearTimeout(linkSearchTimeout);
+    if (!trigger.query.trim()) {
+        resetLinkSearchResults();
+        return;
+    }
+    linkSearchTimeout = setTimeout(doLinkSearch, 150);
 }
 
 function getTextareaCaretPosition(textarea, position) {
@@ -3735,6 +3913,7 @@ async function doLinkSearch() {
             linkSearchSections.value = [];
             linkSearchCollapsedSections.value = {};
             linkSearchStatusMessage.value = "";
+            linkKeyboardMode.value = false;
             linkSearchIndex.value = -1;
         },
         onDone: () => {
@@ -3746,13 +3925,12 @@ async function doLinkSearch() {
 function closeLinkSearch() {
     linkSearchVisible.value = false;
     linkSearchQuery.value = "";
-    linkSearchSections.value = [];
-    linkSearchCollapsedSections.value = {};
-    linkSearchStatusMessage.value = "";
-    linkSearchIndex.value = -1;
+    linkSearchTriggerType.value = null;
+    linkSearchTriggerStart.value = -1;
+    linkKeyboardMode.value = false;
+    resetLinkSearchResults();
     linkSearchTarget.value = null;
     clearTimeout(linkSearchTimeout);
-    abortSearchRequest(linkSearchRequest);
 }
 
 function selectLinkResult(note) {
@@ -3762,16 +3940,22 @@ function selectLinkResult(note) {
     const pos = el.selectionStart ?? 0;
     const textBefore = context.text.value.slice(0, pos);
     const textAfter = context.text.value.slice(pos);
-    // Find the last [[ before cursor
-    const lastOpen = textBefore.lastIndexOf("[[");
-    if (lastOpen === -1) return;
-    // Replace from [[ to cursor with the markdown link
-    const newText =
-        textBefore.slice(0, lastOpen) +
-        `[${note.title || "Untitled"}](/note/${note.id})`;
+    const linkText = `[${note.title || "Untitled"}](/note/${note.id})`;
+
+    let replaceStart = -1;
+    if (linkSearchTriggerType.value === "wiki") {
+        replaceStart =
+            linkSearchTriggerStart.value >= 0
+                ? linkSearchTriggerStart.value
+                : textBefore.lastIndexOf("[[");
+    } else if (linkSearchTriggerType.value === "slash") {
+        replaceStart = linkSearchTriggerStart.value;
+    }
+    if (replaceStart == null || replaceStart < 0) return;
+
+    const newText = textBefore.slice(0, replaceStart) + linkText;
     context.text.value = newText + textAfter;
     closeLinkSearch();
-    // Place cursor after the inserted link
     requestAnimationFrame(() => {
         el.focus();
         const cursorPos = newText.length;
@@ -3822,7 +4006,9 @@ function handleEscapeShortcut(event) {
 
 function handleArrowShortcut(event) {
     if (linkSearchVisible.value) {
-        const linkList = linkSearchResults.value;
+        const linkList = linkKeyboardMode.value
+            ? linkSelectableEntries.value
+            : linkSearchResults.value;
         if (linkList.length === 0) return;
         event.preventDefault();
         if (linkSearchIndex.value < 0) {
@@ -3836,7 +4022,10 @@ function handleArrowShortcut(event) {
                 (linkSearchIndex.value - 1 + linkList.length) % linkList.length;
         }
         requestAnimationFrame(() => {
-            const el = document.querySelector(".link-search-item.highlighted");
+            const selector = linkKeyboardMode.value
+                ? ".link-search-section-header.highlighted, .link-search-item.highlighted"
+                : ".link-search-item.highlighted";
+            const el = document.querySelector(selector);
             if (el) el.scrollIntoView({ block: "nearest" });
         });
         return;
@@ -3903,14 +4092,24 @@ function handleArrowShortcut(event) {
 
 function handleEnterShortcut(event) {
     if (linkSearchVisible.value) {
-        const linkList = linkSearchResults.value;
+        const linkList = linkKeyboardMode.value
+            ? linkSelectableEntries.value
+            : linkSearchResults.value;
         if (
             linkList.length > 0 &&
             linkSearchIndex.value >= 0 &&
             linkSearchIndex.value < linkList.length
         ) {
             event.preventDefault();
-            selectLinkResult(linkList[linkSearchIndex.value]);
+            const item = linkList[linkSearchIndex.value];
+            if (linkKeyboardMode.value && item?.kind === "section") {
+                toggleLinkSearchSection(item.key);
+            } else {
+                const result = linkKeyboardMode.value ? item?.item?.result : item;
+                if (result) {
+                    selectLinkResult(result);
+                }
+            }
         }
         return;
     }
@@ -5059,6 +5258,13 @@ function onPopstate() {
 
 .link-search-item:hover {
     background: rgba(255, 255, 255, 0.06);
+}
+
+.link-search-section-header.highlighted {
+    box-shadow: inset 4px 0 0 #ffb400;
+    outline: 1px solid rgba(255, 180, 0, 0.35);
+    background: #2f2000;
+    color: #fff;
 }
 
 .link-search-item.highlighted {
