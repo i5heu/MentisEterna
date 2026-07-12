@@ -28,9 +28,11 @@
                     class="job-item"
                     :class="'job-' + run.status"
                 >
-                    <span class="job-status-icon">{{
-                        statusIcon(run.status)
-                    }}</span>
+                    <span
+                        class="job-status-icon"
+                        :class="'icon-' + run.status"
+                        >{{ statusIcon(run.status) }}</span
+                    >
                     <div class="job-info">
                         <span class="job-name"
                             >{{ run.plugin_id ? run.plugin_id + "/" : ""
@@ -98,8 +100,10 @@ function statusIcon(status) {
         case "running":
             return "⟳";
         case "completed":
+        case "done":
             return "✓";
         case "failed":
+        case "errored":
             return "✗";
         case "cancelled":
             return "⊘";
@@ -280,7 +284,7 @@ if (props.inline) {
 
 .job-item {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 8px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--border-color);
@@ -294,10 +298,37 @@ if (props.inline) {
 
 .job-status-icon {
     flex-shrink: 0;
-    width: 18px;
-    text-align: center;
-    font-size: 14px;
-    line-height: 1.4;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-family: inherit;
+    background: var(--raised-bg);
+    color: var(--font-color-secondary);
+}
+
+.icon-completed,
+.icon-done {
+    background: rgba(74, 222, 128, 0.12);
+    color: var(--accent-teal);
+}
+
+.icon-failed,
+.icon-errored {
+    background: rgba(248, 113, 113, 0.12);
+    color: var(--heading-color);
+}
+
+.icon-running {
+    background: rgba(59, 130, 246, 0.12);
+    color: #60a5fa;
+}
+
+.icon-pending {
+    color: var(--tag-bg-color);
 }
 
 .job-info {
