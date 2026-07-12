@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +26,26 @@ type Generator interface {
 }
 
 // --- Shared HTTP client & base URL helpers ---
+
+// newLLMHTTPClient returns an *http.Client configured for LLM backend requests.
+// When LOCALAI_TLS_INSECURE is a non-empty truthy string (e.g. "1", "true", "yes"),
+// TLS certificate verification is skipped — useful for self-signed certificates
+// on internal LAN addresses.
+func newLLMHTTPClient() *http.Client {
+	if isTruthy("LOCALAI_TLS_INSECURE") {
+		return &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+	}
+	return &http.Client{}
+}
+
+func isTruthy(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
 
 // llmBaseURL returns the LocalAI base URL, configurable via the
 // LOCALAI_BASE_URL environment variable (default: http://localhost:8080).
@@ -50,7 +71,7 @@ func NewEmbeddingClient() *EmbeddingClient {
 	return &EmbeddingClient{
 		BaseURL: llmBaseURL(),
 		Model:   envOr("LOCALAI_EMBEDDING_MODEL", "text-embedding-ada-002"),
-		http:    &http.Client{},
+		http:    newLLMHTTPClient(),
 	}
 }
 
@@ -69,7 +90,7 @@ func NewChatClient() *ChatClient {
 	return &ChatClient{
 		BaseURL: llmBaseURL(),
 		Model:   envOr("LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"),
-		http:    &http.Client{},
+		http:    newLLMHTTPClient(),
 	}
 }
 
