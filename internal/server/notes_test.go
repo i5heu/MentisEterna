@@ -916,6 +916,139 @@ func TestSearchTypeFilter(t *testing.T) {
 	}
 }
 
+type searchStreamSectionEnvelope struct {
+	Key     string         `json:"key"`
+	Label   string         `json:"label"`
+	Results []SearchResult `json:"results"`
+}
+
+type searchStreamEventEnvelope struct {
+	Type    string                       `json:"type"`
+	Phase   string                       `json:"phase"`
+	Message string                       `json:"message"`
+	Total   int                          `json:"total"`
+	Section *searchStreamSectionEnvelope `json:"section"`
+}
+
+func decodeSearchStreamEvents(t *testing.T, body string) []searchStreamEventEnvelope {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	events := make([]searchStreamEventEnvelope, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event searchStreamEventEnvelope
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("decode stream line %q: %v", line, err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func TestSearchStreamEmitsLiteralSectionsBeforeSemantic(t *testing.T) {
+	s := newTestServerWithEmbedder(t)
+
+	tagged := helperCreateNoteRaw(t, s, `{"title":"Ops Review","body":"Operations checklist","tags":["urgent"]}`)
+	helperSyncSearchIndex(t, s, tagged.ID)
+	semantic := helperCreateNoteSync(t, s, "Release Follow Up", "urgent release follow up", nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=urgent&stream=1", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search stream: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	events := decodeSearchStreamEvents(t, w.Body.String())
+	if len(events) < 2 {
+		t.Fatalf("expected multiple stream events, got %+v", events)
+	}
+
+	sectionKeys := make([]string, 0, len(events))
+	semanticSection := -1
+	for i, event := range events {
+		if event.Section == nil {
+			continue
+		}
+		sectionKeys = append(sectionKeys, event.Section.Key)
+		if event.Section.Key == "semantic" {
+			semanticSection = i
+		}
+	}
+	if len(sectionKeys) == 0 || sectionKeys[0] != "tags" {
+		t.Fatalf("expected first search section to be tags, got %+v", sectionKeys)
+	}
+	if semanticSection == -1 {
+		t.Fatalf("expected a semantic section, got %+v", sectionKeys)
+	}
+
+	tagFound := false
+	semanticFound := false
+	for i, event := range events {
+		if event.Section == nil {
+			continue
+		}
+		for _, result := range event.Section.Results {
+			if event.Section.Key == "tags" && result.ID == tagged.ID {
+				tagFound = true
+			}
+			if i == semanticSection && result.ID == semantic.ID {
+				semanticFound = true
+			}
+		}
+	}
+	if !tagFound {
+		t.Fatalf("expected tagged note %d in tag section", tagged.ID)
+	}
+	if !semanticFound {
+		t.Fatalf("expected semantic note %d in semantic section", semantic.ID)
+	}
+}
+
+func TestSearchStreamReturnsExactMatchesWhenEmbeddingUnavailable(t *testing.T) {
+	s := newTestServer(t)
+
+	note := helperCreateNote(t, s, "Urgent Planning", "plain body", nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=urgent&stream=1", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search stream without embeddings: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	events := decodeSearchStreamEvents(t, w.Body.String())
+	foundTitleSection := false
+	foundNote := false
+	foundDone := false
+	for _, event := range events {
+		if event.Type == "done" {
+			foundDone = true
+		}
+		if event.Section == nil || event.Section.Key != "titles" {
+			continue
+		}
+		foundTitleSection = true
+		for _, result := range event.Section.Results {
+			if result.ID == note.ID {
+				foundNote = true
+			}
+		}
+	}
+	if !foundTitleSection {
+		t.Fatalf("expected a title section in streamed results, got %+v", events)
+	}
+	if !foundNote {
+		t.Fatalf("expected note %d in streamed title results", note.ID)
+	}
+	if !foundDone {
+		t.Fatalf("expected a done event in streamed results, got %+v", events)
+	}
+}
+
 // TestSearchFindsNoteByOCRText verifies that OCR text from uploaded files
 // is indexed and searchable via vss_files_ocr.
 func TestSearchFindsNoteByOCRText(t *testing.T) {
