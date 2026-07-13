@@ -19,6 +19,10 @@ export default defineConfig({
             "/file": "http://localhost:8080",
             "/jobs": "http://localhost:8080",
             "/backup": "http://localhost:8080",
+            "/ws": {
+                target: "http://localhost:8080",
+                ws: true,
+            },
         },
     },
 });
