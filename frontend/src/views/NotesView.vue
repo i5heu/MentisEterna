@@ -5161,6 +5161,10 @@ function onPopstate() {
     overflow: hidden;
 }
 
+.chat-feed .body-textarea {
+    field-sizing: content;
+}
+
 .body-textarea {
     flex: 1;
     border: none;
