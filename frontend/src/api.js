@@ -31,6 +31,7 @@ let liveReconnectAttempt = 0;
 let liveConnectionDesired = false;
 let livePingTimer = null;
 let livePingSentAt = null;
+let liveWorker = null;
 
 function dispatchWindowEvent(name, detail) {
     if (typeof window === "undefined") return;
@@ -40,6 +41,47 @@ function dispatchWindowEvent(name, detail) {
 function buildLiveURL() {
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
     return `${scheme}://${window.location.host}/ws`;
+}
+
+function roundLatency(ms) {
+    return Math.round(ms * 10) / 10;
+}
+
+function handleLiveWorkerMessage(event) {
+    const data = event.data || {};
+    if (data.type === "status") {
+        dispatchWindowEvent("live:status", data.detail || {});
+        return;
+    }
+    if (data.type === "latency") {
+        dispatchWindowEvent("live:latency", data.detail || {});
+        return;
+    }
+    if (data.type === "message") {
+        dispatchWindowEvent("live:message", data.detail);
+    }
+}
+
+function ensureLiveWorker() {
+    if (typeof window === "undefined" || typeof Worker === "undefined") {
+        return null;
+    }
+    if (liveWorker) {
+        return liveWorker;
+    }
+    try {
+        liveWorker = new Worker(new URL("./live.worker.js", import.meta.url), {
+            type: "module",
+        });
+        liveWorker.onmessage = handleLiveWorkerMessage;
+        liveWorker.onerror = (error) => {
+            console.error("live worker failed", error);
+        };
+    } catch (error) {
+        console.error("live worker unavailable", error);
+        liveWorker = null;
+    }
+    return liveWorker;
 }
 
 function scheduleLiveReconnect() {
@@ -85,9 +127,9 @@ function openLiveSocket() {
         try {
             const payload = JSON.parse(event.data);
             if (payload.type === "pong" && livePingSentAt !== null) {
-                const rtt = Date.now() - livePingSentAt;
+                const rtt = performance.now() - livePingSentAt;
                 livePingSentAt = null;
-                dispatchWindowEvent("live:latency", { ms: rtt });
+                dispatchWindowEvent("live:latency", { ms: roundLatency(rtt) });
                 return;
             }
             dispatchWindowEvent("live:message", payload);
@@ -120,7 +162,7 @@ function startLivePings(socket) {
             socket.readyState === WebSocket.OPEN &&
             livePingSentAt === null
         ) {
-            livePingSentAt = Date.now();
+            livePingSentAt = performance.now();
             socket.send(JSON.stringify({ type: "ping" }));
         }
     }, 1000);
@@ -136,12 +178,21 @@ function stopLivePings() {
 
 export function startLiveUpdates() {
     liveConnectionDesired = true;
+    const worker = ensureLiveWorker();
+    if (worker) {
+        worker.postMessage({ type: "start", url: buildLiveURL() });
+        return;
+    }
     openLiveSocket();
 }
 
 export function stopLiveUpdates() {
     liveConnectionDesired = false;
     liveReconnectAttempt = 0;
+    if (liveWorker) {
+        liveWorker.terminate();
+        liveWorker = null;
+    }
     stopLivePings();
     if (liveReconnectTimer) {
         window.clearTimeout(liveReconnectTimer);
