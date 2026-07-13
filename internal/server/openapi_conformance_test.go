@@ -561,6 +561,11 @@ func TestOpenAPI_Conformance(t *testing.T) {
 		w := authPost("/backup/purge", "")
 		assertStatus(t, w, http.StatusServiceUnavailable)
 	})
+
+	t.Run("POST /maintenance/refresh-auto-tags → 503 when auto tagger missing", func(t *testing.T) {
+		w := authPost("/maintenance/refresh-auto-tags", "")
+		assertStatus(t, w, http.StatusServiceUnavailable)
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +680,12 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 	mux.Handle("/jobs/", protected(s.handleJobByID))
 	mux.Handle("/backup/trigger", protected(s.handleBackupTrigger))
 	mux.Handle("/backup/purge", protected(s.handleBackupPurge))
+	mux.Handle("/maintenance/reindex", protected(s.handleReindexNotes))
+	mux.Handle("/maintenance/reindex-ocr", protected(s.handleReindexOCR))
+	mux.Handle("/maintenance/reindex-stt", protected(s.handleReindexSTT))
+	mux.Handle("/maintenance/refresh-auto-tags", protected(s.handleRefreshAllAutoTags))
+	mux.Handle("/maintenance/recalculate-recipe-categories", protected(s.handleRecalculateRecipeIngredientCategories))
+	mux.Handle("/maintenance/delete-unknown-s3-files", protected(s.handleDeleteUnknownS3Files))
 	return mux
 }
 

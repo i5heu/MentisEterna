@@ -649,6 +649,13 @@ export async function reindexSTT(token) {
     });
 }
 
+export async function refreshAllAutoTags(token) {
+    return request("/maintenance/refresh-auto-tags", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 export async function recalculateRecipeCategories(token) {
     return request("/maintenance/recalculate-recipe-categories", {
         method: "POST",

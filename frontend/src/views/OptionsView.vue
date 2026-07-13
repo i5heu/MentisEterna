@@ -472,6 +472,56 @@
                         </div>
                     </div>
 
+                    <!-- Refresh All Auto Tags -->
+                    <div class="reindex-card">
+                        <div class="reindex-card-top">
+                            <div class="reindex-card-header">
+                                <span class="reindex-icon">🏷</span>
+                                <div>
+                                    <h3>Refresh All Auto Tags</h3>
+                                    <p class="reindex-card-desc">
+                                        Re-run the chat model across all notes to
+                                        rebuild generated auto tags from the
+                                        latest content and current tag catalog.
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                class="btn-amber btn-sm shortcut-anchor"
+                                :title="getShortcutLabel('refresh-auto-tags')"
+                                :disabled="refreshingAllAutoTags"
+                                @click="refreshAllAutoTags"
+                            >
+                                {{
+                                    refreshingAllAutoTags
+                                        ? "Enqueuing…"
+                                        : "Refresh All Auto Tags"
+                                }}
+                                <ShortcutHint
+                                    v-if="
+                                        shortcutHintsVisible &&
+                                        isShortcutEnabled('refresh-auto-tags')
+                                    "
+                                    :label="getHintLabel('refresh-auto-tags')"
+                                />
+                            </button>
+                        </div>
+                        <div
+                            v-if="
+                                refreshAllAutoTagsErr ||
+                                refreshAllAutoTagsOk
+                            "
+                            class="reindex-card-status"
+                        >
+                            <p v-if="refreshAllAutoTagsErr" class="msg-error">
+                                {{ refreshAllAutoTagsErr }}
+                            </p>
+                            <p v-if="refreshAllAutoTagsOk" class="msg-ok">
+                                {{ refreshAllAutoTagsOk }}
+                            </p>
+                        </div>
+                    </div>
+
                     <!-- Recalculate Ingredient Categories -->
                     <div class="reindex-card">
                         <div class="reindex-card-top">
@@ -650,6 +700,7 @@ import {
     reindexNotes as apiReindexNotes,
     reindexOCR as apiReindexOCR,
     reindexSTT as apiReindexSTT,
+    refreshAllAutoTags as apiRefreshAllAutoTags,
     recalculateRecipeCategories as apiRecalculateRecipeCategories,
     deleteUnknownS3Files as apiDeleteUnknownS3,
     fetchPrinterStatus,
@@ -707,6 +758,10 @@ const reindexOCROk = ref("");
 const reindexingSTT = ref(false);
 const reindexSTTErr = ref("");
 const reindexSTTOk = ref("");
+
+const refreshingAllAutoTags = ref(false);
+const refreshAllAutoTagsErr = ref("");
+const refreshAllAutoTagsOk = ref("");
 
 const recalculatingRecipeCategories = ref(false);
 const recalculateRecipeCategoriesErr = ref("");
@@ -801,6 +856,14 @@ const shortcutDefinitions = computed(() => [
         allowInInput: true,
         enabled: () => !reindexingSTT.value,
         handler: () => reindexSTT(),
+    },
+    {
+        id: "refresh-auto-tags",
+        description: "Refresh all auto tags",
+        hintKey: "U",
+        allowInInput: true,
+        enabled: () => !refreshingAllAutoTags.value,
+        handler: () => refreshAllAutoTags(),
     },
     {
         id: "recalculate-recipe-categories",
@@ -945,6 +1008,25 @@ async function reindexSTT() {
         reindexSTTErr.value = e.message || "Re-index STT failed";
     } finally {
         reindexingSTT.value = false;
+    }
+}
+
+async function refreshAllAutoTags() {
+    refreshAllAutoTagsErr.value = "";
+    refreshAllAutoTagsOk.value = "";
+    refreshingAllAutoTags.value = true;
+    try {
+        const res = await apiRefreshAllAutoTags(props.token);
+        refreshAllAutoTagsOk.value =
+            res.message ||
+            `Auto-tag refresh queued (run #${res.run_id}). Check the job queue for progress.`;
+        setTimeout(() => {
+            refreshAllAutoTagsOk.value = "";
+        }, 10000);
+    } catch (e) {
+        refreshAllAutoTagsErr.value = e.message || "Auto-tag refresh failed";
+    } finally {
+        refreshingAllAutoTags.value = false;
     }
 }
 

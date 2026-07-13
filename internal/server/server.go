@@ -214,7 +214,10 @@ func (s *Server) Start(ctx context.Context) error {
 			chatJobs = append(chatJobs, jobs.CronJob{Name: "generate_title", Task: s.generateTitleTask})
 		}
 		if s.autoTagger != nil {
-			chatJobs = append(chatJobs, jobs.CronJob{Name: "generate_auto_tags", Task: s.generateAutoTagsTask})
+			chatJobs = append(chatJobs,
+				jobs.CronJob{Name: "generate_auto_tags", Task: s.generateAutoTagsTask},
+				jobs.CronJob{Name: "refresh_all_auto_tags", Task: s.refreshAllAutoTagsTask},
+			)
 		}
 		if len(chatJobs) > 0 {
 			if err := s.jobManager.RegisterAdHoc("_system", chatJobs); err != nil {
@@ -383,6 +386,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.Handle("/maintenance/reindex", protected(s.handleReindexNotes))
 	mux.Handle("/maintenance/reindex-ocr", protected(s.handleReindexOCR))
 	mux.Handle("/maintenance/reindex-stt", protected(s.handleReindexSTT))
+	mux.Handle("/maintenance/refresh-auto-tags", protected(s.handleRefreshAllAutoTags))
 	mux.Handle("/maintenance/recalculate-recipe-categories", protected(s.handleRecalculateRecipeIngredientCategories))
 	mux.Handle("/maintenance/delete-unknown-s3-files", protected(s.handleDeleteUnknownS3Files))
 
@@ -735,6 +739,29 @@ func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
 		"status":  "queued",
 		"count":   count,
 		"message": fmt.Sprintf("Enqueued %d STT reindex jobs. Check /jobs for progress.", count),
+	})
+}
+
+func (s *Server) handleRefreshAllAutoTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.autoTagger == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Chat model not available for auto-tag refresh"})
+		return
+	}
+
+	runID, err := s.jobManager.Enqueue("_system", "refresh_all_auto_tags", nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to enqueue auto-tag refresh: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"run_id":  runID,
+		"message": "Auto-tag refresh enqueued. Check /jobs for progress.",
 	})
 }
 
