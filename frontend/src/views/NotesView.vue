@@ -653,7 +653,11 @@
                 </p>
 
                 <!-- Chat Feed -->
-                <div class="chat-feed">
+                <div
+                    ref="mainChatFeedEl"
+                    class="chat-feed"
+                    @scroll="scheduleLinkHintRefresh"
+                >
                     <!-- Root message: the selected note -->
                     <div class="chat-message chat-message-root">
                         <div class="message-meta">
@@ -1197,7 +1201,11 @@
                 >
             </div>
             <!-- Chat feed (same structure as main) -->
-            <div class="chat-feed">
+            <div
+                ref="threadChatFeedEl"
+                class="chat-feed"
+                @scroll="scheduleLinkHintRefresh"
+            >
                 <!-- Root message: the thread note -->
                 <div class="chat-message chat-message-root">
                     <div class="message-meta">
@@ -1511,12 +1519,17 @@
             </div>
         </div>
 
+        <LinkHintOverlay
+            v-if="linkHintMode"
+            :items="linkHintEntries"
+            :typedBuffer="linkHintTyped"
+        />
         <KeyboardShortcutsHelpModal v-model="showHotkeys" :items="hotkeys" />
     </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import MarkdownIt from "markdown-it";
 import markdownItFootnote from "markdown-it-footnote";
 import spoilerPlugin from "../spoilerPlugin.js";
@@ -1540,6 +1553,7 @@ import {
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
 import NoteAttachments from "../components/NoteAttachments.vue";
 import ShortcutHint from "../components/ShortcutHint.vue";
+import LinkHintOverlay from "../components/LinkHintOverlay.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
 import {
     uploadAttachment,
@@ -1597,6 +1611,8 @@ const newReplyTitleInput = ref(null);
 const newReplyTextarea = ref(null);
 const threadReplyTitleInput = ref(null);
 const threadReplyTextarea = ref(null);
+const mainChatFeedEl = ref(null);
+const threadChatFeedEl = ref(null);
 
 // Tags state
 const editTags = ref([]);
@@ -1663,6 +1679,12 @@ const linkPopupStyle = ref({ left: "20px", top: "20px" });
 let linkSearchTimeout = null;
 const linkSearchRequest = { controller: null };
 
+const linkHintMode = ref(false);
+const linkHintTyped = ref("");
+const linkHintEntries = ref([]);
+const LINK_HINT_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+let linkHintRefreshFrame = 0;
+
 function getLinkSearchContext(target = linkSearchTarget.value) {
     switch (target) {
         case "body":
@@ -1686,6 +1708,224 @@ function getLinkSearchContext(target = linkSearchTarget.value) {
         default:
             return null;
     }
+}
+
+function normalizeLinkHintKey(key) {
+    if (!key) return "";
+    return key.length === 1 ? key.toUpperCase() : key;
+}
+
+function linkHintAlphaPrefix(index) {
+    let value = Number(index) + 1;
+    let label = "";
+    while (value > 0) {
+        const remainder = (value - 1) % 26;
+        label = String.fromCharCode(65 + remainder) + label;
+        value = Math.floor((value - 1) / 26);
+    }
+    return label;
+}
+
+function linkHintLabelForIndex(index) {
+    if (index < LINK_HINT_DIGITS.length) {
+        return LINK_HINT_DIGITS[index];
+    }
+    const offset = index - LINK_HINT_DIGITS.length;
+    const prefixIndex = Math.floor(offset / LINK_HINT_DIGITS.length);
+    const digit = LINK_HINT_DIGITS[offset % LINK_HINT_DIGITS.length];
+    return `${linkHintAlphaPrefix(prefixIndex)}${digit}`;
+}
+
+function isVisibleLinkHintElement(anchor) {
+    if (!(anchor instanceof HTMLElement)) return false;
+    const rect = anchor.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = window.getComputedStyle(anchor);
+    if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.pointerEvents === "none"
+    ) {
+        return false;
+    }
+    return !(
+        rect.bottom < 0 ||
+        rect.right < 0 ||
+        rect.top > window.innerHeight ||
+        rect.left > window.innerWidth
+    );
+}
+
+function collectLinkHintEntries() {
+    const roots = [mainChatFeedEl.value, threadChatFeedEl.value].filter(Boolean);
+    const entries = [];
+
+    for (const root of roots) {
+        const anchors = root.querySelectorAll(".markdown-body a[href]");
+        for (const anchor of anchors) {
+            if (!isVisibleLinkHintElement(anchor)) continue;
+            const rect = anchor.getBoundingClientRect();
+            const top = rect.top <= 28 ? rect.bottom + 6 : rect.top;
+            entries.push({
+                id: `link-hint-${entries.length}`,
+                label: linkHintLabelForIndex(entries.length),
+                top: Math.max(8, top),
+                left: Math.max(8, Math.min(rect.left, window.innerWidth - 16)),
+                element: anchor,
+                href: anchor.getAttribute("href") || "",
+            });
+        }
+    }
+
+    return entries;
+}
+
+function cancelLinkHintRefresh() {
+    if (!linkHintRefreshFrame) return;
+    window.cancelAnimationFrame(linkHintRefreshFrame);
+    linkHintRefreshFrame = 0;
+}
+
+function closeLinkHintMode() {
+    linkHintMode.value = false;
+    linkHintTyped.value = "";
+    linkHintEntries.value = [];
+    cancelLinkHintRefresh();
+}
+
+function refreshLinkHintEntries() {
+    if (!linkHintMode.value) return;
+    const entries = collectLinkHintEntries();
+    linkHintEntries.value = entries;
+    if (entries.length === 0) {
+        closeLinkHintMode();
+        return;
+    }
+    if (
+        linkHintTyped.value &&
+        !entries.some((entry) => entry.label.startsWith(linkHintTyped.value))
+    ) {
+        linkHintTyped.value = "";
+    }
+}
+
+function scheduleLinkHintRefresh() {
+    if (!linkHintMode.value) return;
+    cancelLinkHintRefresh();
+    linkHintRefreshFrame = window.requestAnimationFrame(() => {
+        linkHintRefreshFrame = 0;
+        refreshLinkHintEntries();
+    });
+}
+
+async function openLinkHintMode() {
+    hideHintOverlay();
+    closeLinkSearch();
+    linkHintTyped.value = "";
+    linkHintMode.value = true;
+    await nextTick();
+    refreshLinkHintEntries();
+}
+
+function toggleLinkHintMode() {
+    if (linkHintMode.value) {
+        closeLinkHintMode();
+        return;
+    }
+    openLinkHintMode();
+}
+
+function prefixLinkHintMatches(prefix) {
+    if (!prefix) return linkHintEntries.value;
+    return linkHintEntries.value.filter((entry) =>
+        entry.label.startsWith(prefix),
+    );
+}
+
+function openLinkHintEntry(entry) {
+    const target = entry?.element;
+    closeLinkHintMode();
+    if (!target || !document.contains(target)) return;
+    target.focus?.({ preventScroll: true });
+    target.click();
+}
+
+function applyLinkHintInput(nextLabel) {
+    const exact = linkHintEntries.value.find((entry) => entry.label === nextLabel);
+    if (exact) {
+        openLinkHintEntry(exact);
+        return true;
+    }
+    const prefixMatches = prefixLinkHintMatches(nextLabel);
+    if (prefixMatches.length > 0) {
+        linkHintTyped.value = nextLabel;
+        return true;
+    }
+    return false;
+}
+
+function onLinkHintKeyDown(event) {
+    if (!linkHintMode.value || event.defaultPrevented) return;
+
+    const normalizedKey = normalizeLinkHintKey(event.key);
+    if (
+        normalizedKey === "L" &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey
+    ) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLinkHintMode();
+        return;
+    }
+
+    if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
+        return;
+    }
+
+    if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLinkHintMode();
+        return;
+    }
+
+    if (event.key === "Backspace") {
+        event.preventDefault();
+        event.stopPropagation();
+        linkHintTyped.value = linkHintTyped.value.slice(0, -1);
+        return;
+    }
+
+    if (event.key === "Enter") {
+        const matches = prefixLinkHintMatches(linkHintTyped.value);
+        if (matches.length === 1) {
+            event.preventDefault();
+            event.stopPropagation();
+            openLinkHintEntry(matches[0]);
+        }
+        return;
+    }
+
+    if (!/^[A-Z0-9]$/.test(normalizedKey)) {
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (applyLinkHintInput(`${linkHintTyped.value}${normalizedKey}`)) {
+        return;
+    }
+    if (applyLinkHintInput(normalizedKey)) {
+        return;
+    }
+
+    linkHintTyped.value = "";
+}
+
+function onLinkHintWindowBlur() {
+    closeLinkHintMode();
 }
 
 // Children state
@@ -2401,6 +2641,14 @@ const shortcutDefinitions = computed(() => [
         handler: () => toggleHotkeysHelp(),
     },
     {
+        id: "show-link-hints",
+        description: "Show link hints for visible note links",
+        keys: ["Ctrl+L"],
+        allowInInput: true,
+        enabled: () => Boolean(selected.value || threadNote.value),
+        handler: () => toggleLinkHintMode(),
+    },
+    {
         id: "open-options",
         description: "Open options",
         hintKey: "O",
@@ -2647,7 +2895,9 @@ const {
     getShortcutLabel,
     isShortcutEnabled,
     hideHintOverlay,
-} = useKeyboardShortcuts(shortcutDefinitions);
+} = useKeyboardShortcuts(shortcutDefinitions, {
+    suspendWhen: () => linkHintMode.value,
+});
 
 // Edit / View toggle
 const isEditing = ref(false);
@@ -2855,6 +3105,39 @@ watch([dirty, saving], ([isDirty, isSaving]) => {
         return;
     }
     scheduleLiveRefresh({ selected: true });
+});
+
+watch(
+    [
+        linkHintMode,
+        selectedRendererKey,
+        threadRendererKey,
+        () => selected.value?.id ?? 0,
+        () => threadNote.value?.id ?? 0,
+        isEditing,
+        () =>
+            children.value
+                .map((child) => `${child.id}:${child.updated_at || child.created_at || ""}`)
+                .join("|"),
+        () =>
+            threadChildren.value
+                .map(
+                    (child) =>
+                        `${child.id}:${child.updated_at || child.created_at || ""}`,
+                )
+                .join("|"),
+    ],
+    async ([active]) => {
+        if (!active) return;
+        await nextTick();
+        scheduleLinkHintRefresh();
+    },
+);
+
+watch([showHotkeys, showDeleteModal], ([hotkeysOpen, deleteOpen]) => {
+    if (hotkeysOpen || deleteOpen) {
+        closeLinkHintMode();
+    }
 });
 
 onMounted(() => {
@@ -3330,6 +3613,7 @@ function resetThreadSidebarCtrlTapState() {
 }
 
 function onThreadSidebarCtrlKeyDown(event) {
+    if (linkHintMode.value) return;
     if (event.key === "Control") {
         if (
             event.repeat ||
@@ -3360,7 +3644,7 @@ function onThreadSidebarCtrlKeyDown(event) {
 }
 
 function onThreadSidebarCtrlKeyUp(event) {
-    if (event.key !== "Control") return;
+    if (linkHintMode.value || event.key !== "Control") return;
     if (
         event.altKey ||
         event.metaKey ||
@@ -3966,6 +4250,11 @@ function selectLinkResult(note) {
 }
 
 function handleEscapeShortcut(event) {
+    if (linkHintMode.value) {
+        event.preventDefault();
+        closeLinkHintMode();
+        return;
+    }
     if (linkSearchVisible.value) {
         event.preventDefault();
         closeLinkSearch();
@@ -4180,7 +4469,11 @@ onMounted(() => {
     window.addEventListener("beforeunload", onBeforeUnload);
     window.addEventListener("keydown", onThreadSidebarCtrlKeyDown, true);
     window.addEventListener("keyup", onThreadSidebarCtrlKeyUp, true);
+    window.addEventListener("keydown", onLinkHintKeyDown, true);
+    window.addEventListener("resize", scheduleLinkHintRefresh);
+    window.addEventListener("scroll", scheduleLinkHintRefresh, true);
     window.addEventListener("blur", onThreadSidebarCtrlBlur);
+    window.addEventListener("blur", onLinkHintWindowBlur);
     // Restore state from URL on initial load
     loadFromURL();
 });
@@ -4191,7 +4484,12 @@ onUnmounted(() => {
     window.removeEventListener("beforeunload", onBeforeUnload);
     window.removeEventListener("keydown", onThreadSidebarCtrlKeyDown, true);
     window.removeEventListener("keyup", onThreadSidebarCtrlKeyUp, true);
+    window.removeEventListener("keydown", onLinkHintKeyDown, true);
+    window.removeEventListener("resize", scheduleLinkHintRefresh);
+    window.removeEventListener("scroll", scheduleLinkHintRefresh, true);
     window.removeEventListener("blur", onThreadSidebarCtrlBlur);
+    window.removeEventListener("blur", onLinkHintWindowBlur);
+    cancelLinkHintRefresh();
     clearTimeout(searchTimeout);
     clearTimeout(parentSearchTimeout);
     clearTimeout(linkSearchTimeout);
@@ -4201,6 +4499,9 @@ onUnmounted(() => {
 });
 
 function onClickOutside(e) {
+    if (linkHintMode.value) {
+        closeLinkHintMode();
+    }
     if (!e.target.closest(".parent-picker-wrapper")) {
         showParentPicker.value = false;
     }
@@ -4349,6 +4650,7 @@ async function loadFromURL() {
 }
 
 function onPopstate() {
+    closeLinkHintMode();
     if (!confirmLeaveCurrentNote()) {
         pushURL();
         return;

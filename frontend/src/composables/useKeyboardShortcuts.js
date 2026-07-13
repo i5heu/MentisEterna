@@ -160,7 +160,7 @@ function normalizeShortcutDefinition(definition, index) {
     };
 }
 
-export function useKeyboardShortcuts(shortcutDefinitions) {
+export function useKeyboardShortcuts(shortcutDefinitions, options = {}) {
     const showHelp = ref(false);
     const hintOverlayVisible = ref(false);
     const hintModifierDown = ref(false);
@@ -293,8 +293,18 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
         );
     }
 
+    function isSuspended() {
+        return Boolean(options?.suspendWhen?.());
+    }
+
     function onKeyDown(event) {
         if (event.defaultPrevented) return;
+        if (isSuspended()) {
+            if (hintOverlayVisible.value || hintModifierDown.value) {
+                hideHintOverlay();
+            }
+            return;
+        }
 
         const active = document.activeElement;
         const activeIsEditable = isEditableElement(active);
@@ -374,6 +384,12 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
     }
 
     function onKeyUp(event) {
+        if (isSuspended()) {
+            if (event.key === hintModifierKey) {
+                hideHintOverlay();
+            }
+            return;
+        }
         if (event.key !== hintModifierKey) return;
         hideHintOverlay();
     }
@@ -383,6 +399,9 @@ export function useKeyboardShortcuts(shortcutDefinitions) {
     }
 
     function onPointerDown() {
+        if (isSuspended()) {
+            return;
+        }
         if (hintOverlayVisible.value || hintModifierDown.value) {
             hideHintOverlay();
         }
