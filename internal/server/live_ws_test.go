@@ -19,6 +19,10 @@ import (
 	"github.com/i5heu/MentisEterna/internal/jobs"
 )
 
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
 func TestUniquePositiveNoteIDs(t *testing.T) {
 	t.Parallel()
 
@@ -200,6 +204,16 @@ func TestLiveMessageJSONRoundtrip(t *testing.T) {
 				Job:       &jobs.RunEvent{Type: "enqueued", RunID: 42, Status: "planned"},
 			},
 		},
+		// Guards against ping/pong telemetry fields being preserved.
+		"pong telemetry fields": {
+			msg: liveMessage{
+				Type:               "pong",
+				Timestamp:          "2026-01-01T00:00:00Z",
+				ClientSentAtMS:     float64Ptr(123.456),
+				ServerReceivedAtUS: 1735689600000000,
+				ServerSentAtUS:     1735689600000123,
+			},
+		},
 	}
 
 	for name, tc := range tests {
@@ -230,13 +244,19 @@ func TestLiveMessageJSONRoundtrip_PBT(t *testing.T) {
 	// Failure mode: struct tags or custom marshalling break roundtrip.
 	rapid.Check(t, func(t *rapid.T) {
 		msg := rapid.Custom(func(t *rapid.T) liveMessage {
-			types := []string{liveTypeReady, liveTypeNotesChange, liveTypeJobsChange}
-			return liveMessage{
+			types := []string{liveTypeReady, liveTypeNotesChange, liveTypeJobsChange, "pong"}
+			msg := liveMessage{
 				Type:      rapid.SampledFrom(types).Draw(t, "type"),
 				Timestamp: rapid.StringMatching(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*Z`).Draw(t, "ts"),
 				Reason:    rapid.String().Draw(t, "reason"),
 				NoteIDs:   rapid.SliceOf(rapid.Int64Min(1)).Draw(t, "noteIDs"),
 			}
+			if rapid.Bool().Draw(t, "hasClientSentAt") {
+				msg.ClientSentAtMS = float64Ptr(float64(rapid.Int64().Draw(t, "clientSentAtMsRaw")) / 1000)
+			}
+			msg.ServerReceivedAtUS = rapid.Int64Min(0).Draw(t, "serverReceivedAtUs")
+			msg.ServerSentAtUS = rapid.Int64Min(0).Draw(t, "serverSentAtUs")
+			return msg
 		}).Draw(t, "msg")
 
 		raw, err := json.Marshal(msg)
@@ -301,7 +321,7 @@ func TestLiveHubRegisterUnregister(t *testing.T) {
 	t.Parallel()
 
 	makeClient := func(hub *liveHub) *liveClient {
-		return &liveClient{hub: hub, send: make(chan []byte, 1)}
+		return &liveClient{hub: hub, send: make(chan liveMessage, 1)}
 	}
 
 	tests := map[string]struct {
@@ -397,7 +417,7 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 			n := rapid.IntRange(1, 50).Draw(t, "n")
 			hub := newLiveHub()
 			for i := 0; i < n; i++ {
-				c := &liveClient{hub: hub, send: make(chan []byte, 1)}
+				c := &liveClient{hub: hub, send: make(chan liveMessage, 1)}
 				hub.register(c)
 			}
 			hub.mu.RLock()
@@ -418,7 +438,7 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 			hub := newLiveHub()
 			clients := make([]*liveClient, n)
 			for i := 0; i < n; i++ {
-				clients[i] = &liveClient{hub: hub, send: make(chan []byte, 1)}
+				clients[i] = &liveClient{hub: hub, send: make(chan liveMessage, 1)}
 				hub.register(clients[i])
 			}
 			// Unregister all in shuffled order to catch ordering dependencies.
@@ -441,7 +461,7 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(t *rapid.T) {
 			hub := newLiveHub()
-			client := &liveClient{hub: hub, send: make(chan []byte, 1)}
+			client := &liveClient{hub: hub, send: make(chan liveMessage, 1)}
 			hub.register(client)
 			hub.unregister(client)
 			select {
@@ -485,7 +505,7 @@ func TestLiveHubBroadcast(t *testing.T) {
 			hub := newLiveHub()
 			clients := make([]*liveClient, 3)
 			for i := range clients {
-				clients[i] = &liveClient{hub: hub, send: make(chan []byte, 64)}
+				clients[i] = &liveClient{hub: hub, send: make(chan liveMessage, 64)}
 			}
 			tc.setup(hub, clients)
 			var mu sync.Mutex
@@ -521,7 +541,7 @@ func TestLiveClientEnqueueJSON(t *testing.T) {
 
 	// Guards against message not being sent to an open channel.
 	hub := newLiveHub()
-	client := &liveClient{hub: hub, send: make(chan []byte, 1)}
+	client := &liveClient{hub: hub, send: make(chan liveMessage, 1)}
 	hub.register(client)
 
 	client.enqueueJSON(liveMessage{Type: liveTypeReady, Timestamp: "2000-01-01T00:00:00Z"})
@@ -715,7 +735,7 @@ func TestWebSocketPingPongKeepalive(t *testing.T) {
 	// Drain the "created" broadcast from helperCreateNote.
 	requireLiveMessageType(t, conn, liveTypeNotesChange)
 
-	payload := fmt.Sprintf(`{"title":"Updated","body":"updated","parent_id":null}`)
+	payload := `{"title":"Updated","body":"updated","parent_id":null}`
 	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/notes/%d", note.ID), strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

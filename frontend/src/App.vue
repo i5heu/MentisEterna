@@ -6,6 +6,7 @@
         :token="token"
         :ws-connected="wsConnected"
         :ws-latency="wsLatency"
+        :ws-latency-detail="wsLatencyDetail"
         @logout="onLogout"
         @back="currentView = 'notes'"
     />
@@ -14,6 +15,7 @@
         :token="token"
         :ws-connected="wsConnected"
         :ws-latency="wsLatency"
+        :ws-latency-detail="wsLatencyDetail"
         @logout="onLogout"
         @navigate-options="currentView = 'options'"
     />
@@ -27,7 +29,7 @@ import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
 import OptionsView from "./views/OptionsView.vue";
 
-const { wsConnected, wsLatency } = useLiveStatus();
+const { wsConnected, wsLatency, wsLatencyDetail } = useLiveStatus();
 const token = ref("");
 const authReady = ref(false);
 const currentView = ref("notes");
