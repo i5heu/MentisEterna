@@ -358,6 +358,9 @@ function buildSearchParams(query, options = {}) {
     if (options.stream) {
         params.set("stream", "1");
     }
+    if (options.tagOnly) {
+        params.set("tag_only", "1");
+    }
     return params;
 }
 

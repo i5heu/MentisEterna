@@ -50,7 +50,7 @@
                         v-model="searchQuery"
                         ref="searchInputEl"
                         type="text"
-                        placeholder="Search notes… (.i filters, .a all)"
+                        placeholder="Search notes… (.i filters, .a all, .t tags)"
                         class="search-input"
                         :title="getShortcutLabel('focus-search')"
                         @input="onSearchInput"
@@ -2125,6 +2125,9 @@ const sidebarList = computed(() => {
 const searchTypePickerVisible = computed(() => searchMode.value.useTypePicker);
 const searchFilterSummary = computed(() => {
     if (!searchQuery.value.trim()) return "";
+    if (searchMode.value.tagOnly) {
+        return "Tag-only search. Add .i to choose note types or .a for all.";
+    }
     if (searchMode.value.includeAllTypes) {
         return "Including all note types.";
     }
@@ -2219,6 +2222,7 @@ function parseSearchMode(rawQuery) {
     const cleaned = [];
     let includeAllTypes = false;
     let useTypePicker = false;
+    let tagOnly = false;
 
     for (const token of tokens) {
         if (token === ".a") {
@@ -2229,6 +2233,10 @@ function parseSearchMode(rawQuery) {
             useTypePicker = true;
             continue;
         }
+        if (token === ".t") {
+            tagOnly = true;
+            continue;
+        }
         cleaned.push(token);
     }
 
@@ -2236,6 +2244,7 @@ function parseSearchMode(rawQuery) {
         query: cleaned.join(" ").trim(),
         includeAllTypes,
         useTypePicker: useTypePicker && !includeAllTypes,
+        tagOnly,
         types: includeAllTypes
             ? null
             : useTypePicker
@@ -2533,6 +2542,7 @@ function abortSearchRequest(store) {
 async function runStreamedSearch({
     query,
     types = null,
+    tagOnly = false,
     sectionsRef,
     statusRef,
     searchingRef,
@@ -2570,6 +2580,7 @@ async function runStreamedSearch({
     try {
         await streamSearchNotes(props.token, trimmed, {
             types,
+            tagOnly,
             signal: controller.signal,
             onStatus(event) {
                 if (requestStore.controller !== controller) return;
@@ -4017,6 +4028,7 @@ async function doSearch() {
     await runStreamedSearch({
         query: q,
         types: mode.types,
+        tagOnly: mode.tagOnly,
         sectionsRef: searchSections,
         statusRef: searchStatusMessage,
         searchingRef: searching,

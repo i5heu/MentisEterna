@@ -81,8 +81,19 @@ func (s *Server) searchNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowedTypes := parseSearchTypeFilter(r)
+	tagOnly := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("tag_only"))) == "1"
 	if wantsStreamedSearch(r) {
-		s.streamSearchNotes(w, r, query, allowedTypes)
+		s.streamSearchNotes(w, r, query, allowedTypes, tagOnly)
+		return
+	}
+
+	if tagOnly {
+		results, err := s.searchTagResults(query, allowedTypes, nil, searchResultLimit)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, results)
 		return
 	}
 
@@ -138,7 +149,7 @@ func wantsStreamedSearch(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/x-ndjson")
 }
 
-func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query string, allowedTypes []string) {
+func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query string, allowedTypes []string, tagOnly bool) {
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -165,12 +176,12 @@ func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query
 	if !send(searchStreamEvent{
 		Type:    "status",
 		Phase:   "literal",
-		Message: "Searching titles and tags…",
+		Message: "Searching tags…",
 	}) {
 		return
 	}
 
-	for _, phase := range []struct {
+	phases := []struct {
 		key         string
 		label       string
 		description string
@@ -191,7 +202,11 @@ func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query
 			limit:       searchStreamTagLimit,
 			search:      s.searchTagResults,
 		},
-	} {
+	}
+	if tagOnly {
+		phases = phases[1:] // keep only the "tags" phase
+	}
+	for _, phase := range phases {
 		if err := r.Context().Err(); err != nil {
 			return
 		}
@@ -215,6 +230,15 @@ func (s *Server) streamSearchNotes(w http.ResponseWriter, r *http.Request, query
 		}) {
 			return
 		}
+	}
+
+	if tagOnly {
+		message := "Search complete."
+		if len(seen) == 0 {
+			message = "No tag matches found."
+		}
+		send(searchStreamEvent{Type: "done", Phase: "complete", Message: message, Total: len(seen)})
+		return
 	}
 
 	if err := r.Context().Err(); err != nil {
