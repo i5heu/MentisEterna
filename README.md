@@ -341,7 +341,7 @@ A JSON array of objects, each describing one S3-compatible endpoint:
 
 ### Multiple Endpoints (Replication)
 
-You can configure multiple endpoints for redundancy. Files are uploaded to **all** endpoints simultaneously, and the `repair_replicas` background job (`@every 1m`) heals any replicas that failed during upload:
+You can configure multiple endpoints for redundancy. Files are uploaded to **all** endpoints simultaneously, and the `repair_replicas` background job (sweeps every 30m) heals any replicas that failed during upload:
 
 ```json
 [
@@ -380,7 +380,7 @@ The media subsystem registers these cron jobs:
 
 | Job | Schedule | Purpose |
 |---|---|---|
-| `repair_replicas` | `@every 1m` | Sweeps for files with failed replicas and retries upload |
+| `repair_replicas` | `@every 30m` | Sweeps for files with failed replicas and retries upload |
 | `cleanup_pending_inline` | `@every 1h` | Finalizes inline files whose parent note was confirmed |
 
 ### Example: MinIO for Local Development
