@@ -230,7 +230,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.mediaService != nil {
 		s.mediaService.EnqueueFunc = s.jobManager.Enqueue
 		if err := s.jobManager.UpsertDefinitions("_media", []jobs.CronJob{
-			{Name: "repair_replicas", Schedule: "@every 1m", Task: s.mediaService.RepairSweepTask},
+			{Name: "repair_replicas", Schedule: "@every 30m", Task: s.mediaService.RepairSweepTask},
 			{Name: "cleanup_pending_inline", Schedule: "@every 1h", Task: s.mediaService.PendingInlineCleanupTask},
 		}); err != nil {
 			log.Fatalf("Failed to register media cron jobs: %v", err)
