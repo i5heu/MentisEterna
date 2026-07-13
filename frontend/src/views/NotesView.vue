@@ -133,6 +133,7 @@
                     label="↵"
                     position="top-right"
                 />
+                <div class="note-list-scroll">
                 <!-- Search results mode -->
                 <template v-if="hasSidebarSearch">
                     <div
@@ -279,6 +280,7 @@
                 </template>
                 <div v-if="loading && !hasSidebarSearch" class="empty-list">
                     Loading…
+                </div>
                 </div>
             </div>
         </aside>
@@ -4579,8 +4581,18 @@ function onPopstate() {
 
 .note-list {
     flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.note-list-scroll {
+    flex: 1;
     overflow-y: auto;
     padding: 0.25rem 0;
+}
+
+.note-list-scroll > .note-item:first-child {
+    margin-top: 0.35rem;
 }
 
 .note-item {
