@@ -444,6 +444,13 @@ export async function fetchTags(token, query) {
     return request(`/tags${q}`, { headers: authHeaders(token) });
 }
 
+export async function generateAutoTags(token, noteId) {
+    return request(`/notes/${noteId}/auto-tags`, {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 export async function pluginAction(token, noteId, action, params) {
     return request(`/notes/${noteId}/action`, {
         method: "POST",

@@ -228,12 +228,20 @@ func deleteNoteIndexTx(tx *sql.Tx, noteID int64) error {
 
 func loadTags(db *sql.DB, noteID int64) ([]string, error) {
 	rows, err := db.Query(`
-		SELECT t.name
-		FROM tags t
-		JOIN tags_refs tr ON tr.tag_id = t.id
-		WHERE tr.note_id = ?
-		ORDER BY t.name
-	`, noteID)
+		SELECT tag_name
+		FROM (
+			SELECT DISTINCT t.name AS tag_name
+			FROM tags t
+			JOIN tags_refs tr ON tr.tag_id = t.id
+			WHERE tr.note_id = ?
+			UNION
+			SELECT DISTINCT t.name AS tag_name
+			FROM tags t
+			JOIN auto_tags_refs atr ON atr.tag_id = t.id
+			WHERE atr.note_id = ?
+		)
+		ORDER BY tag_name
+	`, noteID, noteID)
 	if err != nil {
 		return nil, err
 	}

@@ -2,10 +2,12 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +23,22 @@ import (
 type mockEmbedder struct {
 	mu      sync.Mutex
 	vectors map[string][]float64
+}
+
+type stubAutoTagGenerator struct {
+	title      string
+	suggestion llm.AutoTagSuggestion
+	err        error
+	lastInput  llm.AutoTagSuggestionInput
+}
+
+func (g *stubAutoTagGenerator) GenerateTitle(_ string) (string, error) {
+	return g.title, nil
+}
+
+func (g *stubAutoTagGenerator) SuggestTags(input llm.AutoTagSuggestionInput) (llm.AutoTagSuggestion, error) {
+	g.lastInput = input
+	return g.suggestion, g.err
 }
 
 const mockEmbeddingDim = 2560
@@ -104,6 +122,129 @@ func helperSyncSearchIndex(t *testing.T, s *Server, noteID int64) {
 	}
 }
 
+func TestCreateNoteNormalizesManualTags(t *testing.T) {
+	s := newTestServer(t)
+	n := helperCreateNoteRaw(t, s, `{"title":"Tagged","body":"body","tags":["  Foo  ","#Bar","foo","bar"]}`)
+
+	want := []string{"bar", "foo"}
+	if !reflect.DeepEqual(n.Tags, want) {
+		t.Fatalf("manual tags = %#v, want %#v", n.Tags, want)
+	}
+	if n.AutoTags == nil {
+		t.Fatal("auto tags should be an empty array, got nil")
+	}
+}
+
+func TestGenerateAndPersistAutoTagsCreatesAndSeparatesTags(t *testing.T) {
+	d, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+
+	gen := &stubAutoTagGenerator{
+		suggestion: llm.AutoTagSuggestion{
+			ExistingTags: []string{"project"},
+			NewTags:      []string{"  Next Steps  ", "#Fresh Idea", "project"},
+		},
+	}
+	s := New(d, ":0", nil, gen, nil, nil)
+
+	n := helperCreateNoteRaw(t, s, `{"title":"Project note","body":"Plan the next phase","tags":["project"]}`)
+	autoTags, err := s.generateAndPersistAutoTags(context.Background(), s.db.DB, n.ID)
+	if err != nil {
+		t.Fatalf("generateAndPersistAutoTags: %v", err)
+	}
+
+	want := []string{"fresh idea", "next steps"}
+	if !reflect.DeepEqual(autoTags, want) {
+		t.Fatalf("auto tags = %#v, want %#v", autoTags, want)
+	}
+	if got := gen.lastInput.CurrentTags; !reflect.DeepEqual(got, []string{"project"}) {
+		t.Fatalf("current tags passed to model = %#v, want %#v", got, []string{"project"})
+	}
+
+	var tagCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tags WHERE name IN ('fresh idea', 'next steps')`).Scan(&tagCount); err != nil {
+		t.Fatalf("count created tags: %v", err)
+	}
+	if tagCount != 2 {
+		t.Fatalf("created tag count = %d, want 2", tagCount)
+	}
+
+	manualTags, err := loadTags(s.db.DB, n.ID)
+	if err != nil {
+		t.Fatalf("loadTags: %v", err)
+	}
+	if !reflect.DeepEqual(manualTags, []string{"project"}) {
+		t.Fatalf("manual tags after auto-tag save = %#v, want %#v", manualTags, []string{"project"})
+	}
+}
+
+func TestHandleAutoTagsRoute(t *testing.T) {
+	d, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+
+	gen := &stubAutoTagGenerator{
+		suggestion: llm.AutoTagSuggestion{NewTags: []string{"roadmap"}},
+	}
+	s := New(d, ":0", nil, gen, nil, nil)
+	n := helperCreateNoteRaw(t, s, `{"title":"Q4 Plan","body":"Prepare the quarterly plan"}`)
+
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/auto-tags", n.ID), nil)
+	w := httptest.NewRecorder()
+	s.handleAutoTags(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleAutoTags: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		AutoTags []string `json:"auto_tags"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode auto-tags response: %v", err)
+	}
+	if !reflect.DeepEqual(resp.AutoTags, []string{"roadmap"}) {
+		t.Fatalf("route auto tags = %#v, want %#v", resp.AutoTags, []string{"roadmap"})
+	}
+}
+
+func TestSearchFindsAutoTags(t *testing.T) {
+	d, err := db.OpenInMemory()
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if !d.VSSAvailable() {
+		t.Skip("sqlite-vec extension not available (vec0 missing)")
+	}
+
+	embedder := newMockEmbedder()
+	gen := &stubAutoTagGenerator{
+		suggestion: llm.AutoTagSuggestion{NewTags: []string{"roadmap"}},
+	}
+	s := New(d, ":0", embedder, gen, nil, nil)
+
+	n := helperCreateNoteRaw(t, s, `{"title":"Q4 Plan","body":"Prepare the quarterly plan"}`)
+	if _, err := s.generateAndPersistAutoTags(context.Background(), s.db.DB, n.ID); err != nil {
+		t.Fatalf("generateAndPersistAutoTags: %v", err)
+	}
+	helperSyncSearchIndex(t, s, n.ID)
+
+	r := httptest.NewRequest(http.MethodGet, "/notes/search?q=roadmap&stream=1", nil)
+	w := httptest.NewRecorder()
+	s.searchNotes(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"id":`+fmt.Sprint(n.ID)) {
+		t.Fatalf("expected search response to include note %d, body=%s", n.ID, w.Body.String())
+	}
+}
+
 func TestHandleHealth(t *testing.T) {
 	s := newTestServer(t)
 	r := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -131,6 +272,7 @@ func TestNoteID(t *testing.T) {
 		{"/notes/1", 1, true},
 		{"/notes/42", 42, true},
 		{"/notes/42/history", 42, true},
+		{"/notes/42/auto-tags", 42, true},
 		{"/notes/0", 0, false},
 		{"/notes/-1", 0, false},
 		{"/notes/abc", 0, false},
