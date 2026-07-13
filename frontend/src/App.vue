@@ -4,12 +4,16 @@
     <OptionsView
         v-else-if="currentView === 'options'"
         :token="token"
+        :ws-connected="wsConnected"
+        :ws-latency="wsLatency"
         @logout="onLogout"
         @back="currentView = 'notes'"
     />
     <NotesView
         v-else
         :token="token"
+        :ws-connected="wsConnected"
+        :ws-latency="wsLatency"
         @logout="onLogout"
         @navigate-options="currentView = 'options'"
     />
@@ -18,10 +22,12 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import { fetchSession, startLiveUpdates, stopLiveUpdates } from "./api.js";
+import { useLiveStatus } from "./composables/useLiveStatus.js";
 import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
 import OptionsView from "./views/OptionsView.vue";
 
+const { wsConnected, wsLatency } = useLiveStatus();
 const token = ref("");
 const authReady = ref(false);
 const currentView = ref("notes");

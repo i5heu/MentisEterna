@@ -1556,13 +1556,15 @@ import {
     useKeyboardShortcuts,
 } from "../composables/useKeyboardShortcuts.js";
 
-const props = defineProps({ token: String });
+const props = defineProps({
+    token: String,
+    wsConnected: Boolean,
+    wsLatency: Number,
+});
 const emit = defineEmits(["logout", "navigate-options"]);
 
 const notes = ref([]);
 const loading = ref(false);
-const wsConnected = ref(false);
-const wsLatency = ref(null);
 const selected = ref(null);
 const editTitle = ref("");
 const editBody = ref("");
@@ -2842,29 +2844,14 @@ watch([dirty, saving], ([isDirty, isSaving]) => {
     scheduleLiveRefresh({ selected: true });
 });
 
-function onLiveStatus(event) {
-    wsConnected.value = !!event.detail.connected;
-    if (!event.detail.connected && !event.detail.connecting) {
-        wsLatency.value = null;
-    }
-}
-
-function onLiveLatency(event) {
-    wsLatency.value = event.detail.ms;
-}
-
 onMounted(() => {
     loadNotes();
     fetchAndMergeManifests(props.token);
     window.addEventListener("live:message", onLiveMessage);
-    window.addEventListener("live:status", onLiveStatus);
-    window.addEventListener("live:latency", onLiveLatency);
 });
 
 onUnmounted(() => {
     window.removeEventListener("live:message", onLiveMessage);
-    window.removeEventListener("live:status", onLiveStatus);
-    window.removeEventListener("live:latency", onLiveLatency);
     if (liveRefreshTimer) {
         window.clearTimeout(liveRefreshTimer);
         liveRefreshTimer = null;
