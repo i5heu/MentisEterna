@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	internaltags "github.com/i5heu/MentisEterna/internal/tags"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
@@ -119,6 +120,7 @@ func (p *IndexPlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, no
 	if payload.Mode == "" {
 		payload.Mode = "global"
 	}
+	payload.SelectedTags = internaltags.NormalizeNames(payload.SelectedTags)
 
 	tagsJSON, err := json.Marshal(payload.SelectedTags)
 	if err != nil {
@@ -158,6 +160,7 @@ func (p *IndexPlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, no
 			selectedTags = nil
 		}
 	}
+	selectedTags = internaltags.NormalizeNames(selectedTags)
 
 	cfg := Payload{Mode: mode, SelectedTags: selectedTags}
 	return json.Marshal(cfg)
@@ -325,7 +328,11 @@ func queryTagIndex(db *sql.DB, selectedTags []string, noteIDs []int64) (*sql.Row
 		         n.created_at
 		       ) AS created_at
 		FROM tags t
-		JOIN tags_refs tr ON tr.tag_id = t.id
+		JOIN (
+			SELECT note_id, tag_id FROM tags_refs
+			UNION
+			SELECT note_id, tag_id FROM auto_tags_refs
+		) tr ON tr.tag_id = t.id
 		JOIN notes n ON n.id = tr.note_id
 	`
 

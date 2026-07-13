@@ -236,6 +236,9 @@ func TestOpenAPI_Conformance(t *testing.T) {
 		if n.Tags == nil {
 			t.Error("tags should be an empty array, got nil")
 		}
+		if n.AutoTags == nil {
+			t.Error("auto_tags should be an empty array, got nil")
+		}
 	})
 
 	t.Run("POST /notes → 400 on bad JSON", func(t *testing.T) {
@@ -650,6 +653,10 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 		}
 		if strings.HasSuffix(r.URL.Path, "/pin") {
 			s.setNotePin(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/auto-tags") {
+			s.handleAutoTags(w, r)
 			return
 		}
 		switch r.Method {

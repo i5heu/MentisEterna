@@ -25,6 +25,31 @@ type Generator interface {
 	GenerateTitle(text string) (string, error)
 }
 
+// AutoTagger suggests normalized tags for a note, choosing from existing tags
+// when possible and proposing new ones only when useful.
+type AutoTagger interface {
+	SuggestTags(input AutoTagSuggestionInput) (AutoTagSuggestion, error)
+}
+
+// AutoTagSuggestionInput contains the note content and the current global tag
+// vocabulary used to steer tag selection.
+type AutoTagSuggestionInput struct {
+	Title        string
+	Body         string
+	ExistingTags []string
+	CurrentTags  []string
+	MaxExisting  int
+	MaxNew       int
+	MaxTotal     int
+}
+
+// AutoTagSuggestion is the structured JSON shape expected back from the chat
+// model.
+type AutoTagSuggestion struct {
+	ExistingTags []string `json:"existing_tags"`
+	NewTags      []string `json:"new_tags"`
+}
+
 // --- Shared HTTP client & base URL helpers ---
 
 // newLLMHTTPClient returns an *http.Client configured for LLM backend requests.
@@ -162,6 +187,41 @@ type chatCompletionResponse struct {
 	} `json:"choices"`
 }
 
+func (c *ChatClient) complete(messages []chatMessage) (string, error) {
+	reqBody := chatCompletionRequest{
+		Model:    c.Model,
+		Messages: messages,
+		Stream:   false,
+	}
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := c.BaseURL + "/v1/chat/completions"
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("localai request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("localai returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var cr chatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	if len(cr.Choices) == 0 {
+		return "", fmt.Errorf("localai returned no choices")
+	}
+
+	return cr.Choices[0].Message.Content, nil
+}
+
 // GenerateTitle asks the LLM to produce a short, concise title given a note's
 // text content. It uses the LocalAI /v1/chat/completions endpoint (OpenAI-compatible).
 func (c *ChatClient) GenerateTitle(text string) (string, error) {
@@ -191,41 +251,86 @@ Output: Untitled
 INPUT TO PROCESS:
 [Insert User Note Content Here]`
 
-	reqBody := chatCompletionRequest{
-		Model: c.Model,
-		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: text},
-		},
-		Stream: false,
+	return c.complete([]chatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: text},
+	})
+}
+
+// SuggestTags asks the chat model to choose relevant existing tags and propose
+// new tags in a strict JSON object.
+func (c *ChatClient) SuggestTags(input AutoTagSuggestionInput) (AutoTagSuggestion, error) {
+	if input.MaxExisting <= 0 {
+		input.MaxExisting = 8
 	}
-	payload, err := json.Marshal(reqBody)
+	if input.MaxNew <= 0 {
+		input.MaxNew = 4
+	}
+	if input.MaxTotal <= 0 {
+		input.MaxTotal = 10
+	}
+
+	systemPrompt := fmt.Sprintf(`You are a backend tagging microservice.
+
+Your task: read a note title/body and output exactly one JSON object with this shape:
+{"existing_tags":["..."],"new_tags":["..."]}
+
+Rules:
+- Output JSON only. No markdown, no code fences, no commentary.
+- Tags must be lowercase.
+- Tags must be short, reusable labels, usually 1-3 words.
+- Prefer existing tags whenever they fit.
+- Use new_tags only for clearly useful new concepts not already covered.
+- Do not repeat a tag across existing_tags and new_tags.
+- Do not include any tag that already exists on the note.
+- Do not invent overly specific, temporary, or sentence-like tags.
+- Return at most %d existing tags, at most %d new tags, and at most %d tags total.
+- If no good tags apply, return empty arrays.
+`, input.MaxExisting, input.MaxNew, input.MaxTotal)
+
+	userPayload := map[string]any{
+		"title":         input.Title,
+		"body":          input.Body,
+		"existing_tags": input.ExistingTags,
+		"current_tags":  input.CurrentTags,
+	}
+	userJSON, err := json.Marshal(userPayload)
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return AutoTagSuggestion{}, fmt.Errorf("marshal auto-tag input: %w", err)
 	}
 
-	url := c.BaseURL + "/v1/chat/completions"
-	resp, err := c.http.Post(url, "application/json", bytes.NewReader(payload))
+	raw, err := c.complete([]chatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: string(userJSON)},
+	})
 	if err != nil {
-		return "", fmt.Errorf("localai request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("localai returned %d: %s", resp.StatusCode, string(body))
+		return AutoTagSuggestion{}, err
 	}
 
-	var cr chatCompletionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+	var out AutoTagSuggestion
+	if err := unmarshalLooseJSONObject(raw, &out); err != nil {
+		return AutoTagSuggestion{}, fmt.Errorf("decode auto-tag response: %w", err)
+	}
+	return out, nil
+}
+
+func unmarshalLooseJSONObject(raw string, dst any) error {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.TrimPrefix(trimmed, "```json")
+	trimmed = strings.TrimPrefix(trimmed, "```")
+	trimmed = strings.TrimSuffix(trimmed, "```")
+	trimmed = strings.TrimSpace(trimmed)
+
+	if err := json.Unmarshal([]byte(trimmed), dst); err == nil {
+		return nil
 	}
 
-	if len(cr.Choices) == 0 {
-		return "", fmt.Errorf("localai returned no choices")
+	start := strings.IndexByte(trimmed, '{')
+	end := strings.LastIndexByte(trimmed, '}')
+	if start >= 0 && end > start {
+		return json.Unmarshal([]byte(trimmed[start:end+1]), dst)
 	}
-
-	return cr.Choices[0].Message.Content, nil
+	return fmt.Errorf("no JSON object found in %q", trimmed)
 }
 
 // EmbeddingToJSON marshals a float64 slice to a VSS-compatible JSON array

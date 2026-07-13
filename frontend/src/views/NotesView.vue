@@ -385,6 +385,60 @@
                                 </div>
                             </div>
                         </div>
+                        <div v-if="selected.id" class="tag-row auto-tag-row">
+                            <span class="parent-label">Auto Tags:</span>
+                            <div class="tag-list auto-tag-list">
+                                <span
+                                    v-for="tag in selected.auto_tags || []"
+                                    :key="tag"
+                                    class="tag-chip auto-tag-chip"
+                                >
+                                    {{ tag }}
+                                </span>
+                                <span
+                                    v-if="
+                                        (!selected.auto_tags ||
+                                            selected.auto_tags.length === 0) &&
+                                        !autoTagsRefreshing
+                                    "
+                                    class="tag-hint"
+                                >
+                                    No auto tags yet.
+                                </span>
+                                <button
+                                    type="button"
+                                    class="btn-ghost auto-tag-refresh-btn"
+                                    :disabled="
+                                        dirty || saving || autoTagsRefreshing
+                                    "
+                                    @click="refreshAutoTags()"
+                                >
+                                    {{
+                                        autoTagsRefreshing
+                                            ? "Refreshing…"
+                                            : "Refresh"
+                                    }}
+                                </button>
+                                <span
+                                    v-if="dirty"
+                                    class="tag-hint auto-tag-hint"
+                                >
+                                    Save first to refresh from unsaved edits.
+                                </span>
+                                <span
+                                    v-else-if="autoTagsInfo"
+                                    class="tag-hint auto-tag-hint"
+                                >
+                                    {{ autoTagsInfo }}
+                                </span>
+                                <span
+                                    v-if="autoTagsError"
+                                    class="save-error auto-tag-error"
+                                >
+                                    {{ autoTagsError }}
+                                </span>
+                            </div>
+                        </div>
                         <div v-if="isEditing" class="parent-row">
                             <span class="parent-label">Parent:</span>
                             <div class="parent-picker-wrapper">
@@ -1548,6 +1602,7 @@ import {
     streamSearchNotes,
     setNotePin,
     fetchTags,
+    generateAutoTags,
     pluginActionV2,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
@@ -1618,6 +1673,9 @@ const threadChatFeedEl = ref(null);
 const editTags = ref([]);
 const tagSearch = ref("");
 const tagOptions = ref([]);
+const autoTagsRefreshing = ref(false);
+const autoTagsError = ref("");
+const autoTagsInfo = ref("");
 
 function insertAtCursor(text) {
     const el = bodyTextarea.value;
@@ -1964,12 +2022,19 @@ function hasReplyDraft(title, body) {
 
 function applySelectedDetail(detail, { remount = true } = {}) {
     if (!detail) return;
-    selected.value = detail;
+    selected.value = {
+        ...detail,
+        tags: Array.isArray(detail.tags) ? detail.tags : [],
+        auto_tags: Array.isArray(detail.auto_tags) ? detail.auto_tags : [],
+    };
     editTitle.value = detail.title || "";
     editBody.value = detail.body || "";
     noteType.value = detail.type || "standard";
     customData.value = detail.plugin?.config || detail.custom_data || null;
     editTags.value = Array.isArray(detail.tags) ? [...detail.tags] : [];
+    autoTagsRefreshing.value = false;
+    autoTagsError.value = "";
+    autoTagsInfo.value = "";
     liveRefreshPending.value = false;
     if (remount) {
         selectedRendererKey.value += 1;
@@ -3666,8 +3731,17 @@ function onThreadSidebarCtrlBlur() {
 
 // --- Tag functions ---
 
+function normalizeTagName(name) {
+    return name
+        .trim()
+        .replace(/^#+/, "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .toLowerCase();
+}
+
 async function onTagInput() {
-    const q = tagSearch.value.trim();
+    const q = normalizeTagName(tagSearch.value);
     try {
         const result = await fetchTags(props.token, q || "");
         tagOptions.value = Array.isArray(result) ? result : [];
@@ -3677,7 +3751,7 @@ async function onTagInput() {
 }
 
 function addTag(name) {
-    name = name.trim();
+    name = normalizeTagName(name);
     if (!name) return;
     if (!editTags.value.includes(name)) {
         editTags.value.push(name);
@@ -3698,6 +3772,34 @@ function onTagBackspace() {
     if (tagSearch.value === "" && editTags.value.length > 0) {
         editTags.value.pop();
         dirty.value = true;
+    }
+}
+
+async function refreshAutoTags() {
+    if (
+        !selected.value?.id ||
+        autoTagsRefreshing.value ||
+        dirty.value ||
+        saving.value
+    ) {
+        return;
+    }
+    autoTagsRefreshing.value = true;
+    autoTagsError.value = "";
+    autoTagsInfo.value = "";
+    try {
+        const result = await generateAutoTags(props.token, selected.value.id);
+        selected.value = {
+            ...selected.value,
+            auto_tags: Array.isArray(result?.auto_tags)
+                ? result.auto_tags
+                : [],
+        };
+        autoTagsInfo.value = "Auto tags refreshed.";
+    } catch (e) {
+        autoTagsError.value = e.message;
+    } finally {
+        autoTagsRefreshing.value = false;
     }
 }
 
@@ -5203,6 +5305,35 @@ function onPopstate() {
     font-size: 0.75rem;
     font-weight: 500;
     white-space: nowrap;
+}
+
+.auto-tag-list {
+    gap: 0.45rem;
+}
+
+.auto-tag-chip {
+    background: var(--raised-bg);
+    color: var(--font-color);
+    border: 1px solid var(--border-color);
+}
+
+.auto-tag-refresh-btn {
+    padding: 0.2rem 0.55rem;
+    font-size: 0.75rem;
+}
+
+.tag-hint {
+    font-size: 0.75rem;
+    color: var(--font-color-secondary);
+}
+
+.auto-tag-hint {
+    white-space: normal;
+}
+
+.auto-tag-error {
+    padding: 0;
+    background: transparent;
 }
 
 .tag-remove {

@@ -30,6 +30,7 @@ type Server struct {
 	cfg           serverConfig
 	llm           llm.Embedder
 	chatClient    llm.Generator
+	autoTagger    llm.AutoTagger
 	ocrClient     llm.OCRer
 	sttClient     llm.STTer
 	webauthn      *webauthn.WebAuthn
@@ -110,12 +111,18 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		log.Printf("backup: BACKUP_ENCRYPTION_KEY not set — backups disabled")
 	}
 
+	var autoTagger llm.AutoTagger
+	if at, ok := chatClient.(llm.AutoTagger); ok {
+		autoTagger = at
+	}
+
 	return &Server{
 		db:            d,
 		addr:          addr,
 		cfg:           cfg,
 		llm:           embeddingClient,
 		chatClient:    chatClient,
+		autoTagger:    autoTagger,
 		ocrClient:     ocrClient,
 		sttClient:     sttClient,
 		webauthn:      w,
@@ -200,13 +207,19 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Register ad-hoc title generation job (for notes saved without a title).
-	if s.chatClient != nil {
-		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{{
-			Name: "generate_title",
-			Task: s.generateTitleTask,
-		}}); err != nil {
-			log.Fatalf("Failed to register title generation job: %v", err)
+	// Register ad-hoc chat-model jobs.
+	if s.chatClient != nil || s.autoTagger != nil {
+		chatJobs := make([]jobs.CronJob, 0, 2)
+		if s.chatClient != nil {
+			chatJobs = append(chatJobs, jobs.CronJob{Name: "generate_title", Task: s.generateTitleTask})
+		}
+		if s.autoTagger != nil {
+			chatJobs = append(chatJobs, jobs.CronJob{Name: "generate_auto_tags", Task: s.generateAutoTagsTask})
+		}
+		if len(chatJobs) > 0 {
+			if err := s.jobManager.RegisterAdHoc("_system", chatJobs); err != nil {
+				log.Fatalf("Failed to register chat-model jobs: %v", err)
+			}
 		}
 	}
 
@@ -318,6 +331,10 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		if strings.HasSuffix(r.URL.Path, "/pin") {
 			s.setNotePin(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/auto-tags") {
+			s.handleAutoTags(w, r)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/files") {

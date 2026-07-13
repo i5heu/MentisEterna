@@ -32,6 +32,7 @@ import (
 	"strings"
 	"sync"
 
+	internaltags "github.com/i5heu/MentisEterna/internal/tags"
 	gosqlite3 "github.com/mattn/go-sqlite3"
 )
 
@@ -422,10 +423,117 @@ func (d *DB) migrateTags() error {
 			PRIMARY KEY (note_id, tag_id)
 		);
 
+		CREATE TABLE IF NOT EXISTS auto_tags_refs (
+			note_id    INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+			tag_id     INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (note_id, tag_id)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 		CREATE INDEX IF NOT EXISTS idx_tags_refs_note_id ON tags_refs(note_id);
 		CREATE INDEX IF NOT EXISTS idx_tags_refs_tag_id ON tags_refs(tag_id);
+		CREATE INDEX IF NOT EXISTS idx_auto_tags_refs_note_id ON auto_tags_refs(note_id);
+		CREATE INDEX IF NOT EXISTS idx_auto_tags_refs_tag_id ON auto_tags_refs(tag_id);
 	`)
+	if err != nil {
+		return err
+	}
+	return d.normalizeTagNames()
+}
+
+func (d *DB) normalizeTagNames() error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	type row struct {
+		id   int64
+		name string
+	}
+	rows, err := tx.Query(`SELECT id, name FROM tags ORDER BY id ASC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	groups := make(map[string][]row)
+	var orderedNames []string
+	var blankIDs []int64
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.name); err != nil {
+			return err
+		}
+		normalized := internaltags.NormalizeName(r.name)
+		if normalized == "" {
+			blankIDs = append(blankIDs, r.id)
+			continue
+		}
+		if _, exists := groups[normalized]; !exists {
+			orderedNames = append(orderedNames, normalized)
+		}
+		groups[normalized] = append(groups[normalized], r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, id := range blankIDs {
+		if err := reassignMergedTagRefs(tx, "tags_refs", id, 0); err != nil {
+			return err
+		}
+		if err := reassignMergedTagRefs(tx, "auto_tags_refs", id, 0); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM tags WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+
+	for _, normalized := range orderedNames {
+		group := groups[normalized]
+		canonical := group[0]
+		for _, dup := range group[1:] {
+			if err := reassignMergedTagRefs(tx, "tags_refs", dup.id, canonical.id); err != nil {
+				return err
+			}
+			if err := reassignMergedTagRefs(tx, "auto_tags_refs", dup.id, canonical.id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM tags WHERE id = ?`, dup.id); err != nil {
+				return err
+			}
+		}
+		if canonical.name != normalized {
+			if _, err := tx.Exec(`UPDATE tags SET name = ? WHERE id = ?`, normalized, canonical.id); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+func reassignMergedTagRefs(tx *sql.Tx, table string, fromTagID, toTagID int64) error {
+	if fromTagID <= 0 {
+		return nil
+	}
+	if toTagID > 0 && toTagID != fromTagID {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO `+table+` (note_id, tag_id) SELECT note_id, ? FROM `+table+` WHERE tag_id = ?`,
+			toTagID,
+			fromTagID,
+		); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(`DELETE FROM `+table+` WHERE tag_id = ?`, fromTagID)
 	return err
 }
 
@@ -460,11 +568,19 @@ func (d *DB) ensureNotesFTS() error {
 		SELECT n.id,
 		       COALESCE(n.title, ''),
 		       COALESCE((
-		         SELECT GROUP_CONCAT(t.name, ' ')
-		         FROM tags_refs tr
-		         JOIN tags t ON t.id = tr.tag_id
-		         WHERE tr.note_id = n.id
-		         ORDER BY t.name
+		         SELECT GROUP_CONCAT(tag_name, ' ')
+		         FROM (
+		           SELECT DISTINCT t.name AS tag_name
+		           FROM tags_refs tr
+		           JOIN tags t ON t.id = tr.tag_id
+		           WHERE tr.note_id = n.id
+		           UNION
+		           SELECT DISTINCT t.name AS tag_name
+		           FROM auto_tags_refs atr
+		           JOIN tags t ON t.id = atr.tag_id
+		           WHERE atr.note_id = n.id
+		           ORDER BY tag_name
+		         ) all_tags
 		       ), '')
 		FROM notes n
 		WHERE NOT EXISTS (SELECT 1 FROM notes_fts f WHERE f.note_id = n.id);
@@ -484,27 +600,81 @@ func (d *DB) ensureNotesFTS() error {
 		`CREATE TRIGGER IF NOT EXISTS notes_fts_au AFTER UPDATE OF title ON notes BEGIN
 			UPDATE notes_fts SET title = COALESCE(new.title, '') WHERE note_id = new.id;
 		END`,
-		// Tags: when a tag is attached/detached we rebuild the tags column for
-		// the affected note(s) so the FTS row reflects the current set.
+		// Tags: when a manual or auto-tag is attached/detached we rebuild the tags
+		// column for the affected note(s) so the FTS row reflects the current set.
 		`CREATE TRIGGER IF NOT EXISTS notes_fts_tags_ai AFTER INSERT ON tags_refs BEGIN
 			UPDATE notes_fts
 			SET tags = COALESCE((
-			  SELECT GROUP_CONCAT(t.name, ' ')
-			  FROM tags_refs tr
-			  JOIN tags t ON t.id = tr.tag_id
-			  WHERE tr.note_id = new.note_id
-			  ORDER BY t.name
+			  SELECT GROUP_CONCAT(tag_name, ' ')
+			  FROM (
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM tags_refs tr
+			    JOIN tags t ON t.id = tr.tag_id
+			    WHERE tr.note_id = new.note_id
+			    UNION
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM auto_tags_refs atr
+			    JOIN tags t ON t.id = atr.tag_id
+			    WHERE atr.note_id = new.note_id
+			    ORDER BY tag_name
+			  ) all_tags
 			), '')
 			WHERE note_id = new.note_id;
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS notes_fts_tags_ad AFTER DELETE ON tags_refs BEGIN
 			UPDATE notes_fts
 			SET tags = COALESCE((
-			  SELECT GROUP_CONCAT(t.name, ' ')
-			  FROM tags_refs tr
-			  JOIN tags t ON t.id = tr.tag_id
-			  WHERE tr.note_id = old.note_id
-			  ORDER BY t.name
+			  SELECT GROUP_CONCAT(tag_name, ' ')
+			  FROM (
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM tags_refs tr
+			    JOIN tags t ON t.id = tr.tag_id
+			    WHERE tr.note_id = old.note_id
+			    UNION
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM auto_tags_refs atr
+			    JOIN tags t ON t.id = atr.tag_id
+			    WHERE atr.note_id = old.note_id
+			    ORDER BY tag_name
+			  ) all_tags
+			), '')
+			WHERE note_id = old.note_id;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_auto_tags_ai AFTER INSERT ON auto_tags_refs BEGIN
+			UPDATE notes_fts
+			SET tags = COALESCE((
+			  SELECT GROUP_CONCAT(tag_name, ' ')
+			  FROM (
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM tags_refs tr
+			    JOIN tags t ON t.id = tr.tag_id
+			    WHERE tr.note_id = new.note_id
+			    UNION
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM auto_tags_refs atr
+			    JOIN tags t ON t.id = atr.tag_id
+			    WHERE atr.note_id = new.note_id
+			    ORDER BY tag_name
+			  ) all_tags
+			), '')
+			WHERE note_id = new.note_id;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS notes_fts_auto_tags_ad AFTER DELETE ON auto_tags_refs BEGIN
+			UPDATE notes_fts
+			SET tags = COALESCE((
+			  SELECT GROUP_CONCAT(tag_name, ' ')
+			  FROM (
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM tags_refs tr
+			    JOIN tags t ON t.id = tr.tag_id
+			    WHERE tr.note_id = old.note_id
+			    UNION
+			    SELECT DISTINCT t.name AS tag_name
+			    FROM auto_tags_refs atr
+			    JOIN tags t ON t.id = atr.tag_id
+			    WHERE atr.note_id = old.note_id
+			    ORDER BY tag_name
+			  ) all_tags
 			), '')
 			WHERE note_id = old.note_id;
 		END`,
@@ -512,14 +682,26 @@ func (d *DB) ensureNotesFTS() error {
 		`CREATE TRIGGER IF NOT EXISTS notes_fts_tags_au AFTER UPDATE OF name ON tags BEGIN
 			UPDATE notes_fts
 			SET tags = COALESCE((
-			  SELECT GROUP_CONCAT(t2.name, ' ')
-			  FROM tags_refs tr2
-			  JOIN tags t2 ON t2.id = tr2.tag_id
-			  WHERE tr2.note_id = tr.note_id
-			  ORDER BY t2.name
+			  SELECT GROUP_CONCAT(tag_name, ' ')
+			  FROM (
+			    SELECT DISTINCT t2.name AS tag_name
+			    FROM tags_refs tr2
+			    JOIN tags t2 ON t2.id = tr2.tag_id
+			    WHERE tr2.note_id = refs.note_id
+			    UNION
+			    SELECT DISTINCT t2.name AS tag_name
+			    FROM auto_tags_refs atr2
+			    JOIN tags t2 ON t2.id = atr2.tag_id
+			    WHERE atr2.note_id = refs.note_id
+			    ORDER BY tag_name
+			  ) all_tags
 			), '')
-			FROM tags_refs tr
-			WHERE tr.tag_id = new.id AND notes_fts.note_id = tr.note_id;
+			FROM (
+			  SELECT note_id FROM tags_refs WHERE tag_id = new.id
+			  UNION
+			  SELECT note_id FROM auto_tags_refs WHERE tag_id = new.id
+			) refs
+			WHERE notes_fts.note_id = refs.note_id;
 		END`,
 	} {
 		if _, err := d.Exec(stmt); err != nil {

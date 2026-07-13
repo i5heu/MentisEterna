@@ -13,6 +13,7 @@ import (
 
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/searchindex"
+	internaltags "github.com/i5heu/MentisEterna/internal/tags"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
@@ -47,6 +48,7 @@ type NoteDetail struct {
 	UpdatedAt   string        `json:"updated_at"`
 	Plugin      *PluginDetail `json:"plugin,omitempty"`
 	Tags        []string      `json:"tags"`
+	AutoTags    []string      `json:"auto_tags"`
 	Attachments []NoteFile    `json:"attachments,omitempty"`
 }
 
@@ -90,7 +92,7 @@ func (s *Server) enrichDetail(n *NoteDetail) {
 		return
 	}
 
-	// Load tags for all note types (including standard).
+	// Load manual tags for all note types (including standard).
 	tags, err := loadTags(s.db.DB, n.ID)
 	if err != nil {
 		log.Printf("tags: load for note %d: %v", n.ID, err)
@@ -99,6 +101,15 @@ func (s *Server) enrichDetail(n *NoteDetail) {
 		tags = []string{}
 	}
 	n.Tags = tags
+
+	autoTags, err := loadAutoTags(s.db.DB, n.ID)
+	if err != nil {
+		log.Printf("auto tags: load for note %d: %v", n.ID, err)
+		autoTags = []string{}
+	} else if autoTags == nil {
+		autoTags = []string{}
+	}
+	n.AutoTags = autoTags
 
 	plugin, exists := notetype.Registry[n.Type]
 	if !exists {
@@ -133,50 +144,82 @@ func (s *Server) enrichDetail(n *NoteDetail) {
 	n.Plugin = pd
 }
 
-// loadTags returns the tag names for a note.
-func loadTags(d *sql.DB, noteID int64) ([]string, error) {
-	rows, err := d.Query(`SELECT t.name FROM tags t JOIN tags_refs tr ON tr.tag_id = t.id WHERE tr.note_id = ? ORDER BY t.name`, noteID)
+func loadNoteTagNames(d *sql.DB, refTable string, noteID int64) ([]string, error) {
+	rows, err := d.Query(`SELECT t.name FROM tags t JOIN `+refTable+` tr ON tr.tag_id = t.id WHERE tr.note_id = ? ORDER BY t.name`, noteID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var tags []string
+	var out []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
-		tags = append(tags, name)
+		out = append(out, name)
 	}
-	return tags, rows.Err()
+	return out, rows.Err()
 }
 
-// saveTags replaces the tags for a note within a transaction.
-// Each tag name is trimmed; blank names are skipped.
-func saveTags(tx *sql.Tx, noteID int64, tags []string) error {
-	if _, err := tx.Exec(`DELETE FROM tags_refs WHERE note_id = ?`, noteID); err != nil {
+// loadTags returns the manual tag names for a note.
+func loadTags(d *sql.DB, noteID int64) ([]string, error) {
+	return loadNoteTagNames(d, "tags_refs", noteID)
+}
+
+// loadAutoTags returns the model-generated tag names for a note.
+func loadAutoTags(d *sql.DB, noteID int64) ([]string, error) {
+	return loadNoteTagNames(d, "auto_tags_refs", noteID)
+}
+
+func loadAllKnownTags(d *sql.DB) ([]string, error) {
+	rows, err := d.Query(`
+		SELECT DISTINCT t.name
+		FROM tags t
+		WHERE EXISTS (SELECT 1 FROM tags_refs tr WHERE tr.tag_id = t.id)
+		   OR EXISTS (SELECT 1 FROM auto_tags_refs atr WHERE atr.tag_id = t.id)
+		ORDER BY t.name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+func saveTagRefs(tx *sql.Tx, refTable string, noteID int64, tags []string) error {
+	if _, err := tx.Exec(`DELETE FROM `+refTable+` WHERE note_id = ?`, noteID); err != nil {
 		return err
 	}
-	seen := make(map[string]bool)
-	for _, name := range tags {
-		name = strings.TrimSpace(name)
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		// Upsert the tag.
+	for _, name := range internaltags.NormalizeNames(tags) {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO tags (name) VALUES (?)`, name); err != nil {
 			return err
 		}
-		// Resolve the tag ID and create the reference.
 		if _, err := tx.Exec(`
-			INSERT OR IGNORE INTO tags_refs (note_id, tag_id)
+			INSERT OR IGNORE INTO `+refTable+` (note_id, tag_id)
 			SELECT ?, id FROM tags WHERE name = ?
 		`, noteID, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// saveTags replaces the manually managed tags for a note within a transaction.
+func saveTags(tx *sql.Tx, noteID int64, tags []string) error {
+	return saveTagRefs(tx, "tags_refs", noteID, tags)
+}
+
+// saveAutoTags replaces the model-generated tags for a note within a transaction.
+func saveAutoTags(tx *sql.Tx, noteID int64, tags []string) error {
+	return saveTagRefs(tx, "auto_tags_refs", noteID, tags)
 }
 
 // loadNoteAttachments loads attachment metadata for a note from the database.
@@ -356,6 +399,7 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	if !userProvidedTitle {
 		s.enqueueTitleGeneration(id, in.Body)
 	}
+	s.enqueueAutoTagGeneration(id)
 	notifyIDs := []int64{id}
 	if in.ParentID != nil && *in.ParentID > 0 {
 		notifyIDs = append(notifyIDs, *in.ParentID)
@@ -506,6 +550,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	if !userProvidedTitle {
 		s.enqueueTitleGeneration(id, in.Body)
 	}
+	s.enqueueAutoTagGeneration(id)
 	notifyIDs := []int64{id}
 	if previousParentID.Valid && previousParentID.Int64 > 0 {
 		notifyIDs = append(notifyIDs, previousParentID.Int64)
@@ -872,6 +917,40 @@ func (s *Server) dispatchAction(w http.ResponseWriter, r *http.Request, noteID i
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleAutoTags regenerates model-based tags for the current saved note state.
+// POST /notes/:id/auto-tags
+func (s *Server) handleAutoTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.autoTagger == nil {
+		http.Error(w, "auto tag generation is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id, ok := noteID(w, r)
+	if !ok {
+		return
+	}
+
+	autoTags, err := s.generateAndPersistAutoTags(context.Background(), s.db.DB, id)
+	if autoTags == nil {
+		autoTags = []string{}
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	s.enqueueVSSIndex(id)
+	s.notifyNotesChanged("auto_tags_generated", id)
+	writeJSON(w, http.StatusOK, map[string]any{"auto_tags": autoTags})
+}
+
 func actionRelatedNoteIDs(sourceNoteID int64, result any) []int64 {
 	noteIDs := []int64{sourceNoteID}
 	if result == nil {
@@ -931,6 +1010,7 @@ func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	seg = strings.TrimSuffix(seg, "/children")
 	seg = strings.TrimSuffix(seg, "/action")
 	seg = strings.TrimSuffix(seg, "/pin")
+	seg = strings.TrimSuffix(seg, "/auto-tags")
 	// Strip /actions/:actionID suffix if present.
 	if idx := strings.LastIndex(seg, "/actions/"); idx >= 0 {
 		seg = seg[:idx]
@@ -1273,6 +1353,137 @@ func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
 	}
 }
 
+func (s *Server) enqueueAutoTagGeneration(noteID int64) {
+	if s.jobManager == nil || s.autoTagger == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"note_id": noteID,
+	})
+	if _, err := s.jobManager.Enqueue("_system", "generate_auto_tags", payload); err != nil {
+		log.Printf("auto tags: enqueue generation for note %d: %v", noteID, err)
+	}
+}
+
+func (s *Server) generateAndPersistAutoTags(ctx context.Context, db *sql.DB, noteID int64) ([]string, error) {
+	if s.autoTagger == nil {
+		return nil, fmt.Errorf("auto tags: no chat client configured")
+	}
+
+	var title, body string
+	err := db.QueryRow(`
+		SELECT n.title, COALESCE(u.body, '') AS body
+		FROM notes n
+		LEFT JOIN updates u ON u.id = (
+			SELECT id FROM updates WHERE note_id = n.id ORDER BY id DESC LIMIT 1
+		)
+		WHERE n.id = ?
+	`, noteID).Scan(&title, &body)
+	if err != nil {
+		return nil, err
+	}
+
+	manualTags, err := loadTags(db, noteID)
+	if err != nil {
+		return nil, fmt.Errorf("auto tags: load manual tags: %w", err)
+	}
+	if manualTags == nil {
+		manualTags = []string{}
+	}
+	knownTags, err := loadAllKnownTags(db)
+	if err != nil {
+		return nil, fmt.Errorf("auto tags: load known tags: %w", err)
+	}
+	if knownTags == nil {
+		knownTags = []string{}
+	}
+	if len(knownTags) > 200 {
+		knownTags = knownTags[:200]
+	}
+
+	release := llm.BeginBackendUse(s.autoTagger)
+	defer release()
+
+	suggestion, err := s.autoTagger.SuggestTags(llm.AutoTagSuggestionInput{
+		Title:        title,
+		Body:         body,
+		ExistingTags: knownTags,
+		CurrentTags:  manualTags,
+		MaxExisting:  8,
+		MaxNew:       4,
+		MaxTotal:     10,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auto tags: suggest: %w", err)
+	}
+
+	manualSet := make(map[string]bool, len(manualTags))
+	for _, tag := range internaltags.NormalizeNames(manualTags) {
+		manualSet[tag] = true
+	}
+
+	combined := append(append([]string{}, suggestion.ExistingTags...), suggestion.NewTags...)
+	normalized := internaltags.NormalizeNames(combined)
+	filtered := make([]string, 0, len(normalized))
+	for _, tag := range normalized {
+		if manualSet[tag] {
+			continue
+		}
+		filtered = append(filtered, tag)
+	}
+	if len(filtered) > 10 {
+		filtered = filtered[:10]
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err := saveAutoTags(tx, noteID, filtered); err != nil {
+		return nil, fmt.Errorf("auto tags: save: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	autoTags, err := loadAutoTags(db, noteID)
+	if err != nil {
+		return nil, err
+	}
+	if autoTags == nil {
+		autoTags = []string{}
+	}
+	return autoTags, nil
+}
+
+func (s *Server) generateAutoTagsTask(db *sql.DB, payload []byte) (string, error) {
+	if s.autoTagger == nil {
+		return "", fmt.Errorf("generate_auto_tags: no auto tagger configured")
+	}
+	var p struct {
+		NoteID int64 `json:"note_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("generate_auto_tags: invalid payload: %w", err)
+	}
+	if p.NoteID <= 0 {
+		return "", fmt.Errorf("generate_auto_tags: missing note_id")
+	}
+
+	autoTags, err := s.generateAndPersistAutoTags(context.Background(), db, p.NoteID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Sprintf("Skipped auto tags for missing note %d", p.NoteID), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if s.llm != nil {
+		s.enqueueVSSIndex(p.NoteID)
+	}
+	s.notifyNotesChanged("auto_tags_generated", p.NoteID)
+	return fmt.Sprintf("Generated %d auto tags for note %d", len(autoTags), p.NoteID), nil
+}
+
 // handleNoteTypes returns the catalog of all available note types.
 // GET /note-types
 func (s *Server) handleNoteTypes(w http.ResponseWriter, r *http.Request) {
@@ -1306,14 +1517,28 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	q := internaltags.NormalizeName(r.URL.Query().Get("q"))
 
 	var rows *sql.Rows
 	var err error
 	if q == "" {
-		rows, err = s.db.Query(`SELECT DISTINCT t.name FROM tags t JOIN tags_refs tr ON tr.tag_id = t.id ORDER BY t.name`)
+		rows, err = s.db.Query(`
+			SELECT DISTINCT t.name
+			FROM tags t
+			WHERE EXISTS (SELECT 1 FROM tags_refs tr WHERE tr.tag_id = t.id)
+			   OR EXISTS (SELECT 1 FROM auto_tags_refs atr WHERE atr.tag_id = t.id)
+			ORDER BY t.name
+		`)
 	} else {
-		rows, err = s.db.Query(`SELECT DISTINCT t.name FROM tags t JOIN tags_refs tr ON tr.tag_id = t.id WHERE t.name LIKE ? ORDER BY t.name LIMIT 20`, q+"%")
+		rows, err = s.db.Query(`
+			SELECT DISTINCT t.name
+			FROM tags t
+			WHERE (EXISTS (SELECT 1 FROM tags_refs tr WHERE tr.tag_id = t.id)
+			   OR EXISTS (SELECT 1 FROM auto_tags_refs atr WHERE atr.tag_id = t.id))
+			  AND t.name LIKE ?
+			ORDER BY t.name
+			LIMIT 20
+		`, q+"%")
 	}
 	if err != nil {
 		writeErr(w, err)
