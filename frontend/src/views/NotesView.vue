@@ -17,7 +17,7 @@
                     />
                 </div>
                 <span class="app-title">MentisEterna</span>
-                <span class="ws-indicator" :class="{ connected: wsConnected, disconnected: !wsConnected }" :title="wsConnected ? 'Connected' + (wsLatency != null ? ' (' + wsLatency + ' ms)' : '') : 'Disconnected'">
+                <span class="ws-indicator" :class="{ connected: wsConnected, disconnected: !wsConnected }" :title="wsIndicatorTitle">
                     <span class="ws-dot"></span>
                     <span v-if="wsLatency != null" class="ws-latency">{{ wsLatency }} ms</span>
                 </span>
@@ -1560,6 +1560,17 @@ const props = defineProps({
     token: String,
     wsConnected: Boolean,
     wsLatency: Number,
+    wsLatencyDetail: Object,
+});
+
+const wsIndicatorTitle = computed(() => {
+    if (!props.wsConnected) return "Disconnected";
+    if (props.wsLatency == null) return "Connected";
+    const parts = [`RTT ${props.wsLatency} ms`];
+    if (props.wsLatencyDetail?.serverProcessingMs != null) {
+        parts.push(`server ${props.wsLatencyDetail.serverProcessingMs} ms`);
+    }
+    return `Connected (${parts.join(", ")})`;
 });
 const emit = defineEmits(["logout", "navigate-options"]);
 

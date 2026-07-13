@@ -4,16 +4,19 @@ import { ref } from "vue";
 let _initialized = false;
 const wsConnected = ref(false);
 const wsLatency = ref(null);
+const wsLatencyDetail = ref(null);
 
 function onLiveStatus(event) {
     wsConnected.value = !!event.detail.connected;
     if (!event.detail.connected && !event.detail.connecting) {
         wsLatency.value = null;
+        wsLatencyDetail.value = null;
     }
 }
 
 function onLiveLatency(event) {
     wsLatency.value = event.detail.ms;
+    wsLatencyDetail.value = event.detail;
 }
 
 export function useLiveStatus() {
@@ -26,5 +29,6 @@ export function useLiveStatus() {
     return {
         wsConnected,
         wsLatency,
+        wsLatencyDetail,
     };
 }

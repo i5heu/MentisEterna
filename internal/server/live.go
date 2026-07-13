@@ -25,11 +25,14 @@ const (
 )
 
 type liveMessage struct {
-	Type      string         `json:"type"`
-	Timestamp string         `json:"timestamp"`
-	Reason    string         `json:"reason,omitempty"`
-	NoteIDs   []int64        `json:"note_ids,omitempty"`
-	Job       *jobs.RunEvent `json:"job,omitempty"`
+	Type               string         `json:"type"`
+	Timestamp          string         `json:"timestamp,omitempty"`
+	Reason             string         `json:"reason,omitempty"`
+	NoteIDs            []int64        `json:"note_ids,omitempty"`
+	Job                *jobs.RunEvent `json:"job,omitempty"`
+	ClientSentAtMS     *float64       `json:"client_sent_at_ms,omitempty"`
+	ServerReceivedAtUS int64          `json:"server_received_at_us,omitempty"`
+	ServerSentAtUS     int64          `json:"server_sent_at_us,omitempty"`
 }
 
 type liveHub struct {
@@ -41,7 +44,7 @@ type liveHub struct {
 type liveClient struct {
 	hub  *liveHub
 	conn *websocket.Conn
-	send chan []byte
+	send chan liveMessage
 }
 
 func newLiveHub() *liveHub {
@@ -87,7 +90,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	client := &liveClient{
 		hub:  s.liveHub,
 		conn: conn,
-		send: make(chan []byte, 64),
+		send: make(chan liveMessage, 64),
 	}
 	s.liveHub.register(client)
 	client.enqueueJSON(liveMessage{Type: liveTypeReady, Timestamp: liveTimestamp()})
@@ -139,12 +142,6 @@ func (h *liveHub) unregister(client *liveClient) {
 }
 
 func (h *liveHub) broadcast(msg liveMessage) {
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("live: marshal event %s: %v", msg.Type, err)
-		return
-	}
-
 	h.mu.RLock()
 	clients := make([]*liveClient, 0, len(h.clients))
 	for client := range h.clients {
@@ -154,7 +151,7 @@ func (h *liveHub) broadcast(msg liveMessage) {
 
 	for _, client := range clients {
 		select {
-		case client.send <- payload:
+		case client.send <- msg:
 		default:
 			h.unregister(client)
 			_ = client.conn.Close()
@@ -163,13 +160,8 @@ func (h *liveHub) broadcast(msg liveMessage) {
 }
 
 func (c *liveClient) enqueueJSON(msg liveMessage) {
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("live: marshal direct event %s: %v", msg.Type, err)
-		return
-	}
 	select {
-	case c.send <- payload:
+	case c.send <- msg:
 	default:
 		c.hub.unregister(c)
 		_ = c.conn.Close()
@@ -193,10 +185,16 @@ func (c *liveClient) readLoop() {
 		}
 		if msgType == websocket.TextMessage {
 			var m struct {
-				Type string `json:"type"`
+				Type           string   `json:"type"`
+				ClientSentAtMS *float64 `json:"client_sent_at_ms"`
 			}
 			if json.Unmarshal(msg, &m) == nil && m.Type == "ping" {
-				c.enqueueJSON(liveMessage{Type: "pong", Timestamp: liveTimestamp()})
+				receivedAt := time.Now().UTC()
+				c.enqueueJSON(liveMessage{
+					Type:               "pong",
+					ClientSentAtMS:     m.ClientSentAtMS,
+					ServerReceivedAtUS: receivedAt.UnixMicro(),
+				})
 			}
 		}
 	}
@@ -210,10 +208,26 @@ func (c *liveClient) writeLoop() {
 	}()
 	for {
 		select {
-		case payload, ok := <-c.send:
+		case msg, ok := <-c.send:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 			if !ok {
 				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			if msg.Type == "pong" {
+				sentAt := time.Now().UTC()
+				if msg.ServerSentAtUS == 0 {
+					msg.ServerSentAtUS = sentAt.UnixMicro()
+				}
+				if msg.Timestamp == "" {
+					msg.Timestamp = sentAt.Format(time.RFC3339Nano)
+				}
+			} else if msg.Timestamp == "" {
+				msg.Timestamp = liveTimestamp()
+			}
+			payload, err := json.Marshal(msg)
+			if err != nil {
+				log.Printf("live: marshal event %s: %v", msg.Type, err)
 				return
 			}
 			if err := c.conn.WriteMessage(websocket.TextMessage, payload); err != nil {

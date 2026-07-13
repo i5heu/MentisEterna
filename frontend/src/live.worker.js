@@ -14,6 +14,35 @@ function roundLatency(ms) {
     return Math.round(ms * 10) / 10;
 }
 
+function buildLatencyDetail(payload, fallbackClientSentAt) {
+    const clientSentAt =
+        typeof payload.client_sent_at_ms === "number"
+            ? payload.client_sent_at_ms
+            : fallbackClientSentAt;
+    if (typeof clientSentAt !== "number") {
+        return null;
+    }
+
+    const detail = {
+        ms: roundLatency(performance.now() - clientSentAt),
+        clientSentAtMs: clientSentAt,
+    };
+
+    if (
+        typeof payload.server_received_at_us === "number" &&
+        typeof payload.server_sent_at_us === "number" &&
+        payload.server_sent_at_us >= payload.server_received_at_us
+    ) {
+        detail.serverReceivedAtUs = payload.server_received_at_us;
+        detail.serverSentAtUs = payload.server_sent_at_us;
+        detail.serverProcessingMs = roundLatency(
+            (payload.server_sent_at_us - payload.server_received_at_us) / 1000,
+        );
+    }
+
+    return detail;
+}
+
 function scheduleLiveReconnect() {
     if (!liveConnectionDesired || liveReconnectTimer) return;
     const delay = Math.min(1000 * 2 ** liveReconnectAttempt, 10000);
@@ -53,10 +82,12 @@ function openLiveSocket() {
     socket.onmessage = (event) => {
         try {
             const payload = JSON.parse(event.data);
-            if (payload.type === "pong" && livePingSentAt !== null) {
-                const rtt = performance.now() - livePingSentAt;
+            if (payload.type === "pong") {
+                const detail = buildLatencyDetail(payload, livePingSentAt);
                 livePingSentAt = null;
-                post("latency", { ms: roundLatency(rtt) });
+                if (detail) {
+                    post("latency", detail);
+                }
                 return;
             }
             post("message", payload);
@@ -87,7 +118,12 @@ function startLivePings(socket) {
             livePingSentAt === null
         ) {
             livePingSentAt = performance.now();
-            socket.send(JSON.stringify({ type: "ping" }));
+            socket.send(
+                JSON.stringify({
+                    type: "ping",
+                    client_sent_at_ms: livePingSentAt,
+                }),
+            );
         }
     }, 1000);
 }

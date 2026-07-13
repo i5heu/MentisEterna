@@ -326,7 +326,8 @@ func TestWebSocketAppPingPong(t *testing.T) {
 
 	// Send application-level ping.
 	beforeSend := time.Now()
-	if err := conn.WriteJSON(map[string]string{"type": "ping"}); err != nil {
+	clientSentAt := 123.456
+	if err := conn.WriteJSON(map[string]any{"type": "ping", "client_sent_at_ms": clientSentAt}); err != nil {
 		t.Fatalf("write ping: %v", err)
 	}
 
@@ -342,14 +343,29 @@ func TestWebSocketAppPingPong(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339Nano, msg.Timestamp); err != nil {
 		t.Errorf("pong timestamp %q is not valid RFC3339Nano: %v", msg.Timestamp, err)
 	}
+	if msg.ClientSentAtMS == nil || *msg.ClientSentAtMS != clientSentAt {
+		t.Fatalf("client_sent_at_ms = %v, want %v", msg.ClientSentAtMS, clientSentAt)
+	}
+	if msg.ServerReceivedAtUS == 0 {
+		t.Error("pong missing server_received_at_us")
+	}
+	if msg.ServerSentAtUS == 0 {
+		t.Error("pong missing server_sent_at_us")
+	}
+	if msg.ServerSentAtUS < msg.ServerReceivedAtUS {
+		t.Errorf("server_sent_at_us %d before server_received_at_us %d", msg.ServerSentAtUS, msg.ServerReceivedAtUS)
+	}
 
 	// Verify the connection is still healthy by sending another ping and
 	// checking the channel is not closed.
-	if err := conn.WriteJSON(map[string]string{"type": "ping"}); err != nil {
+	if err := conn.WriteJSON(map[string]any{"type": "ping", "client_sent_at_ms": 789.012}); err != nil {
 		t.Fatalf("write second ping: %v", err)
 	}
 	msg2 := requireLiveMessageType(t, conn, "pong")
 	if msg2.Timestamp == "" {
 		t.Error("second pong message has empty timestamp")
+	}
+	if msg2.ClientSentAtMS == nil || *msg2.ClientSentAtMS != 789.012 {
+		t.Fatalf("second client_sent_at_ms = %v, want %v", msg2.ClientSentAtMS, 789.012)
 	}
 }
