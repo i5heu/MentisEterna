@@ -158,7 +158,9 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [ ] Setup building pipeline
 - [x] In note edit add "//" to search and add a page link to the note
 - [x] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
-- [ ] Add automatic tags in a new "Auto Tags" to the NoteType. 
+- [x] Add automatic tags in a new "Auto Tags" to the NoteType. 
+- [ ] Add a tag search mode too the search-input.
+- [ ] Tag Index Note Type differentiate between auto tags and user tags.
 - [x] Connected/Disconnected and ping indicator.
 - [x] Websocket for real time updates of notes, jobs and other stuff
 - [x] OCR for images and pdfs

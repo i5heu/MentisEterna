@@ -1369,6 +1369,15 @@ func (s *Server) generateAndPersistAutoTags(ctx context.Context, db *sql.DB, not
 	if s.autoTagger == nil {
 		return nil, fmt.Errorf("auto tags: no chat client configured")
 	}
+	release := llm.BeginBackendUse(s.autoTagger)
+	defer release()
+	return s.generateAndPersistAutoTagsWithActiveLease(ctx, db, noteID)
+}
+
+func (s *Server) generateAndPersistAutoTagsWithActiveLease(ctx context.Context, db *sql.DB, noteID int64) ([]string, error) {
+	if s.autoTagger == nil {
+		return nil, fmt.Errorf("auto tags: no chat client configured")
+	}
 
 	var title, body string
 	err := db.QueryRow(`
@@ -1400,9 +1409,6 @@ func (s *Server) generateAndPersistAutoTags(ctx context.Context, db *sql.DB, not
 	if len(knownTags) > 200 {
 		knownTags = knownTags[:200]
 	}
-
-	release := llm.BeginBackendUse(s.autoTagger)
-	defer release()
 
 	suggestion, err := s.autoTagger.SuggestTags(llm.AutoTagSuggestionInput{
 		Title:        title,
@@ -1456,6 +1462,18 @@ func (s *Server) generateAndPersistAutoTags(ctx context.Context, db *sql.DB, not
 	return autoTags, nil
 }
 
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) generateAutoTagsTask(db *sql.DB, payload []byte) (string, error) {
 	if s.autoTagger == nil {
 		return "", fmt.Errorf("generate_auto_tags: no auto tagger configured")
@@ -1482,6 +1500,68 @@ func (s *Server) generateAutoTagsTask(db *sql.DB, payload []byte) (string, error
 	}
 	s.notifyNotesChanged("auto_tags_generated", p.NoteID)
 	return fmt.Sprintf("Generated %d auto tags for note %d", len(autoTags), p.NoteID), nil
+}
+
+func (s *Server) refreshAllAutoTagsTask(db *sql.DB, _ []byte) (string, error) {
+	if s.autoTagger == nil {
+		return "", fmt.Errorf("refresh_all_auto_tags: no auto tagger configured")
+	}
+
+	rows, err := db.Query(`SELECT id FROM notes ORDER BY id ASC`)
+	if err != nil {
+		return "", fmt.Errorf("refresh_all_auto_tags: list notes: %w", err)
+	}
+	var noteIDs []int64
+	for rows.Next() {
+		var noteID int64
+		if err := rows.Scan(&noteID); err != nil {
+			rows.Close()
+			return "", fmt.Errorf("refresh_all_auto_tags: scan note id: %w", err)
+		}
+		noteIDs = append(noteIDs, noteID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return "", fmt.Errorf("refresh_all_auto_tags: iterate notes: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return "", fmt.Errorf("refresh_all_auto_tags: close note list: %w", err)
+	}
+
+	release := llm.BeginBackendUse(s.autoTagger)
+	defer release()
+
+	var total int
+	var changed int
+	for _, noteID := range noteIDs {
+		total++
+
+		before, err := loadAutoTags(db, noteID)
+		if err != nil {
+			return "", fmt.Errorf("refresh_all_auto_tags: load existing auto tags for note %d: %w", noteID, err)
+		}
+		if before == nil {
+			before = []string{}
+		}
+
+		after, err := s.generateAndPersistAutoTagsWithActiveLease(context.Background(), db, noteID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("refresh_all_auto_tags: note %d: %w", noteID, err)
+		}
+		if stringSlicesEqual(before, after) {
+			continue
+		}
+		changed++
+		if s.llm != nil {
+			s.enqueueVSSIndex(noteID)
+		}
+		s.notifyNotesChanged("auto_tags_generated", noteID)
+	}
+
+	return fmt.Sprintf("Refreshed auto tags for %d notes (%d changed)", total, changed), nil
 }
 
 // handleNoteTypes returns the catalog of all available note types.
