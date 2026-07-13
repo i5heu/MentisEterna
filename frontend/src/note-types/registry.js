@@ -347,7 +347,40 @@ const registry = [
                 selected_tags: Array.isArray(raw.selected_tags)
                     ? raw.selected_tags
                     : [],
-                entries: Array.isArray(raw.entries) ? raw.entries : [],
+                entries: Array.isArray(raw.entries)
+                    ? raw.entries.map((entry) => ({
+                          tag: entry?.tag || "",
+                          source: entry?.source || "unknown",
+                          count: Number.isFinite(Number(entry?.count))
+                              ? Number(entry.count)
+                              : 0,
+                          user_count: Number.isFinite(Number(entry?.user_count))
+                              ? Number(entry.user_count)
+                              : 0,
+                          auto_count: Number.isFinite(Number(entry?.auto_count))
+                              ? Number(entry.auto_count)
+                              : 0,
+                          notes: Array.isArray(entry?.notes)
+                              ? entry.notes.map((note) => ({
+                                    note_id: Number.isFinite(
+                                        Number(note?.note_id),
+                                    )
+                                        ? Number(note.note_id)
+                                        : 0,
+                                    title: note?.title || "",
+                                    parent_id: Number.isFinite(
+                                        Number(note?.parent_id),
+                                    )
+                                        ? Number(note.parent_id)
+                                        : null,
+                                    created_at: note?.created_at || "",
+                                    source: note?.source || "unknown",
+                                    has_user_tag: !!note?.has_user_tag,
+                                    has_auto_tag: !!note?.has_auto_tag,
+                                }))
+                              : [],
+                      }))
+                    : [],
             };
         },
         supportsSchemaFallback: false,
