@@ -51,17 +51,23 @@ type Payload struct {
 
 // IndexEntry groups notes under a single tag.
 type IndexEntry struct {
-	Tag   string      `json:"tag"`
-	Count int         `json:"count"`
-	Notes []IndexNote `json:"notes"`
+	Tag       string      `json:"tag"`
+	Source    string      `json:"source"`
+	Count     int         `json:"count"`
+	UserCount int         `json:"user_count"`
+	AutoCount int         `json:"auto_count"`
+	Notes     []IndexNote `json:"notes"`
 }
 
 // IndexNote is a lightweight note reference used in index entries.
 type IndexNote struct {
-	NoteID    int64  `json:"note_id"`
-	Title     string `json:"title"`
-	ParentID  *int64 `json:"parent_id"`
-	CreatedAt string `json:"created_at"`
+	NoteID     int64  `json:"note_id"`
+	Title      string `json:"title"`
+	ParentID   *int64 `json:"parent_id"`
+	CreatedAt  string `json:"created_at"`
+	Source     string `json:"source"`
+	HasUserTag bool   `json:"has_user_tag"`
+	HasAutoTag bool   `json:"has_auto_tag"`
 }
 
 // Response is what BuildView returns to the frontend.
@@ -213,11 +219,13 @@ func buildIndex(db *sql.DB, noteID int64, cfg Payload) ([]IndexEntry, error) {
 	defer rows.Close()
 
 	type row struct {
-		tag       string
-		noteID    int64
-		title     string
-		parentID  *int64
-		createdAt string
+		tag        string
+		noteID     int64
+		title      string
+		parentID   *int64
+		createdAt  string
+		hasUserTag bool
+		hasAutoTag bool
 	}
 
 	entriesMap := make(map[string]*IndexEntry)
@@ -225,7 +233,7 @@ func buildIndex(db *sql.DB, noteID int64, cfg Payload) ([]IndexEntry, error) {
 
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.tag, &r.noteID, &r.title, &r.parentID, &r.createdAt); err != nil {
+		if err := rows.Scan(&r.tag, &r.noteID, &r.title, &r.parentID, &r.createdAt, &r.hasUserTag, &r.hasAutoTag); err != nil {
 			return nil, fmt.Errorf("index: scan row: %w", err)
 		}
 		entry, exists := entriesMap[r.tag]
@@ -235,12 +243,22 @@ func buildIndex(db *sql.DB, noteID int64, cfg Payload) ([]IndexEntry, error) {
 			tagOrder = append(tagOrder, r.tag)
 		}
 		entry.Notes = append(entry.Notes, IndexNote{
-			NoteID:    r.noteID,
-			Title:     r.title,
-			ParentID:  r.parentID,
-			CreatedAt: r.createdAt,
+			NoteID:     r.noteID,
+			Title:      r.title,
+			ParentID:   r.parentID,
+			CreatedAt:  r.createdAt,
+			Source:     classifyTagSource(r.hasUserTag, r.hasAutoTag),
+			HasUserTag: r.hasUserTag,
+			HasAutoTag: r.hasAutoTag,
 		})
 		entry.Count = len(entry.Notes)
+		if r.hasUserTag {
+			entry.UserCount++
+		}
+		if r.hasAutoTag {
+			entry.AutoCount++
+		}
+		entry.Source = classifyTagSource(entry.UserCount > 0, entry.AutoCount > 0)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -326,12 +344,14 @@ func queryTagIndex(db *sql.DB, selectedTags []string, noteIDs []int64) (*sql.Row
 		       COALESCE(
 		         (SELECT u.created_at FROM updates u WHERE u.note_id = n.id ORDER BY u.id DESC LIMIT 1),
 		         n.created_at
-		       ) AS created_at
+		       ) AS created_at,
+		       MAX(CASE WHEN tr.source = 'user' THEN 1 ELSE 0 END) AS has_user_tag,
+		       MAX(CASE WHEN tr.source = 'auto' THEN 1 ELSE 0 END) AS has_auto_tag
 		FROM tags t
 		JOIN (
-			SELECT note_id, tag_id FROM tags_refs
-			UNION
-			SELECT note_id, tag_id FROM auto_tags_refs
+			SELECT note_id, tag_id, 'user' AS source FROM tags_refs
+			UNION ALL
+			SELECT note_id, tag_id, 'auto' AS source FROM auto_tags_refs
 		) tr ON tr.tag_id = t.id
 		JOIN notes n ON n.id = tr.note_id
 	`
@@ -360,9 +380,23 @@ func queryTagIndex(db *sql.DB, selectedTags []string, noteIDs []int64) (*sql.Row
 			query += " AND " + conditions[i]
 		}
 	}
+	query += " GROUP BY t.name, n.id, n.title, n.parent_id, created_at"
 	query += " ORDER BY t.name, n.title"
 
 	return db.Query(query, args...)
+}
+
+func classifyTagSource(hasUser, hasAuto bool) string {
+	switch {
+	case hasUser && hasAuto:
+		return "mixed"
+	case hasUser:
+		return "user"
+	case hasAuto:
+		return "auto"
+	default:
+		return "unknown"
+	}
 }
 
 func placeholders(n int) string {

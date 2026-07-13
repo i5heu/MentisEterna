@@ -15,6 +15,7 @@
             <p class="config-hint">
                 Global shows tagged notes from the entire workspace. Local shows
                 only notes within the same parent and their descendants.
+                User-applied and auto-generated tags are shown separately.
             </p>
         </div>
         <div
@@ -27,7 +28,29 @@
                 class="index-entry"
             >
                 <div class="index-tag-header">
-                    <span class="index-tag-name">🏷 {{ entry.tag }}</span>
+                    <div class="index-tag-heading">
+                        <span class="index-tag-name">🏷 {{ entry.tag }}</span>
+                        <div class="index-tag-source-list">
+                            <span
+                                v-if="entry.user_count"
+                                class="index-source-badge index-source-user"
+                            >
+                                User {{ entry.user_count }}
+                            </span>
+                            <span
+                                v-if="entry.auto_count"
+                                class="index-source-badge index-source-auto"
+                            >
+                                Auto {{ entry.auto_count }}
+                            </span>
+                            <span
+                                v-if="entry.source === 'mixed'"
+                                class="index-source-badge index-source-mixed"
+                            >
+                                Mixed
+                            </span>
+                        </div>
+                    </div>
                     <span class="index-tag-count"
                         >{{ entry.count }} note{{
                             entry.count !== 1 ? "s" : ""
@@ -44,11 +67,19 @@
                         <span class="index-note-title">{{
                             n.title || "Untitled"
                         }}</span>
-                        <span class="index-note-date">{{
-                            n.created_at
-                                ? new Date(n.created_at).toLocaleDateString()
-                                : ""
-                        }}</span>
+                        <div class="index-note-meta">
+                            <span
+                                class="index-source-badge"
+                                :class="sourceBadgeClass(n.source)"
+                            >
+                                {{ sourceLabel(n.source) }}
+                            </span>
+                            <span class="index-note-date">{{
+                                n.created_at
+                                    ? new Date(n.created_at).toLocaleDateString()
+                                    : ""
+                            }}</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -60,7 +91,7 @@
                 branch.
             </template>
             <template v-else>
-                Add tags to your notes to see them indexed here.
+                Add user tags or generate auto tags to see them indexed here.
             </template>
         </p>
     </div>
@@ -81,6 +112,27 @@ const emit = defineEmits(["selectNote", "update:customData"]);
 
 const indexData = ref(null);
 const localMode = ref("global");
+
+function sourceLabel(source) {
+    switch (source) {
+        case "user":
+            return "User";
+        case "auto":
+            return "Auto";
+        case "mixed":
+            return "User + Auto";
+        default:
+            return "Unknown";
+    }
+}
+
+function sourceBadgeClass(source) {
+    return {
+        "index-source-user": source === "user",
+        "index-source-auto": source === "auto",
+        "index-source-mixed": source === "mixed",
+    };
+}
 
 // Guard to break echo-back loop.
 let hydrating = false;
@@ -192,12 +244,26 @@ watch(localMode, () => {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.75rem;
     padding: 0.3rem 0.5rem;
     background: var(--raised-bg);
 }
 
+.index-tag-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+}
+
 .index-tag-name {
     font-weight: 600;
+}
+
+.index-tag-source-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
 }
 
 .index-tag-count {
@@ -213,6 +279,7 @@ watch(localMode, () => {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.75rem;
     padding: 0.35rem 0.5rem;
     cursor: pointer;
     border-radius: 4px;
@@ -231,9 +298,40 @@ watch(localMode, () => {
     font-size: 0.9rem;
 }
 
+.index-note-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+}
+
 .index-note-date {
     font-size: 0.75rem;
     color: var(--font-color-secondary);
+}
+
+.index-source-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    padding: 0.1rem 0.45rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.index-source-user {
+    background: var(--accent-teal-dim);
+}
+
+.index-source-auto {
+    background: var(--accent-amber-dim);
+}
+
+.index-source-mixed {
+    background: var(--raised-bg);
 }
 
 .empty-hint {
