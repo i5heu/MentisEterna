@@ -2,27 +2,33 @@
     <div class="options-wrap">
         <div class="options-card">
             <div class="options-header">
-                <h1
-                    class="options-title shortcut-anchor"
-                    :title="getShortcutLabel('show-shortcuts')"
-                >
-                    Options
-                    <ShortcutHint
-                        v-if="shortcutHintsVisible"
-                        :label="getHintLabel('show-shortcuts')"
-                    />
-                </h1>
-                <button
-                    class="btn-ghost back-btn shortcut-anchor"
-                    :title="getShortcutLabel('back-to-notes')"
-                    @click="goBack"
-                >
-                    ← Back to Notes
-                    <ShortcutHint
-                        v-if="shortcutHintsVisible"
-                        :label="getHintLabel('back-to-notes')"
-                    />
-                </button>
+                    <div class="options-header-top">
+                        <h1
+                            class="options-title shortcut-anchor"
+                            :title="getShortcutLabel('show-shortcuts')"
+                        >
+                            Options
+                            <ShortcutHint
+                                v-if="shortcutHintsVisible"
+                                :label="getHintLabel('show-shortcuts')"
+                            />
+                        </h1>
+                        <span class="ws-indicator" :class="{ connected: wsConnected, disconnected: !wsConnected }" :title="wsConnected ? 'Connected' + (wsLatency != null ? ' (' + wsLatency + ' ms)' : '') : 'Disconnected'">
+                            <span class="ws-dot"></span>
+                            <span v-if="wsLatency != null" class="ws-latency">{{ wsLatency }} ms</span>
+                        </span>
+                    </div>
+                    <button
+                        class="btn-ghost back-btn shortcut-anchor"
+                        :title="getShortcutLabel('back-to-notes')"
+                        @click="goBack"
+                    >
+                        ← Back to Notes
+                        <ShortcutHint
+                            v-if="shortcutHintsVisible"
+                            :label="getHintLabel('back-to-notes')"
+                        />
+                    </button>
             </div>
 
             <!-- Section: Job Queue -->
@@ -651,7 +657,11 @@ import {
 } from "../api.js";
 import { useKeyboardShortcuts } from "../composables/useKeyboardShortcuts.js";
 
-const props = defineProps({ token: String });
+const props = defineProps({
+    token: String,
+    wsConnected: Boolean,
+    wsLatency: Number,
+});
 const emit = defineEmits(["logout", "back"]);
 
 // Printer
@@ -992,11 +1002,17 @@ async function doLogout() {
 
 .options-header {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 0.75rem;
     margin-bottom: 2rem;
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--border-color);
+}
+
+.options-header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
 .options-title {
@@ -1204,6 +1220,37 @@ async function doLogout() {
 .logout-btn {
     padding: 0.6rem 2rem;
     font-size: 0.95rem;
+}
+
+.ws-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--font-color-secondary);
+}
+
+.ws-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+    transition: background 0.3s;
+}
+
+.ws-indicator.connected .ws-dot {
+    background: #22c55e;
+    box-shadow: 0 0 4px #22c55e;
+}
+
+.ws-indicator.disconnected .ws-dot {
+    background: #ef4444;
+    box-shadow: 0 0 4px #ef4444;
+}
+
+.ws-latency {
+    font-variant-numeric: tabular-nums;
 }
 
 @media (max-width: 600px) {
