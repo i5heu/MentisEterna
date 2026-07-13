@@ -60,13 +60,13 @@
                         v-if="searchQuery.trim()"
                         type="button"
                         class="search-clear-btn"
+                        :class="{ spinning: searching }"
                         title="Clear search"
                         aria-label="Clear search"
                         @click="clearSearchInput({ focus: true })"
                     >
                         ✕
                     </button>
-                    <span v-if="searching" class="search-spinner">⟳</span>
                 </div>
                 <div class="search-box-meta">
                     <div v-if="searchFilterSummary" class="search-filter-summary">
@@ -4461,43 +4461,49 @@ function onPopstate() {
 }
 
 .search-input-row {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 0.45rem;
     width: 100%;
 }
 
 .search-input {
-    flex: 1;
+    width: 100%;
     font-size: 0.84rem;
-    padding: 0.5rem 0.7rem;
+    padding: 0.5rem 2.2rem 0.5rem 0.7rem;
     border-radius: 10px;
     border: 1px solid var(--border-color);
     background: var(--raised-bg);
 }
 
 .search-clear-btn {
+    position: absolute;
+    right: 0.45rem;
+    top: 50%;
+    transform: translateY(-50%);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.9rem;
-    height: 1.9rem;
+    width: 1.55rem;
+    height: 1.55rem;
     border-radius: 999px;
-    border: 1px solid var(--border-color);
-    background: var(--raised-bg);
+    border: none;
+    background: transparent;
     color: var(--font-color-secondary);
     cursor: pointer;
     flex-shrink: 0;
     transition:
         color 0.12s,
-        border-color 0.12s,
         background 0.12s;
 }
 
 .search-clear-btn:hover {
     color: var(--heading-color);
-    border-color: color-mix(in srgb, var(--accent-teal) 35%, var(--border-color));
     background: color-mix(in srgb, var(--accent-teal) 10%, var(--raised-bg));
+}
+
+.search-clear-btn.spinning {
+    animation: searchClearSpin 1s linear infinite;
 }
 
 .search-box-meta {
@@ -4559,18 +4565,12 @@ function onPopstate() {
     color: var(--font-color);
 }
 
-.search-spinner {
-    color: var(--accent-teal);
-    font-size: 1.1rem;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
+@keyframes searchClearSpin {
     from {
-        transform: rotate(0deg);
+        transform: translateY(-50%) rotate(0deg);
     }
     to {
-        transform: rotate(360deg);
+        transform: translateY(-50%) rotate(360deg);
     }
 }
 
