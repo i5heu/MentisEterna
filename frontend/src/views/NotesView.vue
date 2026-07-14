@@ -5202,6 +5202,7 @@ function onPopstate() {
 
 .editor-header {
     display: flex;
+    min-height: 7.4em;
     align-items: flex-start;
     gap: 0.75rem;
     padding: 0.85rem 1.25rem;
