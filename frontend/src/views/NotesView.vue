@@ -3346,7 +3346,6 @@ function populateParentSearch(note) {
         parentSearch.value = p ? p.title : "";
     } else {
         parentSearch.value = "";
-        ancestors.value = [];
     }
 }
 
