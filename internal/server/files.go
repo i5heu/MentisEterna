@@ -78,6 +78,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		URL:       fmt.Sprintf("/file/%d/%d", noteID, rec.ID),
 		IsImage:   media.IsImage(rec.MimeType),
 		IsAudio:   media.IsAudio(rec.MimeType),
+		IsVideo:   media.IsVideo(rec.MimeType),
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -149,7 +150,7 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 
 	// Build the markdown insertion string
 	var markdown string
-	if media.AllowsInline(rec.MimeType) && media.IsImage(rec.MimeType) {
+	if media.AllowsInline(rec.MimeType) && (media.IsImage(rec.MimeType) || media.IsVideo(rec.MimeType)) {
 		markdown = fmt.Sprintf("![%s](%s)", rec.Filename, url)
 	} else {
 		markdown = fmt.Sprintf("[%s](%s)", rec.Filename, url)
@@ -164,6 +165,7 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 			URL:       url,
 			IsImage:   media.IsImage(rec.MimeType),
 			IsAudio:   media.IsAudio(rec.MimeType),
+			IsVideo:   media.IsVideo(rec.MimeType),
 		},
 		"markdown": markdown,
 		"results":  results,

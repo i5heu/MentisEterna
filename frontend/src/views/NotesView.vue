@@ -934,7 +934,7 @@
                         </div>
                         <div
                             class="message-body markdown-body"
-                            v-html="renderMarkdown(child.body)"
+                            v-html="renderMarkdown(child.body, child.attachments)"
                         />
                         <div class="message-actions">
                             <button
@@ -1273,7 +1273,7 @@
                     </div>
                     <div
                         class="message-body markdown-body"
-                        v-html="renderMarkdown(threadNote.body)"
+                        v-html="renderMarkdown(threadNote.body, threadNote.attachments)"
                     />
                     <NoteTypeRenderer
                         :key="threadRendererKey"
@@ -1314,7 +1314,7 @@
                     </div>
                     <div
                         class="message-body markdown-body"
-                        v-html="renderMarkdown(tc.body)"
+                        v-html="renderMarkdown(tc.body, tc.attachments)"
                     />
                     <div class="message-actions">
                         <button
@@ -2980,14 +2980,32 @@ const isEditing = ref(false);
 const renderedBody = computed(() => {
     if (!editBody.value)
         return '<p style="color: var(--font-color-secondary);">Nothing to preview</p>';
-    return md.render(editBody.value);
+    return postProcessVideoTags(md.render(editBody.value), selected.value?.attachments);
 });
 
 // Render any markdown body (used for child messages)
-function renderMarkdown(body) {
+function renderMarkdown(body, attachments) {
     if (!body)
         return '<p style="color: var(--font-color-secondary);">Empty</p>';
-    return md.render(body);
+    return postProcessVideoTags(md.render(body), attachments);
+}
+
+// Post-process rendered HTML: convert <img> tags pointing to video files into <video> elements.
+function postProcessVideoTags(html, attachments) {
+    if (!html || !attachments?.length) return html;
+    const videoFiles = new Map();
+    for (const f of attachments) {
+        if (f.is_video && f.url) {
+            videoFiles.set(f.url, f);
+        }
+    }
+    if (videoFiles.size === 0) return html;
+    // Match <img src="/file/X/Y" ...> and replace with <video> for known video files
+    return html.replace(/<img\b[^>]*\bsrc="([^"]*\/file\/[^"]+)"[^>]*>/gi, (match, src) => {
+        const file = videoFiles.get(src);
+        if (!file) return match;
+        return `<video src="${src}" controls class="inline-video" preload="metadata"></video>`;
+    });
 }
 
 function toggleEdit() {
@@ -5917,7 +5935,9 @@ function onPopstate() {
     font-weight: 600;
 }
 
-.markdown-body :deep(img) {
+.markdown-body :deep(img),
+.markdown-body :deep(picture),
+.markdown-body :deep(video) {
     display: block;
     max-width: 100%;
     max-height: max(25vh, 20em);

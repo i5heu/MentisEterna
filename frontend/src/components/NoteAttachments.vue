@@ -9,7 +9,7 @@
                         <audio
                             :src="file.url"
                             controls
-                            class="audio-player"
+                            class="media-player audio-player"
                             preload="metadata"
                         />
                         <button
@@ -33,7 +33,7 @@
                     </div>
                 </template>
 
-                <!-- Regular file link for non-audio files -->
+                <!-- Regular file link for other files -->
                 <template v-else>
                     <a :href="file.url" target="_blank" rel="noreferrer">{{
                         file.filename

@@ -61,6 +61,7 @@ type NoteFile struct {
 	URL       string `json:"url"`
 	IsImage   bool   `json:"is_image"`
 	IsAudio   bool   `json:"is_audio"`
+	IsVideo   bool   `json:"is_video"`
 }
 
 type NoteUpdate struct {
@@ -244,6 +245,7 @@ func (s *Server) loadNoteAttachments(noteID int64) ([]NoteFile, error) {
 		nf.URL = fmt.Sprintf("/file/%d/%d", noteID, nf.ID)
 		nf.IsImage = isImageMIME(nf.MimeType)
 		nf.IsAudio = isAudioMIME(nf.MimeType)
+		nf.IsVideo = isVideoMIME(nf.MimeType)
 		files = append(files, nf)
 	}
 	return files, rows.Err()
@@ -263,6 +265,16 @@ func isImageMIME(mimeType string) bool {
 func isAudioMIME(mimeType string) bool {
 	switch mimeType {
 	case "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/webm", "audio/flac", "audio/aac":
+		return true
+	default:
+		return false
+	}
+}
+
+// isVideoMIME returns true if the given MIME type represents a video file.
+func isVideoMIME(mimeType string) bool {
+	switch mimeType {
+	case "video/mp4", "video/webm", "video/ogg":
 		return true
 	default:
 		return false
