@@ -154,8 +154,8 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] Get rid of the auth proxy, rather harden code
 - [x] Video inline upload and playback
 - [x] Media with OCR and STT jobs, will not be retried if "Re-Index STT Files" or "Re-Index OCR Files" is pressed in the settings. We need aditional buttongs with "Re-Index missing X" and "Re-Index all X" should re-index all files regardless if they have been indexed before or not ("re-index all X" with warning) 
-- [ ] The .note-attachments audio "Transcribe" button should trigger a new stt job if the file has a failed transciption (not that it should like now just show that it is running if a job is already running), if there is a transcription, it should change to "transcription" button.
-- [ ] .note-attachments Pictures need like .note-attachments audio has a "Transcribe" button, a "OCR" button that triggers a new ocr job if the file has a failed ocr (not that it should like now just show that it is running if a job is already running), if there is a ocr, it should change to "ocr" button. 
+- [x] The .note-attachments audio "Transcribe" button should trigger a new stt job if the file has a failed transciption (not that it should like now just show that it is running if a job is already running), if there is a transcription, it should change to "transcription" button.
+- [x] .note-attachments Pictures need like .note-attachments audio has a "Transcribe" button, a "OCR" button that triggers a new ocr job if the file has a failed ocr (not that it should like now just show that it is running if a job is already running), if there is a ocr, it should change to "ocr" button. 
 
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
@@ -188,16 +188,15 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
     - [x] Note titles
     - [x] Note Paths
     - [x] Note tags
+    - [ ] Uploaded files (pdf and text files) should be added to embedding search.
+    - [ ] OCR, STT and all attachmend where possible should be added to SQLite FTS4 search.
   - [x] Filter by note type
     - [x] Default exclution: Anything but default notes
     - [x] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
     - [x] Include all note types with '.a'
-- [ ] mobile-app - consider Flutter for UI
 - [x] add recipie printer function to help note types to print stuff
 - [ ] UX Improvements
-  - [ ] UI General
-    - [ ] Drag and Drop for notes 
-    - [ ] Resizable panes
+  - [x] UI General
     - [x] Better Keyboard Shortcuts
       - [x] Unified Keyboard Shortcuts System
       - [x] Any UI function gets mapped to a keyboard shortcut

@@ -402,10 +402,22 @@ func (s *Server) Start(ctx context.Context) error {
 	// Files routes: OCR and STT results
 	mux.Handle("/files/", protected(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/stt") {
+			if r.Method == http.MethodPost {
+				s.handleTriggerSTT(w, r)
+				return
+			}
 			s.handleFileSTT(w, r)
 			return
 		}
-		s.handleFileOCR(w, r)
+		if strings.HasSuffix(r.URL.Path, "/ocr") {
+			if r.Method == http.MethodPost {
+				s.handleTriggerOCR(w, r)
+				return
+			}
+			s.handleFileOCR(w, r)
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
 	}))
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))

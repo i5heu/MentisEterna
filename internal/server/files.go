@@ -240,7 +240,33 @@ func (s *Server) handleFileOCR(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// --- Serve File STT ---
+// handleTriggerSTT handles POST /files/:fileID/stt
+// Triggers a new stt_file job for the given file.
+func (s *Server) handleTriggerSTT(w http.ResponseWriter, r *http.Request) {
+	if s.mediaService == nil || s.sttClient == nil {
+		http.Error(w, "STT service not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/files/")
+	path = strings.TrimSuffix(path, "/stt")
+	fileID, err := strconv.ParseInt(path, 10, 64)
+	if err != nil || fileID <= 0 {
+		http.Error(w, "invalid file id", http.StatusBadRequest)
+		return
+	}
+
+	var exists bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM files WHERE id = ? AND deleted_at IS NULL)`, fileID).Scan(&exists); err != nil || !exists {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	s.enqueueSTT(fileID)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
+// --- Serve File ---
 
 // handleFileSTT handles GET /files/:fileID/stt
 // Returns the STT result for a file.
@@ -277,6 +303,32 @@ func (s *Server) handleFileSTT(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// handleTriggerOCR handles POST /files/:fileID/ocr
+// Triggers a new ocr_file job for the given file.
+func (s *Server) handleTriggerOCR(w http.ResponseWriter, r *http.Request) {
+	if s.mediaService == nil || s.ocrClient == nil {
+		http.Error(w, "OCR service not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/files/")
+	path = strings.TrimSuffix(path, "/ocr")
+	fileID, err := strconv.ParseInt(path, 10, 64)
+	if err != nil || fileID <= 0 {
+		http.Error(w, "invalid file id", http.StatusBadRequest)
+		return
+	}
+
+	var exists bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM files WHERE id = ? AND deleted_at IS NULL)`, fileID).Scan(&exists); err != nil || !exists {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	s.enqueueOCR(fileID)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
 }
 
 // --- Serve File ---

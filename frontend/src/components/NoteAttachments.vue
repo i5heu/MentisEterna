@@ -13,16 +13,25 @@
                             preload="metadata"
                         />
                         <button
+                            v-if="sttState[file.id] !== 'has_text'"
                             class="btn-ghost stt-btn"
-                            title="Transcribe audio"
+                            :title="sttState[file.id] === 'loading' ? 'Transcribing…' : 'Transcribe audio'"
+                            :disabled="sttState[file.id] === 'loading'"
                             @click="onTranscribe(file)"
-                            :disabled="sttLoading[file.id]"
                         >
                             {{
-                                sttLoading[file.id]
+                                sttState[file.id] === 'loading'
                                     ? "Transcribing…"
                                     : "Transcribe"
                             }}
+                        </button>
+                        <button
+                            v-else
+                            class="btn-ghost stt-btn"
+                            title="Hide transcription"
+                            @click="onDismissSTT(file)"
+                        >
+                            Transcription
                         </button>
                     </div>
                     <div v-if="sttText[file.id]" class="stt-result">
@@ -30,6 +39,42 @@
                     </div>
                     <div v-if="sttError[file.id]" class="stt-error">
                         {{ sttError[file.id] }}
+                    </div>
+                </template>
+
+                <!-- Image: OCR button -->
+                <template v-else-if="file.is_image">
+                    <div class="audio-row">
+                        <a :href="file.url" target="_blank" rel="noreferrer">{{
+                            file.filename
+                        }}</a>
+                        <button
+                            v-if="ocrState[file.id] !== 'has_text'"
+                            class="btn-ghost stt-btn"
+                            :title="ocrState[file.id] === 'loading' ? 'Running OCR…' : 'Run OCR on image'"
+                            :disabled="ocrState[file.id] === 'loading'"
+                            @click="onOCR(file)"
+                        >
+                            {{
+                                ocrState[file.id] === 'loading'
+                                    ? "OCR…"
+                                    : "OCR"
+                            }}
+                        </button>
+                        <button
+                            v-else
+                            class="btn-ghost stt-btn"
+                            title="Hide OCR result"
+                            @click="onDismissOCR(file)"
+                        >
+                            OCR
+                        </button>
+                    </div>
+                    <div v-if="ocrText[file.id]" class="stt-result">
+                        <pre class="stt-text">{{ ocrText[file.id] }}</pre>
+                    </div>
+                    <div v-if="ocrError[file.id]" class="stt-error">
+                        {{ ocrError[file.id] }}
                     </div>
                 </template>
 
@@ -57,8 +102,13 @@
 </template>
 
 <script setup>
-import { ref, reactive } from "vue";
-import { fetchSTTResult } from "../api.js";
+import { reactive } from "vue";
+import {
+    fetchSTTResult,
+    triggerSTT,
+    fetchOCRResult,
+    triggerOCR,
+} from "../api.js";
 
 const props = defineProps({
     attachments: Array,
@@ -67,39 +117,110 @@ const props = defineProps({
 });
 const emit = defineEmits(["remove"]);
 
-const sttLoading = reactive({});
+// STT state per file: "idle" | "loading" | "has_text" | "error"
+const sttState = reactive({});
 const sttText = reactive({});
 const sttError = reactive({});
+
+// OCR state per file: "idle" | "loading" | "has_text" | "error"
+const ocrState = reactive({});
+const ocrText = reactive({});
+const ocrError = reactive({});
 
 async function onTranscribe(file) {
     if (!props.token) return;
 
-    // If a result is already showing, clear it and reset to initial state.
-    if (sttText[file.id] || sttError[file.id]) {
-        sttText[file.id] = "";
+    // If there's an error (failed transcription), trigger a new STT job.
+    if (sttError[file.id]) {
         sttError[file.id] = "";
+        sttState[file.id] = "loading";
+        try {
+            await triggerSTT(props.token, file.id);
+        } catch (e) {
+            sttError[file.id] = e.message || "Failed to trigger transcription";
+            sttState[file.id] = "error";
+            return;
+        }
+        // Job queued — reset to idle so user can check back later.
+        sttState[file.id] = "idle";
         return;
     }
 
-    sttLoading[file.id] = true;
+    // Fetch existing result.
+    sttState[file.id] = "loading";
     sttError[file.id] = "";
     try {
         const result = await fetchSTTResult(props.token, file.id);
         if (result && result.error) {
             sttError[file.id] = result.error;
+            sttState[file.id] = "error";
         } else if (result && result.stt_text) {
             sttText[file.id] = result.stt_text;
+            sttState[file.id] = "has_text";
         } else {
             sttError[file.id] =
                 "No transcription available yet. It may still be processing.";
+            sttState[file.id] = "error";
         }
     } catch (e) {
-        // If the file hasn't been transcribed yet, the STT result may not exist.
-        // Poll once after a short delay.
         sttError[file.id] =
             "Transcription not yet available. Try again in a moment.";
+        sttState[file.id] = "error";
     }
-    sttLoading[file.id] = false;
+}
+
+function onDismissSTT(file) {
+    sttText[file.id] = "";
+    sttError[file.id] = "";
+    sttState[file.id] = "idle";
+}
+
+async function onOCR(file) {
+    if (!props.token) return;
+
+    // If there's an error (failed OCR), trigger a new OCR job.
+    if (ocrError[file.id]) {
+        ocrError[file.id] = "";
+        ocrState[file.id] = "loading";
+        try {
+            await triggerOCR(props.token, file.id);
+        } catch (e) {
+            ocrError[file.id] = e.message || "Failed to trigger OCR";
+            ocrState[file.id] = "error";
+            return;
+        }
+        // Job queued — reset to idle so user can check back later.
+        ocrState[file.id] = "idle";
+        return;
+    }
+
+    // Fetch existing result.
+    ocrState[file.id] = "loading";
+    ocrError[file.id] = "";
+    try {
+        const result = await fetchOCRResult(props.token, file.id);
+        if (result && result.error) {
+            ocrError[file.id] = result.error;
+            ocrState[file.id] = "error";
+        } else if (result && result.ocr_text) {
+            ocrText[file.id] = result.ocr_text;
+            ocrState[file.id] = "has_text";
+        } else {
+            ocrError[file.id] =
+                "No OCR result available yet. It may still be processing.";
+            ocrState[file.id] = "error";
+        }
+    } catch (e) {
+        ocrError[file.id] =
+            "OCR not yet available. Try again in a moment.";
+        ocrState[file.id] = "error";
+    }
+}
+
+function onDismissOCR(file) {
+    ocrText[file.id] = "";
+    ocrError[file.id] = "";
+    ocrState[file.id] = "idle";
 }
 
 function formatSize(bytes) {
@@ -155,7 +276,7 @@ function formatSize(bytes) {
     padding: 2px 6px;
 }
 
-/* Audio player and STT styles */
+/* Audio/image row + action buttons */
 .audio-row {
     display: flex;
     align-items: center;
