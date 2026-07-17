@@ -159,8 +159,9 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
-- [ ] User uploads (including inline uploads) in chunks, verify checksum and resume if connection is lost.
-- [ ] Upload spinner and overview
+- [x] User uploads (including inline uploads) in chunks, verify checksum and resume if connection is lost. Chunking in webworker if possible to keep the UI responsive.
+- [x] Upload spinner and stats in the left bottom corner for inline uploads and for attachment uploads a modal with upload progress and stats.
+- [ ] delte stall upload chunks after a timeout (12h)
 - [ ] Setup building pipeline
 - [x] audio inline playback does not work
 - [x] In note edit add "//" to search and add a page link to the note
