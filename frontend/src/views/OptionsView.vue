@@ -107,6 +107,16 @@
                             formatBytes(serverStats.backup_size_bytes)
                         }}</code>
                     </div>
+                    <div class="status-row stats-total">
+                        <span class="status-label">Total Size</span>
+                        <code class="status-value">{{
+                            formatBytes(
+                                (serverStats.db_size_bytes >= 0 ? serverStats.db_size_bytes : 0) +
+                                (serverStats.media_size_bytes >= 0 ? serverStats.media_size_bytes : 0) +
+                                (serverStats.backup_size_bytes >= 0 ? serverStats.backup_size_bytes : 0),
+                            )
+                        }}</code>
+                    </div>
                     <div
                         v-if="serverStats.backup_error"
                         class="status-row"
@@ -1288,7 +1298,18 @@ onMounted(() => {
 }
 
 .status-row:last-child {
-    border-bottom: none;
+	border-bottom: none;
+}
+
+.stats-total {
+	border-top: 2px solid var(--border-color);
+	margin-top: 0.3rem;
+	padding-top: 0.6rem;
+}
+
+.stats-total .status-label {
+	font-weight: 600;
+	color: var(--font-color);
 }
 
 .status-label {

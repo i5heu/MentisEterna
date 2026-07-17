@@ -153,6 +153,8 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] The Pantry ingredients should not be added to the grocery list as default, they must be added manually via the "Add Pantry Staples" button in the recipe overview.
 - [x] Get rid of the auth proxy, rather harden code
 - [x] Video inline upload and playback
+- [ ] Media with OCR and STT jobs, will not be retried if "Re-Index STT Files" or "Re-Index OCR Files" is pressed in the settings. We need aditional buttongs with "Re-Index missing X" and "Re-Index all X" should re-index all files regardless if they have been indexed before or not ("re-index all X" with warning) 
+- [ ] The .note-attachments audio "Transcribe" button should trigger a new stt job if the file has a failed transciption (not that it should like now just show that it is running if a job is already running), if there is a transcription, it should change to "transcription" button.
 
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
