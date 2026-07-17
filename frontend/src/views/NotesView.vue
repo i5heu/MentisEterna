@@ -3961,27 +3961,41 @@ function onChunkedUploadComplete(result) {
     addAttachmentIfNew(result?.file);
 }
 
-async function onBodyDrop(e) {
-    const files = e.dataTransfer.files;
-    if (!files || files.length === 0) return;
-    try {
-        await ensureSelectedNoteSaved();
-    } catch (err) {
-        saveError.value = err.message;
-        return;
-    }
-    // Use chunked upload via the composable queue — supports multiple files
-    const fileArray = Array.from(files);
-    enqueueMultipleInline(fileArray, selected.value.id, props.token, {
-        onComplete: (result) => {
-            if (result && result.markdown) {
-                // Prefix with newline so multiple inline uploads stack vertically.
-                insertAtCursor("\n" + result.markdown);
-            }
-            addAttachmentIfNew(result?.file);
-        },
-    });
-}
+	async function onBodyDrop(e) {
+		const files = e.dataTransfer.files;
+		if (!files || files.length === 0) return;
+		try {
+			await ensureSelectedNoteSaved();
+		} catch (err) {
+			saveError.value = err.message;
+			return;
+		}
+		const noteID = selected.value.id;
+		const fileArray = Array.from(files);
+		const uploadIDs = enqueueMultipleInline(fileArray, noteID, props.token, {
+			onComplete: (result) => {
+				if (result && result.markdown) {
+					// Replace the placeholder with the real markdown.
+					if (result._placeholderToken) {
+						const escaped = result._placeholderToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+						const re = new RegExp(`!\\[.*?\\]\\(__upload__:${escaped}\\)`, 'g');
+						if (re.test(editBody.value)) {
+							editBody.value = editBody.value.replace(re, result.markdown);
+							return;
+						}
+					}
+					// Fallback: placeholder not found — append the markdown
+					insertAtCursor("\n" + result.markdown);
+				}
+				addAttachmentIfNew(result?.file);
+			},
+		});
+		// Insert placeholder markdown links immediately.
+		for (let i = 0; i < fileArray.length && i < uploadIDs.length; i++) {
+			const placeholderMd = `![${fileArray[i].name}](__upload__:${uploadIDs[i]})`;
+			insertAtCursor((i > 0 ? "\n" : "") + placeholderMd);
+		}
+	}
 
 async function onBodyPaste(e) {
     const items = e.clipboardData?.items;
@@ -4004,22 +4018,37 @@ async function onBodyPaste(e) {
         e.preventDefault();
     }
 
-    try {
-        await ensureSelectedNoteSaved();
-    } catch (err) {
-        saveError.value = err.message;
-        return;
-    }
+	try {
+		await ensureSelectedNoteSaved();
+	} catch (err) {
+		saveError.value = err.message;
+		return;
+	}
 
-    enqueueMultipleInline(files, selected.value.id, props.token, {
-        onComplete: (result) => {
-            if (result && result.markdown) {
-                // Prefix with newline so multiple inline uploads stack vertically.
-                insertAtCursor("\n" + result.markdown);
-            }
-            addAttachmentIfNew(result?.file);
-        },
-    });
+	const noteID = selected.value.id;
+	const uploadIDs = enqueueMultipleInline(files, noteID, props.token, {
+		onComplete: (result) => {
+			if (result && result.markdown) {
+				// Replace the placeholder with the real markdown.
+				if (result._placeholderToken) {
+					const escaped = result._placeholderToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+					const re = new RegExp(`!\\[.*?\\]\\(__upload__:${escaped}\\)`, 'g');
+					if (re.test(editBody.value)) {
+						editBody.value = editBody.value.replace(re, result.markdown);
+						return;
+					}
+				}
+				// Fallback: placeholder not found — append the markdown
+				insertAtCursor("\n" + result.markdown);
+			}
+			addAttachmentIfNew(result?.file);
+		},
+	});
+	// Insert placeholder markdown links immediately.
+	for (let i = 0; i < files.length && i < uploadIDs.length; i++) {
+		const placeholderMd = `![${files[i].name}](__upload__:${uploadIDs[i]})`;
+		insertAtCursor((i > 0 ? "\n" : "") + placeholderMd);
+	}
 }
 
 function addAttachmentIfNew(file) {
