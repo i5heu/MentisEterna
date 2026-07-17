@@ -1692,7 +1692,7 @@ const autoTagsError = ref("");
 const autoTagsInfo = ref("");
 
 // Upload queue composable + upload modal
-const { enqueueAttachment, enqueueInline, enqueueMultipleInline } = useUploadQueue();
+const { enqueueAttachment, enqueueInline, enqueueMultipleInline, active: activeUploads } = useUploadQueue();
 const showUploadModal = ref(false);
 
 function insertAtCursor(text) {
@@ -3081,6 +3081,9 @@ async function refreshSelectedCollections(noteId, typeValue = null) {
 
 async function refreshSelectedInPlace(noteId = selected.value?.id) {
     if (!noteId) return;
+    // If uploads are in progress, skip the refresh to avoid replacing
+    // the attachments array that active uploads are pushing to.
+    if (activeUploads.value && activeUploads.value.length > 0) return;
     try {
         const full = await fetchNote(props.token, noteId);
         if (selected.value?.id !== noteId) return;
@@ -3145,7 +3148,12 @@ async function runLiveRefresh() {
         }
         const selectedNoteID = selected.value?.id;
         if (refreshSelected && selectedNoteID) {
-            if (dirty.value || saving.value) {
+            if (activeUploads.value && activeUploads.value.length > 0) {
+                // Uploads are in progress; skip the in-place refresh to avoid
+                // disrupting the attachments array. The onComplete callbacks
+                // handle the UI updates directly.
+                liveRefreshPending.value = false;
+            } else if (dirty.value || saving.value) {
                 liveRefreshPending.value = true;
                 await refreshSelectedCollections(selectedNoteID);
             } else {

@@ -194,7 +194,7 @@ func (s *Server) handleChunkedChunk(w http.ResponseWriter, r *http.Request, note
 		return
 	}
 
-	if time.Now().UTC().After(parseTime(row.ExpiresAt)) {
+	if t := parseTime(row.ExpiresAt); t.IsZero() || time.Now().UTC().After(t) {
 		http.Error(w, "upload session expired", http.StatusGone)
 		return
 	}
@@ -332,7 +332,7 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		return
 	}
 
-	if time.Now().UTC().After(parseTime(row.ExpiresAt)) {
+	if t := parseTime(row.ExpiresAt); t.IsZero() || time.Now().UTC().After(t) {
 		http.Error(w, "upload session expired", http.StatusGone)
 		return
 	}
@@ -451,8 +451,13 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 	reason := "attachment_uploaded"
 	if row.Inline {
 		reason = "inline_attachment_uploaded"
+		// For inline uploads, the frontend's onComplete callback already
+		// handles inserting the markdown and updating attachments. Skip
+		// notifyNotesChanged to avoid triggering a live refresh that would
+		// show the "newer version available" banner while the user edits.
+	} else {
+		s.notifyNotesChanged(reason, noteID)
 	}
-	s.notifyNotesChanged(reason, noteID)
 	writeJSON(w, http.StatusCreated, resp)
 
 	// Clean up chunks and session after responding — the frontend poller
@@ -554,10 +559,22 @@ func (s *Server) cleanupUploadSession(uploadID string) {
 }
 
 // parseTime parses an SQLite datetime string in the format used by the app.
+// The app always stores timestamps as UTC with 3-digit millisecond precision
+// using Go's time.RFC3339Nano-like format "2006-01-02T15:04:05.000Z".
+// If parsing fails, it logs the error and returns the zero time — callers should
+// check for zero time and treat as expired.
 func parseTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
 	t, err := time.Parse("2006-01-02T15:04:05.000Z", s)
 	if err != nil {
-		return time.Time{}
+		// Try without fractional seconds as a fallback (e.g. from SQLite defaults).
+		t, err = time.Parse("2006-01-02T15:04:05Z", s)
+		if err != nil {
+			log.Printf("chunked upload: parse time %q: %v", s, err)
+			return time.Time{}
+		}
 	}
 	return t
 }
