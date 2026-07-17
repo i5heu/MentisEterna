@@ -65,6 +65,13 @@ export async function putChunk(fileHash, meta, index, data) {
         const tx = db.transaction([ENTRIES_STORE, BLOBS_STORE], "readwrite");
         const entriesStore = tx.objectStore(ENTRIES_STORE);
         const blobsStore = tx.objectStore(BLOBS_STORE);
+        let settled = false;
+
+        const finishReject = (error) => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+        };
 
         const getReq = entriesStore.get(fileHash);
         getReq.onsuccess = () => {
@@ -80,19 +87,29 @@ export async function putChunk(fileHash, meta, index, data) {
                     inline: meta.inline,
                     noteId: meta.noteId,
                     token: meta.token,
+                    placeholderToken: meta.placeholderToken || "",
                     chunkIndexes: [],
                 };
             }
             if (!entry.chunkIndexes.includes(index)) {
                 entry.chunkIndexes.push(index);
             }
+            if (!entry.placeholderToken && meta.placeholderToken) {
+                entry.placeholderToken = meta.placeholderToken;
+            }
             const chunkKey = fileHash + ":" + index;
             entriesStore.put(entry);
             blobsStore.put(data, chunkKey);
+        };
+        getReq.onerror = () => finishReject(getReq.error);
+        tx.onabort = () => finishReject(tx.error || new Error("putChunk transaction aborted"));
+        tx.onerror = () => finishReject(tx.error || new Error("putChunk transaction failed"));
+        tx.oncomplete = () => {
+            db.close();
+            if (settled) return;
+            settled = true;
             resolve();
         };
-        getReq.onerror = () => reject(getReq.error);
-        tx.oncomplete = () => db.close();
     });
 }
 
@@ -120,6 +137,13 @@ export async function deleteChunkEntry(fileHash) {
         const tx = db.transaction([ENTRIES_STORE, BLOBS_STORE], "readwrite");
         const entriesStore = tx.objectStore(ENTRIES_STORE);
         const blobsStore = tx.objectStore(BLOBS_STORE);
+        let settled = false;
+
+        const finishReject = (error) => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+        };
 
         const getReq = entriesStore.get(fileHash);
         getReq.onsuccess = () => {
@@ -130,13 +154,18 @@ export async function deleteChunkEntry(fileHash) {
                     blobsStore.delete(fileHash + ":" + idx);
                 }
             }
-            resolve();
         };
         getReq.onerror = () => {
             entriesStore.delete(fileHash);
+        };
+        tx.onabort = () => finishReject(tx.error || new Error("deleteChunkEntry transaction aborted"));
+        tx.onerror = () => finishReject(tx.error || new Error("deleteChunkEntry transaction failed"));
+        tx.oncomplete = () => {
+            db.close();
+            if (settled) return;
+            settled = true;
             resolve();
         };
-        tx.oncomplete = () => db.close();
     });
 }
 

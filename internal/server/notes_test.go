@@ -1865,6 +1865,73 @@ func TestUpdateNoteResolvesCompletedUploadPlaceholderBeforePersisting(t *testing
 	}
 }
 
+func TestChunkedStartReturnsCompletedSessionForMatchingPlaceholderToken(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/notes",
+		bytes.NewReader([]byte(`{"title":"resume-done","body":"before ![video.webm](__upload__:resume-token) after"}`)))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Content-Type", "application/json")
+	cw := httptest.NewRecorder()
+	s.createNote(cw, createReq)
+	if cw.Code != http.StatusCreated {
+		t.Fatalf("create note: %d: %s", cw.Code, cw.Body.String())
+	}
+
+	var noteID int64
+	if err := s.db.QueryRow(`SELECT id FROM notes WHERE title = 'resume-done'`).Scan(&noteID); err != nil {
+		t.Fatalf("find note: %v", err)
+	}
+
+	finishResult := `{"file":{"id":42,"filename":"video.webm","url":"/file/14/105","mime_type":"video/webm","size_bytes":12345,"is_image":false,"is_audio":false,"is_video":true},"markdown":"![video.webm](/file/14/105)","results":[]}`
+	if _, err := s.db.Exec(`
+		INSERT INTO upload_sessions (upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, placeholder_token, status, finish_result, expires_at)
+		VALUES ('done-upload-id', ?, 'video.webm', 'video/webm', 12345, 1048576, 1, 'abc123', 1, 'resume-token', 'done', ?, datetime('now', '+1 day'))`,
+		noteID, finishResult); err != nil {
+		t.Fatalf("insert done upload session: %v", err)
+	}
+
+	startBody := `{"filename":"video.webm","mime_type":"video/webm","total_size":12345,"chunk_size":1048576,"total_chunks":1,"file_sha256":"abc123","inline":true,"placeholder_token":"resume-token"}`
+	startReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/notes/%d/chunked/start", noteID),
+		bytes.NewReader([]byte(startBody)))
+	startReq.Header.Set("Authorization", "Bearer "+token)
+	startReq.Header.Set("Content-Type", "application/json")
+	sw := httptest.NewRecorder()
+	s.handleChunkedStart(sw, startReq, noteID)
+	if sw.Code != http.StatusOK {
+		t.Fatalf("start session: %d: %s", sw.Code, sw.Body.String())
+	}
+
+	var resp struct {
+		UploadID   string          `json:"upload_id"`
+		ChunksDone []int           `json:"chunks_done"`
+		Status     string          `json:"status"`
+		Result     json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(sw.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if resp.UploadID != "done-upload-id" {
+		t.Fatalf("upload_id = %q, want %q", resp.UploadID, "done-upload-id")
+	}
+	if resp.Status != "done" {
+		t.Fatalf("status = %q, want %q", resp.Status, "done")
+	}
+	if len(resp.Result) == 0 {
+		t.Fatal("expected completed session result in start response")
+	}
+
+	var sessionCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM upload_sessions WHERE note_id = ?`, noteID).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("session count = %d, want 1", sessionCount)
+	}
+}
+
 func TestChunkedUploadAutoFinishResolvesPlaceholderAfterReload(t *testing.T) {
 	tests := map[string]struct {
 		filename        string

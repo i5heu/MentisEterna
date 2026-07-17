@@ -259,7 +259,17 @@ async function doUpload(data) {
         if (VERBOSE) console.log("[staging] Persisting chunks to IndexedDB...");
         post({ type: "progress", uploadId, filename, loaded: 0, total: totalSize, percent: 0, speed: 0, status: "staging" });
 
-        const meta = { filename, mimeType, totalSize, chunkSize, totalChunks, inline, noteId, token };
+        const meta = {
+            filename,
+            mimeType,
+            totalSize,
+            chunkSize,
+            totalChunks,
+            inline,
+            noteId,
+            token,
+            placeholderToken: uploadId,
+        };
         for (let i = 0; i < totalChunks; i++) {
             if (isAborted(uploadId)) {
                 if (VERBOSE) console.warn("[cancelled] Upload aborted during staging");
@@ -435,7 +445,17 @@ async function doUpload(data) {
  * @param {string} uploadId - fresh upload ID for this resume attempt
  */
 async function doResume(fileHash, entry, uploadId) {
-    const { filename, mimeType, totalSize, chunkSize, totalChunks, inline, noteId, token } = entry;
+    const {
+        filename,
+        mimeType,
+        totalSize,
+        chunkSize,
+        totalChunks,
+        inline,
+        noteId,
+        token,
+        placeholderToken,
+    } = entry;
 
     if (VERBOSE) {
         console.group("uploadWorker [resume]:", filename);
@@ -465,9 +485,20 @@ async function doResume(fileHash, entry, uploadId) {
 
         // Start (idempotent) or resume session.
         if (VERBOSE) console.log("[resume] Starting upload session (idempotent)...");
-        	const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileHash, uploadId);
+        	const stablePlaceholderToken = placeholderToken || uploadId;
+        	const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileHash, stablePlaceholderToken);
         serverUploadId = session.upload_id || uploadId;
         alreadyDone = session.chunks_done || [];
+
+        if (session.status === "done" && session.result) {
+            await ChunkStore.deleteChunkEntry(fileHash);
+            if (VERBOSE) {
+                console.log("[resume] Server already completed this upload. Cleaning up local resume data.");
+                console.groupEnd();
+            }
+            post({ type: "complete", uploadId, filename, result: session.result });
+            return;
+        }
 
         if (VERBOSE) {
             console.log("[resume] Server upload_id:", serverUploadId);
