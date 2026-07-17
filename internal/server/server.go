@@ -889,8 +889,8 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 
 	if vssAvailable {
 		var count int64
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_notes`).Scan(&count); err != nil {
-			vssError = fmt.Sprintf("vss_notes query error: %v", err)
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_note_search`).Scan(&count); err != nil {
+			vssError = fmt.Sprintf("vss_note_search query error: %v", err)
 		} else {
 			vssTablesExist = true
 			vssNotesCount = count
@@ -996,7 +996,7 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 	vssSTTCount := int64(-1)
 	if s.db.VSSAvailable() {
 		var count int64
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_notes`).Scan(&count); err == nil {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_note_search`).Scan(&count); err == nil {
 			vssNotesCount = count
 		}
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_ocr`).Scan(&count); err == nil {
