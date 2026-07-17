@@ -73,6 +73,14 @@ const sttError = reactive({});
 
 async function onTranscribe(file) {
     if (!props.token) return;
+
+    // If a result is already showing, clear it and reset to initial state.
+    if (sttText[file.id] || sttError[file.id]) {
+        sttText[file.id] = "";
+        sttError[file.id] = "";
+        return;
+    }
+
     sttLoading[file.id] = true;
     sttError[file.id] = "";
     try {
