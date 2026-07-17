@@ -370,31 +370,36 @@ async function doUpload(data) {
         // server-side assembly. If all chunks were already on the server, just
         // poll — the server is already processing from a previous request.
         const pollState = { done: false };
-        let pollPromise = pollFinishStatus(
+        const pollPromise = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
             totalSize, totalChunks, pollState,
         );
 
         let result = null;
-        if (!allDone) {
+        if (allDone) {
+            // All chunks already on server — just wait for the poll to see "done".
+            if (VERBOSE) console.log("[poll] Waiting for server to finish processing...");
+            result = await pollPromise;
+        } else {
+            // We uploaded chunks — trigger server-side assembly.
             try {
                 result = await finishUpload(token, noteId, serverUploadId);
             } catch (err) {
-                // 409 Conflict = already being finalized by a previous request.
-                // The poll is already running and will return the result when done.
                 const msg = (err.message || "").toLowerCase();
                 if (msg.includes("already being finalized") || msg.includes("409")) {
                     if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
+                    result = await pollPromise;
                 } else {
                     pollState.done = true;
                     throw err;
                 }
             }
+            // finishUpload succeeded — tell the poll to stop.
+            pollState.done = true;
+            // Drain the poll promise (it may have already returned with the result).
+            const pollResult = await pollPromise;
+            if (!result) result = pollResult;
         }
-        pollState.done = true;
-        const pollResult = await pollPromise;
-        // Prefer the poll result if finish wasn't called or returned 409.
-        if (!result) result = pollResult;
 
         // --- PHASE 6: Clean up IndexedDB ---
         await ChunkStore.deleteChunkEntry(fileSha256);
@@ -525,28 +530,32 @@ async function doResume(fileHash, entry, uploadId) {
 
         // Server-side processing.
         const pollState2 = { done: false };
-        let pollPromise2 = pollFinishStatus(
+        const pollPromise2 = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
             totalSize, totalChunks, pollState2,
         );
 
         let result2 = null;
-        if (!allDone) {
+        if (allDone) {
+            if (VERBOSE) console.log("[poll] Waiting for server to finish processing...");
+            result2 = await pollPromise2;
+        } else {
             try {
                 result2 = await finishUpload(token, noteId, serverUploadId);
             } catch (err) {
                 const msg = (err.message || "").toLowerCase();
                 if (msg.includes("already being finalized") || msg.includes("409")) {
                     if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
+                    result2 = await pollPromise2;
                 } else {
                     pollState2.done = true;
                     throw err;
                 }
             }
+            pollState2.done = true;
+            const pollResult2 = await pollPromise2;
+            if (!result2) result2 = pollResult2;
         }
-        pollState2.done = true;
-        const pollResult2 = await pollPromise2;
-        if (!result2) result2 = pollResult2;
 
         // Clean up IndexedDB.
         await ChunkStore.deleteChunkEntry(fileHash);
