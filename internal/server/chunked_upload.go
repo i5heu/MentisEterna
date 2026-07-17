@@ -199,6 +199,30 @@ func (s *Server) handleChunkedChunk(w http.ResponseWriter, r *http.Request, note
 		return
 	}
 
+	// Parse chunk index from the query string or form value — this does not
+	// require reading the multipart body, so we can short-circuit early for
+	// chunks that are already done.
+	indexStr := r.FormValue("index")
+	chunkIndex, err := strconv.Atoi(indexStr)
+	if err != nil || chunkIndex < 0 || chunkIndex >= row.TotalChunks {
+		http.Error(w, "invalid or out-of-range chunk index", http.StatusBadRequest)
+		return
+	}
+
+	// Skip re-upload if this chunk is already recorded.
+	var chunksDone []int
+	_ = json.Unmarshal([]byte(row.ChunksDone), &chunksDone)
+	for _, idx := range chunksDone {
+		if idx == chunkIndex {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"index":    chunkIndex,
+				"received": true,
+				"_meta":    map[string]interface{}{"chunks_done": len(chunksDone), "total_chunks": row.TotalChunks},
+			})
+			return
+		}
+	}
+
 	// Read multipart form.
 	// The chunk body is limited to chunk_size + some overhead.
 	s.setLongWriteDeadline(w)
@@ -210,13 +234,6 @@ func (s *Server) handleChunkedChunk(w http.ResponseWriter, r *http.Request, note
 		return
 	}
 	defer chunkReader.Close()
-
-	indexStr := r.FormValue("index")
-	chunkIndex, err := strconv.Atoi(indexStr)
-	if err != nil || chunkIndex < 0 || chunkIndex >= row.TotalChunks {
-		http.Error(w, "invalid or out-of-range chunk index", http.StatusBadRequest)
-		return
-	}
 
 	expectedSHA256 := r.FormValue("sha256")
 
@@ -405,9 +422,6 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 	s.enqueueOCR(rec.ID)
 	s.enqueueSTT(rec.ID)
 
-	// Clean up chunks and session.
-	s.cleanupUploadSession(uploadID)
-
 	url := fmt.Sprintf("/file/%d/%d", noteID, rec.ID)
 	nf := media.NoteFile{
 		ID:        rec.ID,
@@ -440,6 +454,11 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 	}
 	s.notifyNotesChanged(reason, noteID)
 	writeJSON(w, http.StatusCreated, resp)
+
+	// Clean up chunks and session after responding — the frontend poller
+	// may make a final status request after this call, so delete only after
+	// we've written the response.
+	s.cleanupUploadSession(uploadID)
 }
 
 // handleChunkedCancel cancels an upload session and cleans up its chunks.
@@ -522,7 +541,9 @@ func (s *Server) addChunkDone(uploadID string, chunkIndex int, totalChunks int) 
 
 // updateUploadStatus updates the status column of an upload session.
 func (s *Server) updateUploadStatus(uploadID, status string) {
-	_, _ = s.db.Exec(`UPDATE upload_sessions SET status = ? WHERE upload_id = ?`, status, uploadID)
+	if _, err := s.db.Exec(`UPDATE upload_sessions SET status = ? WHERE upload_id = ?`, status, uploadID); err != nil {
+		log.Printf("updateUploadStatus(%q, %q): %v", uploadID, status, err)
+	}
 }
 
 // cleanupUploadSession removes the upload session row and all its chunk files.
