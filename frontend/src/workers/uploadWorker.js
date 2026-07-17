@@ -300,70 +300,75 @@ async function doUpload(data) {
             return;
         }
 
-        // --- PHASE 4: Upload missing chunks from IndexedDB ---
-        if (VERBOSE) console.log("[uploading] Sending chunks...");
-        let loaded = Math.min(alreadyDone.length * chunkSize, totalSize);
-        const startTime = performance.now();
+        // --- PHASE 4: Upload missing chunks from IndexedDB (if any) ---
+        const allDone = alreadyDone.length === totalChunks;
+        if (allDone) {
+            if (VERBOSE) console.log("[uploading] All chunks already on server. Skipping to poll.");
+            post({ type: "progress", uploadId, filename, loaded: totalSize, total: totalSize, percent: 100, speed: 0, status: "Finalizing..." });
+        } else {
+            if (VERBOSE) console.log("[uploading] Sending chunks...");
+            let loaded = Math.min(alreadyDone.length * chunkSize, totalSize);
+            const startTime = performance.now();
 
-        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.min(100, Math.round((loaded / totalSize) * 100)), speed: 0, status: "uploading" });
+            post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.min(100, Math.round((loaded / totalSize) * 100)), speed: 0, status: "uploading" });
 
-        for (let i = 0; i < totalChunks; i++) {
-            if (isAborted(uploadId)) {
-                console.warn("[cancelled] Upload aborted during upload");
-                try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
-                post({ type: "error", uploadId, filename, error: "Upload cancelled" });
-                if (VERBOSE) console.groupEnd();
-                return;
+            for (let i = 0; i < totalChunks; i++) {
+                if (isAborted(uploadId)) {
+                    console.warn("[cancelled] Upload aborted by user");
+                    try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
+                    post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+                    if (VERBOSE) console.groupEnd();
+                    return;
+                }
+
+                // Skip chunks the server already has.
+                if (alreadyDone.includes(i)) {
+                    loaded = Math.min((i + 1) * chunkSize, totalSize);
+                    continue;
+                }
+
+                // Read chunk from IndexedDB.
+                const chunkData = await ChunkStore.getChunkData(fileSha256, i);
+                if (!chunkData) {
+                    throw new Error(`Chunk ${i} missing from IndexedDB — cannot resume. Re-add the file.`);
+                }
+
+                const chunkBuffer = chunkData.buffer.slice(
+                    chunkData.byteOffset,
+                    chunkData.byteOffset + chunkData.byteLength,
+                );
+                const chunkSha256 = await sha256(chunkBuffer);
+                const chunkBlob = new Blob([chunkBuffer], { type: "application/octet-stream" });
+
+                await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
+
+                loaded = Math.min(loaded + chunkData.byteLength, totalSize);
+
+                const elapsed = (performance.now() - startTime) / 1000;
+                const speed = elapsed > 0 ? loaded / elapsed : 0;
+                const percent = Math.round((loaded / totalSize) * 100);
+
+                if (VERBOSE) console.log("[uploading] Chunk", i + 1, "/", totalChunks, "sha256:", chunkSha256.slice(0, 12) + "...", percent + "%");
+
+                post({ type: "chunk_done", uploadId, index: i });
+                post({
+                    type: "progress",
+                    uploadId,
+                    filename,
+                    loaded,
+                    total: totalSize,
+                    percent,
+                    speed,
+                    status: "uploading",
+                });
             }
-
-            // Skip chunks the server already has.
-            if (alreadyDone.includes(i)) {
-                loaded = Math.min((i + 1) * chunkSize, totalSize);
-                continue;
-            }
-
-            // Read chunk from IndexedDB.
-            const chunkData = await ChunkStore.getChunkData(fileSha256, i);
-            if (!chunkData) {
-                throw new Error(`Chunk ${i} missing from IndexedDB — cannot resume. Re-add the file.`);
-            }
-
-            const chunkBuffer = chunkData.buffer.slice(
-                chunkData.byteOffset,
-                chunkData.byteOffset + chunkData.byteLength,
-            );
-            const chunkSha256 = await sha256(chunkBuffer);
-            const chunkBlob = new Blob([chunkBuffer], { type: "application/octet-stream" });
-
-            await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
-
-            loaded = Math.min(loaded + chunkData.byteLength, totalSize);
-
-            const elapsed = (performance.now() - startTime) / 1000;
-            const speed = elapsed > 0 ? loaded / elapsed : 0;
-            const percent = Math.round((loaded / totalSize) * 100);
-
-            if (VERBOSE) console.log("[uploading] Chunk", i + 1, "/", totalChunks, "sha256:", chunkSha256.slice(0, 12) + "...", percent + "%");
-
-            post({ type: "chunk_done", uploadId, index: i });
-            post({
-                type: "progress",
-                uploadId,
-                filename,
-                loaded,
-                total: totalSize,
-                percent,
-                speed,
-                status: "uploading",
-            });
+            if (VERBOSE) console.log("[uploading] All chunks uploaded. Waiting for server...");
         }
 
-        if (VERBOSE) console.log("[uploading] All chunks uploaded. Waiting for server...");
-
         // --- PHASE 5: Server-side processing ---
-        // Start polling before we call finish, so we can observe the status
-        // even if finish is rejected because the server is already processing
-        // (from a previous request that survived a client reload).
+        // Poll for completion. If we uploaded chunks, call finish to trigger
+        // server-side assembly. If all chunks were already on the server, just
+        // poll — the server is already processing from a previous request.
         const pollState = { done: false };
         let pollPromise = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
@@ -371,21 +376,24 @@ async function doUpload(data) {
         );
 
         let result = null;
-        try {
-            result = await finishUpload(token, noteId, serverUploadId);
-        } catch (err) {
-            // 409 Conflict = already being finalized by a previous request.
-            // The poll is already running and will return the result when done.
-            if (err.message && err.message.includes("409")) {
-                if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
-            } else {
-                pollState.done = true;
-                throw err;
+        if (!allDone) {
+            try {
+                result = await finishUpload(token, noteId, serverUploadId);
+            } catch (err) {
+                // 409 Conflict = already being finalized by a previous request.
+                // The poll is already running and will return the result when done.
+                const msg = (err.message || "").toLowerCase();
+                if (msg.includes("already being finalized") || msg.includes("409")) {
+                    if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
+                } else {
+                    pollState.done = true;
+                    throw err;
+                }
             }
         }
         pollState.done = true;
         const pollResult = await pollPromise;
-        // Prefer the poll result if finish returned 409 (poll saw the done state).
+        // Prefer the poll result if finish wasn't called or returned 409.
         if (!result) result = pollResult;
 
         // --- PHASE 6: Clean up IndexedDB ---
@@ -454,61 +462,66 @@ async function doResume(fileHash, entry, uploadId) {
             console.log("[resume] Server already has", alreadyDone.length, "/", totalChunks, "chunks");
         }
 
-        // Upload missing chunks from IndexedDB.
-        let loaded = Math.min(alreadyDone.length * chunkSize, totalSize);
-        const startTime = performance.now();
+        // Upload missing chunks from IndexedDB (if any).
+        const allDone = alreadyDone.length === totalChunks;
+        if (allDone) {
+            if (VERBOSE) console.log("[resume] All chunks already on server. Skipping to poll.");
+            post({ type: "progress", uploadId, filename, loaded: totalSize, total: totalSize, percent: 100, speed: 0, status: "Finalizing..." });
+        } else {
+            let loaded = Math.min(alreadyDone.length * chunkSize, totalSize);
+            const startTime = performance.now();
 
-        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.min(100, Math.round((loaded / totalSize) * 100)), speed: 0, status: "uploading" });
+            post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.min(100, Math.round((loaded / totalSize) * 100)), speed: 0, status: "uploading" });
 
-        for (let i = 0; i < totalChunks; i++) {
-            if (isAborted(uploadId)) {
-                console.warn("[cancelled] Upload aborted by user");
-                try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
-                post({ type: "error", uploadId, filename, error: "Upload cancelled" });
-                if (VERBOSE) console.groupEnd();
-                return;
+            for (let i = 0; i < totalChunks; i++) {
+                if (isAborted(uploadId)) {
+                    console.warn("[cancelled] Upload aborted by user");
+                    try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
+                    post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+                    if (VERBOSE) console.groupEnd();
+                    return;
+                }
+
+                // Skip chunks the server already has.
+                if (alreadyDone.includes(i)) {
+                    loaded = Math.min((i + 1) * chunkSize, totalSize);
+                    continue;
+                }
+
+                const chunkData = await ChunkStore.getChunkData(fileHash, i);
+                if (!chunkData) {
+                    throw new Error(`Chunk ${i} missing from IndexedDB — cannot resume. Re-add the file.`);
+                }
+
+                const chunkBuffer = chunkData.buffer.slice(
+                    chunkData.byteOffset,
+                    chunkData.byteOffset + chunkData.byteLength,
+                );
+                const chunkSha256 = await sha256(chunkBuffer);
+                const chunkBlob = new Blob([chunkBuffer], { type: "application/octet-stream" });
+
+                await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
+
+                loaded = Math.min(loaded + chunkData.byteLength, totalSize);
+
+                const elapsed = (performance.now() - startTime) / 1000;
+                const speed = elapsed > 0 ? loaded / elapsed : 0;
+                const percent = Math.round((loaded / totalSize) * 100);
+
+                post({ type: "chunk_done", uploadId, index: i });
+                post({
+                    type: "progress",
+                    uploadId,
+                    filename,
+                    loaded,
+                    total: totalSize,
+                    percent,
+                    speed,
+                    status: "uploading",
+                });
             }
-
-            // Skip chunks the server already has.
-            if (alreadyDone.includes(i)) {
-                loaded = Math.min((i + 1) * chunkSize, totalSize);
-                continue;
-            }
-
-            const chunkData = await ChunkStore.getChunkData(fileHash, i);
-            if (!chunkData) {
-                throw new Error(`Chunk ${i} missing from IndexedDB — cannot resume. Re-add the file.`);
-            }
-
-            const chunkBuffer = chunkData.buffer.slice(
-                chunkData.byteOffset,
-                chunkData.byteOffset + chunkData.byteLength,
-            );
-            const chunkSha256 = await sha256(chunkBuffer);
-            const chunkBlob = new Blob([chunkBuffer], { type: "application/octet-stream" });
-
-            await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
-
-            loaded = Math.min(loaded + chunkData.byteLength, totalSize);
-
-            const elapsed = (performance.now() - startTime) / 1000;
-            const speed = elapsed > 0 ? loaded / elapsed : 0;
-            const percent = Math.round((loaded / totalSize) * 100);
-
-            post({ type: "chunk_done", uploadId, index: i });
-            post({
-                type: "progress",
-                uploadId,
-                filename,
-                loaded,
-                total: totalSize,
-                percent,
-                speed,
-                status: "uploading",
-            });
+            if (VERBOSE) console.log("[resume] All chunks uploaded. Waiting for server...");
         }
-
-        if (VERBOSE) console.log("[resume] All chunks uploaded. Waiting for server...");
 
         // Server-side processing.
         const pollState2 = { done: false };
@@ -518,14 +531,17 @@ async function doResume(fileHash, entry, uploadId) {
         );
 
         let result2 = null;
-        try {
-            result2 = await finishUpload(token, noteId, serverUploadId);
-        } catch (err) {
-            if (err.message && err.message.includes("409")) {
-                if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
-            } else {
-                pollState2.done = true;
-                throw err;
+        if (!allDone) {
+            try {
+                result2 = await finishUpload(token, noteId, serverUploadId);
+            } catch (err) {
+                const msg = (err.message || "").toLowerCase();
+                if (msg.includes("already being finalized") || msg.includes("409")) {
+                    if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
+                } else {
+                    pollState2.done = true;
+                    throw err;
+                }
             }
         }
         pollState2.done = true;
