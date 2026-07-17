@@ -3971,7 +3971,8 @@ async function onBodyDrop(e) {
     enqueueMultipleInline(fileArray, selected.value.id, props.token, {
         onComplete: (result) => {
             if (result && result.markdown) {
-                insertAtCursor(result.markdown);
+                // Prefix with newline so multiple inline uploads stack vertically.
+                insertAtCursor("\n" + result.markdown);
             }
             addAttachmentIfNew(result?.file);
         },
@@ -4009,7 +4010,8 @@ async function onBodyPaste(e) {
     enqueueMultipleInline(files, selected.value.id, props.token, {
         onComplete: (result) => {
             if (result && result.markdown) {
-                insertAtCursor(result.markdown);
+                // Prefix with newline so multiple inline uploads stack vertically.
+                insertAtCursor("\n" + result.markdown);
             }
             addAttachmentIfNew(result?.file);
         },

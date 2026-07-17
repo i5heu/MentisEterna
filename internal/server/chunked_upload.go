@@ -454,7 +454,9 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 	}
 	if row.Inline {
 		var markdown string
-		if media.AllowsInline(rec.MimeType) && (media.IsImage(rec.MimeType) || media.IsVideo(rec.MimeType)) {
+		// Use image syntax (![](url)) for any media type that renders inline:
+		// images, videos, and audio.
+		if media.AllowsInline(rec.MimeType) && (media.IsImage(rec.MimeType) || media.IsVideo(rec.MimeType) || media.IsAudio(rec.MimeType)) {
 			markdown = fmt.Sprintf("![%s](%s)", rec.Filename, url)
 		} else {
 			markdown = fmt.Sprintf("[%s](%s)", rec.Filename, url)

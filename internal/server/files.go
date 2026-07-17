@@ -150,7 +150,7 @@ func (s *Server) uploadInlineFile(w http.ResponseWriter, r *http.Request) {
 
 	// Build the markdown insertion string
 	var markdown string
-	if media.AllowsInline(rec.MimeType) && (media.IsImage(rec.MimeType) || media.IsVideo(rec.MimeType)) {
+	if media.AllowsInline(rec.MimeType) && (media.IsImage(rec.MimeType) || media.IsVideo(rec.MimeType) || media.IsAudio(rec.MimeType)) {
 		markdown = fmt.Sprintf("![%s](%s)", rec.Filename, url)
 	} else {
 		markdown = fmt.Sprintf("[%s](%s)", rec.Filename, url)
