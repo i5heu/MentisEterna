@@ -2,19 +2,39 @@
 // Chunk data is keyed by file SHA-256 hash so we can resume uploads
 // after tab close, browser crash, or page reload without re-reading files.
 //
-// Each entry stores: { fileHash, filename, mimeType, totalSize, chunkSize,
-//   totalChunks, inline, noteId, token, chunks: Map<index, Uint8Array> }
+// Two object stores:
+//   "entries" — metadata per file (keyPath: "fileHash")
+//   "blobs"   — raw Uint8Array chunks (no keyPath, explicit key: "fileHash:index")
 
 const DB_NAME = "mentis-upload-chunks";
-const DB_VERSION = 1;
-const STORE_NAME = "chunks";
+const DB_VERSION = 2;
+const ENTRIES_STORE = "entries";
+const BLOBS_STORE = "blobs";
 
 /** @returns {Promise<IDBDatabase>} */
 function openDB() {
     return new Promise((resolve, reject) => {
         const req = indexedDB.open(DB_NAME, DB_VERSION);
-        req.onupgradeneeded = () => {
-            req.result.createObjectStore(STORE_NAME, { keyPath: "fileHash" });
+        req.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            // Clean up old single-store schema if upgrading from v1.
+            if (event.oldVersion < 1) {
+                if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
+                    db.createObjectStore(ENTRIES_STORE, { keyPath: "fileHash" });
+                }
+            }
+            if (event.oldVersion < 2) {
+                // Remove old v1 store if it exists (name was "chunks").
+                if (db.objectStoreNames.contains("chunks")) {
+                    db.deleteObjectStore("chunks");
+                }
+                if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
+                    db.createObjectStore(ENTRIES_STORE, { keyPath: "fileHash" });
+                }
+                if (!db.objectStoreNames.contains(BLOBS_STORE)) {
+                    db.createObjectStore(BLOBS_STORE);
+                }
+            }
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
@@ -23,17 +43,13 @@ function openDB() {
 
 /**
  * Get a chunk-store entry by file hash.
- * @param {string} fileHash - hex SHA-256
- * @returns {Promise<{fileHash: string, filename: string, mimeType: string, totalSize: number, chunkSize: number, totalChunks: number, inline: boolean, noteId: number, token: string, chunks: number[]} | null>}
  */
 export async function getChunkEntry(fileHash) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readonly");
-        const req = tx.objectStore(STORE_NAME).get(fileHash);
-        req.onsuccess = () => {
-            resolve(req.result || null);
-        };
+        const tx = db.transaction(ENTRIES_STORE, "readonly");
+        const req = tx.objectStore(ENTRIES_STORE).get(fileHash);
+        req.onsuccess = () => resolve(req.result || null);
         req.onerror = () => reject(req.error);
         tx.oncomplete = () => db.close();
     });
@@ -42,17 +58,15 @@ export async function getChunkEntry(fileHash) {
 /**
  * Store a single chunk for a file entry.
  * Creates the entry if it doesn't exist yet.
- * @param {string} fileHash
- * @param {{filename: string, mimeType: string, totalSize: number, chunkSize: number, totalChunks: number, inline: boolean, noteId: number, token: string}} meta
- * @param {number} index - chunk index
- * @param {Uint8Array} data - chunk bytes
  */
 export async function putChunk(fileHash, meta, index, data) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        const store = tx.objectStore(STORE_NAME);
-        const getReq = store.get(fileHash);
+        const tx = db.transaction([ENTRIES_STORE, BLOBS_STORE], "readwrite");
+        const entriesStore = tx.objectStore(ENTRIES_STORE);
+        const blobsStore = tx.objectStore(BLOBS_STORE);
+
+        const getReq = entriesStore.get(fileHash);
         getReq.onsuccess = () => {
             let entry = getReq.result;
             if (!entry) {
@@ -66,17 +80,15 @@ export async function putChunk(fileHash, meta, index, data) {
                     inline: meta.inline,
                     noteId: meta.noteId,
                     token: meta.token,
-                    chunks: [],
+                    chunkIndexes: [],
                 };
             }
-            // Expand chunks array if needed and store this chunk's index
-            if (!entry.chunks.includes(index)) {
-                entry.chunks.push(index);
+            if (!entry.chunkIndexes.includes(index)) {
+                entry.chunkIndexes.push(index);
             }
-            // Store the binary chunk under a sub-key
             const chunkKey = fileHash + ":" + index;
-            store.put(entry);
-            store.put({ fileHash: chunkKey, data }, chunkKey);
+            entriesStore.put(entry);
+            blobsStore.put(data, chunkKey);
             resolve();
         };
         getReq.onerror = () => reject(getReq.error);
@@ -86,20 +98,14 @@ export async function putChunk(fileHash, meta, index, data) {
 
 /**
  * Read a chunk's binary data.
- * @param {string} fileHash
- * @param {number} index
- * @returns {Promise<Uint8Array | null>}
  */
 export async function getChunkData(fileHash, index) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readonly");
+        const tx = db.transaction(BLOBS_STORE, "readonly");
         const chunkKey = fileHash + ":" + index;
-        const req = tx.objectStore(STORE_NAME).get(chunkKey);
-        req.onsuccess = () => {
-            const result = req.result;
-            resolve(result ? result.data : null);
-        };
+        const req = tx.objectStore(BLOBS_STORE).get(chunkKey);
+        req.onsuccess = () => resolve(req.result || null);
         req.onerror = () => reject(req.error);
         tx.oncomplete = () => db.close();
     });
@@ -107,29 +113,27 @@ export async function getChunkData(fileHash, index) {
 
 /**
  * Delete a chunk entry and all its chunk data.
- * @param {string} fileHash
  */
 export async function deleteChunkEntry(fileHash) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        const store = tx.objectStore(STORE_NAME);
+        const tx = db.transaction([ENTRIES_STORE, BLOBS_STORE], "readwrite");
+        const entriesStore = tx.objectStore(ENTRIES_STORE);
+        const blobsStore = tx.objectStore(BLOBS_STORE);
 
-        // First get the entry to find all stored chunk indices
-        const getReq = store.get(fileHash);
+        const getReq = entriesStore.get(fileHash);
         getReq.onsuccess = () => {
             const entry = getReq.result;
-            store.delete(fileHash);
-            if (entry && entry.chunks) {
-                for (const idx of entry.chunks) {
-                    store.delete(fileHash + ":" + idx);
+            entriesStore.delete(fileHash);
+            if (entry && entry.chunkIndexes) {
+                for (const idx of entry.chunkIndexes) {
+                    blobsStore.delete(fileHash + ":" + idx);
                 }
             }
             resolve();
         };
         getReq.onerror = () => {
-            // Entry might not exist; just try deleting
-            store.delete(fileHash);
+            entriesStore.delete(fileHash);
             resolve();
         };
         tx.oncomplete = () => db.close();
@@ -137,19 +141,16 @@ export async function deleteChunkEntry(fileHash) {
 }
 
 /**
- * List all stored chunk entries (for debugging / recovery).
- * @returns {Promise<Array<{fileHash: string, filename: string, noteId: number}>>}
+ * List all stored chunk entries.
  */
 export async function listEntries() {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readonly");
-        const req = tx.objectStore(STORE_NAME).getAll();
+        const tx = db.transaction(ENTRIES_STORE, "readonly");
+        const req = tx.objectStore(ENTRIES_STORE).getAll();
         req.onsuccess = () => {
             const all = req.result || [];
-            // Filter out chunk data entries (they have ":" in fileHash)
-            const entries = all.filter(e => e.fileHash.indexOf(":") === -1);
-            resolve(entries.map(e => ({
+            resolve(all.map(e => ({
                 fileHash: e.fileHash,
                 filename: e.filename,
                 noteId: e.noteId,

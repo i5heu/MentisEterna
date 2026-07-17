@@ -134,12 +134,14 @@ export function useUploadQueue() {
             }
 
             if (next._resumeEntry) {
-                // Resume upload from IndexedDB
+                // Resume upload from IndexedDB — strip Vue proxies before posting
+                // because structuredClone can't handle Proxy objects.
+                const plain = JSON.parse(JSON.stringify(next._resumeEntry));
                 worker.postMessage({
                     type: "resume",
                     uploadId: next._id,
                     fileHash: next._fileHash,
-                    entry: next._resumeEntry,
+                    entry: plain,
                 });
             } else {
                 // Fresh upload (file provided)

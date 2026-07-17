@@ -293,14 +293,14 @@ async function doUpload(data) {
 
         // --- PHASE 4: Upload missing chunks from IndexedDB ---
         if (VERBOSE) console.log("[uploading] Sending chunks...");
-        let loaded = alreadyDone.length * chunkSize;
+        let loaded = Math.min(alreadyDone.length * chunkSize, totalSize);
         const startTime = performance.now();
 
-        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.round((loaded / totalSize) * 100), speed: 0, status: "uploading" });
+        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.min(100, Math.round((loaded / totalSize) * 100)), speed: 0, status: "uploading" });
 
         for (let i = 0; i < totalChunks; i++) {
             if (isAborted(uploadId)) {
-                console.warn("[cancelled] Upload aborted by user");
+                console.warn("[cancelled] Upload aborted during upload");
                 try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
                 post({ type: "error", uploadId, filename, error: "Upload cancelled" });
                 if (VERBOSE) console.groupEnd();
@@ -309,7 +309,7 @@ async function doUpload(data) {
 
             // Skip chunks the server already has.
             if (alreadyDone.includes(i)) {
-                loaded += chunkSize;
+                loaded = Math.min((i + 1) * chunkSize, totalSize);
                 continue;
             }
 
@@ -328,7 +328,7 @@ async function doUpload(data) {
 
             await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
 
-            loaded += chunkData.byteLength;
+            loaded = Math.min(loaded + chunkData.byteLength, totalSize);
 
             const elapsed = (performance.now() - startTime) / 1000;
             const speed = elapsed > 0 ? loaded / elapsed : 0;
@@ -432,7 +432,7 @@ async function doResume(fileHash, entry, uploadId) {
         let loaded = Math.min(alreadyDone.length * chunkSize, totalSize);
         const startTime = performance.now();
 
-        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.round((loaded / totalSize) * 100), speed: 0, status: "uploading" });
+        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.min(100, Math.round((loaded / totalSize) * 100)), speed: 0, status: "uploading" });
 
         for (let i = 0; i < totalChunks; i++) {
             if (isAborted(uploadId)) {
@@ -444,7 +444,10 @@ async function doResume(fileHash, entry, uploadId) {
             }
 
             // Skip chunks the server already has.
-            if (alreadyDone.includes(i)) continue;
+            if (alreadyDone.includes(i)) {
+                loaded = Math.min((i + 1) * chunkSize, totalSize);
+                continue;
+            }
 
             const chunkData = await ChunkStore.getChunkData(fileHash, i);
             if (!chunkData) {
@@ -460,7 +463,7 @@ async function doResume(fileHash, entry, uploadId) {
 
             await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
 
-            loaded += chunkData.byteLength;
+            loaded = Math.min(loaded + chunkData.byteLength, totalSize);
 
             const elapsed = (performance.now() - startTime) / 1000;
             const speed = elapsed > 0 ? loaded / elapsed : 0;
