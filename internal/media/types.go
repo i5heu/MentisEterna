@@ -49,6 +49,7 @@ type NoteFile struct {
 	URL       string `json:"url"`
 	IsImage   bool   `json:"is_image"`
 	IsAudio   bool   `json:"is_audio"`
+	IsVideo   bool   `json:"is_video"`
 }
 
 // S3ReplicaRecord holds the state of a single S3 replica.

@@ -35,6 +35,9 @@ func DetectMIME(data []byte) string {
 	case len(data) >= 12 && data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
 		data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50:
 		return "image/webp"
+	case len(data) >= 12 && data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
+		data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x4D:
+		return "video/webm"
 	case len(data) >= 4 && data[0] == 0x25 && data[1] == 0x50 && data[2] == 0x44 && data[3] == 0x46:
 		return "application/pdf"
 	case len(data) >= 12 && string(data[4:8]) == "ftyp":
@@ -80,6 +83,19 @@ func IsSafeInlineImage(mimeType string) bool {
 	}
 }
 
+func IsSafeInlineVideo(mimeType string) bool {
+	switch mimeType {
+	case "video/mp4", "video/webm", "video/ogg":
+		return true
+	default:
+		return false
+	}
+}
+
+func IsVideo(mimeType string) bool {
+	return IsSafeInlineVideo(mimeType)
+}
+
 func AllowsInline(mimeType string) bool {
-	return IsSafeInlineImage(mimeType) || IsAudio(mimeType)
+	return IsSafeInlineImage(mimeType) || IsAudio(mimeType) || IsSafeInlineVideo(mimeType)
 }
