@@ -3,7 +3,8 @@ import { ref, reactive, computed, onUnmounted } from "vue";
 // Module-level singleton -- one worker shared across all components.
 let worker = null;
 let workerRefs = 0;
-let activeUploadId = null;
+/** @type {Set<string>} */
+const activeUploadIds = new Set();
 /** @type {Map<string, Function>} */
 const uploadCallbacks = new Map();
 
@@ -25,15 +26,19 @@ function releaseWorker() {
 }
 
 const DEFAULT_CHUNK_SIZE = 1024 * 1024; // 1 MB
+const DEFAULT_CONCURRENCY = 2; // max simultaneous uploads
 
 /**
  * Vue composable: manages a shared upload queue with a Web Worker backend.
+ * Supports multiple concurrent uploads via a configurable concurrency limit.
  */
 export function useUploadQueue() {
     const queue = ref([]);
-    const active = ref(null);
+    /** @type {import("vue").Ref<Array<{uploadId: string, filename: string, loaded: number, total: number, percent: number, speed: number, status: string}>>} */
+    const active = ref([]);
     const completed = reactive([]);
     let completeTimer = null;
+    const concurrency = ref(DEFAULT_CONCURRENCY);
 
     if (!worker) {
         ensureWorker();
@@ -43,8 +48,10 @@ export function useUploadQueue() {
         const msg = event.data || {};
 
         switch (msg.type) {
-            case "progress":
-                active.value = {
+            case "progress": {
+                // Update or insert an active entry.
+                const idx = active.value.findIndex(a => a.uploadId === msg.uploadId);
+                const entry = {
                     uploadId: msg.uploadId,
                     filename: msg.filename,
                     loaded: msg.loaded,
@@ -53,7 +60,13 @@ export function useUploadQueue() {
                     speed: msg.speed,
                     status: msg.status,
                 };
+                if (idx >= 0) {
+                    active.value[idx] = entry;
+                } else {
+                    active.value.push(entry);
+                }
                 break;
+            }
 
             case "chunk_done":
                 break;
@@ -66,7 +79,6 @@ export function useUploadQueue() {
                     timestamp: Date.now(),
                 };
                 clearTimeout(completeTimer);
-                completed.length = 0;
                 completed.push(completedEntry);
                 completeTimer = setTimeout(() => {
                     completed.length = 0;
@@ -79,8 +91,9 @@ export function useUploadQueue() {
                     cb(msg.result);
                 }
 
-                active.value = null;
-                activeUploadId = null;
+                // Remove from active list.
+                activeUploadIds.delete(msg.uploadId);
+                active.value = active.value.filter(a => a.uploadId !== msg.uploadId);
                 processQueue();
                 break;
             }
@@ -91,11 +104,14 @@ export function useUploadQueue() {
                     filename: msg.filename,
                     error: msg.error,
                 };
-                completed.length = 0;
                 completed.push(errorEntry);
 
-                active.value = null;
-                activeUploadId = null;
+                if (uploadCallbacks.has(msg.uploadId)) {
+                    uploadCallbacks.delete(msg.uploadId);
+                }
+
+                activeUploadIds.delete(msg.uploadId);
+                active.value = active.value.filter(a => a.uploadId !== msg.uploadId);
                 processQueue();
                 break;
             }
@@ -105,25 +121,26 @@ export function useUploadQueue() {
     worker.addEventListener("message", handleWorkerMessage);
 
     function processQueue() {
-        if (activeUploadId || queue.value.length === 0) return;
+        // Start queued uploads until we hit the concurrency limit.
+        while (activeUploadIds.size < concurrency.value && queue.value.length > 0) {
+            const next = queue.value.shift();
+            activeUploadIds.add(next._id);
 
-        const next = queue.value.shift();
-        activeUploadId = next._id;
+            // Register per-upload callback if provided
+            if (next.onComplete) {
+                uploadCallbacks.set(next._id, next.onComplete);
+            }
 
-        // Register per-upload callback if provided
-        if (next.onComplete) {
-            uploadCallbacks.set(next._id, next.onComplete);
+            worker.postMessage({
+                type: "upload",
+                uploadId: next._id,
+                file: next.file,
+                noteId: next.noteId,
+                token: next.token,
+                inline: next.inline,
+                chunkSize: next.chunkSize || DEFAULT_CHUNK_SIZE,
+            });
         }
-
-        worker.postMessage({
-            type: "upload",
-            uploadId: next._id,
-            file: next.file,
-            noteId: next.noteId,
-            token: next.token,
-            inline: next.inline,
-            chunkSize: next.chunkSize || DEFAULT_CHUNK_SIZE,
-        });
     }
 
     function enqueue(file, noteId, token, opts = {}) {
@@ -140,6 +157,20 @@ export function useUploadQueue() {
         processQueue();
     }
 
+    /**
+     * Enqueue multiple files at once. Each file gets its own queue entry
+     * and they will upload concurrently (up to the concurrency limit).
+     * @param {File[]} files
+     * @param {number} noteId
+     * @param {string} token
+     * @param {{ inline?: boolean, chunkSize?: number, onComplete?: (result: any) => void }} [opts]
+     */
+    function enqueueMultiple(files, noteId, token, opts = {}) {
+        for (const file of files) {
+            enqueue(file, noteId, token, opts);
+        }
+    }
+
     function enqueueAttachment(file, noteId, token, opts = {}) {
         enqueue(file, noteId, token, { ...opts, inline: false });
     }
@@ -148,11 +179,25 @@ export function useUploadQueue() {
         enqueue(file, noteId, token, { ...opts, inline: true });
     }
 
+    /**
+     * Enqueue multiple files as inline uploads.
+     * Each file gets its own queue entry and they upload concurrently.
+     * @param {File[]} files
+     * @param {number} noteId
+     * @param {string} token
+     * @param {{ chunkSize?: number, onComplete?: (result: any) => void }} [opts]
+     */
+    function enqueueMultipleInline(files, noteId, token, opts = {}) {
+        for (const file of files) {
+            enqueueInline(file, noteId, token, opts);
+        }
+    }
+
     function cancel(uploadId) {
-        if (activeUploadId && activeUploadId === uploadId) {
-            worker.postMessage({ type: "cancel" });
-            activeUploadId = null;
-            active.value = null;
+        if (activeUploadIds.has(uploadId)) {
+            worker.postMessage({ type: "cancel", uploadId });
+            activeUploadIds.delete(uploadId);
+            active.value = active.value.filter(a => a.uploadId !== uploadId);
             processQueue();
         }
     }
@@ -170,10 +215,14 @@ export function useUploadQueue() {
         active,
         completed,
         queueCount,
+        concurrency,
         enqueue,
+        enqueueMultiple,
         enqueueAttachment,
         enqueueInline,
+        enqueueMultipleInline,
         cancel,
         defaultChunkSize: DEFAULT_CHUNK_SIZE,
+        defaultConcurrency: DEFAULT_CONCURRENCY,
     };
 }

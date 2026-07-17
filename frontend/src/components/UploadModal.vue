@@ -2,14 +2,14 @@
     <div v-if="visible" class="modal-overlay" @click.self="$emit('close')">
         <div class="upload-modal">
             <div class="modal-header">
-                <h2>Upload Attachment</h2>
+                <h2>Upload Attachments</h2>
                 <button class="btn-ghost modal-close-btn" @click="$emit('close')">✕</button>
             </div>
 
             <div class="modal-body">
-                <!-- Drag zone / file picker (only show when no active upload) -->
+                <!-- Drag zone / file picker (always shown for adding more files) -->
                 <div
-                    v-if="!active"
+                    v-if="!isAnyProcessing"
                     class="drop-zone"
                     :class="{ dragging: isDragging }"
                     @dragover.prevent="isDragging = true"
@@ -17,45 +17,50 @@
                     @drop.prevent="onDrop"
                 >
                     <p class="drop-zone-text">
-                        <template v-if="isDragging">Drop file here</template>
+                        <template v-if="isDragging">Drop files here</template>
                         <template v-else>
                             <span class="drop-zone-icon">📁</span>
-                            Drag a file here or
+                            Drag files here or
                             <button class="drop-zone-link" @click="openFilePicker">browse</button>
                         </template>
                     </p>
                     <input
                         ref="fileInput"
                         type="file"
+                        multiple
                         class="file-input-hidden"
                         @change="onFileSelected"
                     />
                 </div>
 
-                <!-- Active upload progress -->
-                <div v-if="active" class="upload-active-block">
+                <!-- Active uploads -->
+                <div
+                    v-for="entry in active"
+                    :key="entry.uploadId"
+                    class="upload-active-block"
+                >
                     <div class="upload-header">
-                        <span class="upload-filename" :title="active.filename">
-                            {{ active.filename }}
+                        <span class="upload-filename" :title="entry.filename">
+                            {{ entry.filename }}
                         </span>
                     </div>
                     <div class="upload-stats">
-                        <span>{{ statusLabel }}</span>
-                        <span v-if="active.speed > 0 && active.percent < 100">{{ formatSpeed(active.speed) }}</span>
-                        <span v-if="active.percent > 0 && active.percent < 100 && active.speed > 0">{{ formatETA() }}</span>
+                        <span>{{ statusLabel(entry) }}</span>
+                        <span v-if="entry.speed > 0 && entry.percent < 100">{{ formatSpeed(entry.speed) }}</span>
+                        <span v-if="entry.percent > 0 && entry.percent < 100 && entry.speed > 0">{{ formatETA(entry) }}</span>
                     </div>
                     <div class="progress-bar">
                         <div
                             class="progress-fill"
-                            :class="{ indeterminate: isProcessing }"
-                            :style="isProcessing ? {} : { width: active.percent + '%' }"
+                            :class="{ indeterminate: isProcessing(entry) }"
+                            :style="isProcessing(entry) ? {} : { width: entry.percent + '%' }"
                         />
                     </div>
                     <div class="upload-actions">
                         <button
-                            v-if="isCancellable"
+                            v-if="isCancellable(entry)"
                             class="btn-ghost btn-sm"
-                            @click="onCancel"
+                            @click="onCancel(entry.uploadId)"
                         >
                             Cancel
                         </button>
@@ -63,7 +68,7 @@
                 </div>
 
                 <!-- Completed -->
-                <div v-if="completed.length && !active" class="completed-section">
+                <div v-if="completed.length && active.length === 0" class="completed-section">
                     <template v-for="entry in completed" :key="entry.uploadId">
                         <div v-if="entry.error" class="completed-entry error">
                             <span class="completed-icon">✕</span>
@@ -85,7 +90,7 @@
 
             <div class="modal-footer">
                 <button class="btn-primary" @click="$emit('close')">
-                    {{ completed.length ? "Done" : "Close" }}
+                    {{ completed.length && active.length === 0 ? "Done" : "Close" }}
                 </button>
             </div>
         </div>
@@ -108,23 +113,27 @@ const { active, completed, queueCount, enqueueAttachment, cancel } = useUploadQu
 const fileInput = ref(null);
 const isDragging = ref(false);
 
-const statusLabel = computed(() => {
-    if (!active.value) return "";
-    const s = active.value.status;
-    if (!s || s === "uploading") return `${active.value.percent}%`;
+function statusLabel(entry) {
+    if (!entry) return "";
+    const s = entry.status;
+    if (!s || s === "uploading") return `${entry.percent}%`;
     return s.charAt(0).toUpperCase() + s.slice(1);
-});
+}
 
-const isProcessing = computed(() => {
-    if (!active.value) return false;
-    const s = active.value.status;
+function isProcessing(entry) {
+    if (!entry) return false;
+    const s = entry.status;
     return s !== "uploading" && s !== "hashing" && s !== "";
-});
+}
 
-const isCancellable = computed(() => {
-    if (!active.value) return false;
-    const s = active.value.status;
+function isCancellable(entry) {
+    if (!entry) return false;
+    const s = entry.status;
     return s === "uploading" || s === "hashing" || !s;
+}
+
+const isAnyProcessing = computed(() => {
+    return active.value.some(a => isProcessing(a));
 });
 
 // Watch for completion
@@ -145,23 +154,25 @@ function openFilePicker() {
 }
 
 function onFileSelected(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    enqueueAttachment(file, props.noteId, props.token);
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+        enqueueAttachment(files[i], props.noteId, props.token);
+    }
     event.target.value = "";
 }
 
 function onDrop(event) {
     isDragging.value = false;
-    const file = event.dataTransfer.files[0];
-    if (!file) return;
-    enqueueAttachment(file, props.noteId, props.token);
+    const files = event.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+        enqueueAttachment(files[i], props.noteId, props.token);
+    }
 }
 
-function onCancel() {
-    if (active.value) {
-        cancel(active.value.uploadId);
-    }
+function onCancel(uploadId) {
+    cancel(uploadId);
 }
 
 function formatSpeed(bytesPerSec) {
@@ -170,11 +181,10 @@ function formatSpeed(bytesPerSec) {
     return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
 }
 
-function formatETA() {
-    const a = active.value;
-    if (!a || !a.speed || a.speed <= 0) return "";
-    const remaining = a.total - a.loaded;
-    const seconds = remaining / a.speed;
+function formatETA(entry) {
+    if (!entry || !entry.speed || entry.speed <= 0) return "";
+    const remaining = entry.total - entry.loaded;
+    const seconds = remaining / entry.speed;
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
@@ -223,6 +233,9 @@ function formatETA() {
 .modal-body {
     padding: 16px 20px;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .drop-zone {
@@ -263,6 +276,9 @@ function formatETA() {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color, #444);
+    border-radius: 8px;
 }
 
 .upload-filename {

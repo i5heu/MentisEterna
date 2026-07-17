@@ -1,10 +1,12 @@
 // Chunked Upload Web Worker
 // Handles large file uploads with progress tracking and SHA-256 integrity checks.
+// Supports multiple concurrent uploads.
 
 const VERBOSE = true;
 
-let activeUpload = null;
-let aborted = false;
+// Track all active uploads by uploadId, each with its own abort flag.
+/** @type {Map<string, {aborted: boolean}>} */
+const activeUploads = new Map();
 
 function post(msg) {
     self.postMessage(msg);
@@ -34,7 +36,7 @@ function readChunk(file, start, end) {
 /**
  * Start a chunked upload session on the server.
  */
-async function startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks) {
+async function startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256) {
     const body = JSON.stringify({
         inline,
         filename,
@@ -42,6 +44,7 @@ async function startUploadSession(token, noteId, inline, filename, mimeType, tot
         total_size: totalSize,
         chunk_size: chunkSize,
         total_chunks: totalChunks,
+        file_sha256: fileSha256 || "",
     });
 
     const res = await fetch(`/notes/${noteId}/chunked/start`, {
@@ -103,7 +106,7 @@ async function uploadChunkWithRetry(token, noteId, uploadId, index, chunkBlob, c
 }
 
 /**
- * Finish the chunked upload session (no body needed, server knows the session).
+ * Finish the chunked upload session.
  */
 async function finishUpload(token, noteId, uploadId) {
     const res = await fetch(`/notes/${noteId}/chunked/${uploadId}/finish`, {
@@ -178,6 +181,11 @@ async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filenam
     }
 }
 
+function isAborted(uploadId) {
+    const state = activeUploads.get(uploadId);
+    return !state || state.aborted;
+}
+
 async function doUpload(data) {
     const { file, noteId, token, inline, chunkSize, uploadId } = data;
     const filename = file.name;
@@ -190,17 +198,41 @@ async function doUpload(data) {
         console.log("File size:", totalSize, "bytes,", "Chunks:", totalChunks, "Chunk size:", chunkSize);
     }
 
-    activeUpload = { uploadId, noteId, token };
-    aborted = false;
+    // Register this upload's state.
+    activeUploads.set(uploadId, { aborted: false });
 
     try {
-        // --- PHASE 1: Start session ---
+        // --- PHASE 1: Compute file SHA-256 while chunks are fresh ---
+        // We compute the full file SHA-256 upfront so the server can validate integrity.
+        if (VERBOSE) console.log("[hashing] Computing file SHA-256...");
+        post({ type: "progress", uploadId, filename, loaded: 0, total: totalSize, percent: 0, speed: 0, status: "hashing" });
+
+        const fileBuffer = await readChunk(file, 0, totalSize);
+        const fileSha256 = await sha256(fileBuffer);
+        if (VERBOSE) console.log("[hashing] File SHA-256:", fileSha256.slice(0, 12) + "...");
+
+        if (isAborted(uploadId)) {
+            if (VERBOSE) console.warn("[cancelled] Upload aborted during hashing");
+            post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+            if (VERBOSE) console.groupEnd();
+            return;
+        }
+
+        // --- PHASE 2: Start session ---
         if (VERBOSE) console.log("[start] Creating upload session...");
-        const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks);
+        const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256);
         const serverUploadId = session.upload_id || uploadId;
         if (VERBOSE) console.log("[start] Server upload_id:", serverUploadId);
 
-        // --- PHASE 2: Upload chunks ---
+        if (isAborted(uploadId)) {
+            if (VERBOSE) console.warn("[cancelled] Upload aborted after start");
+            try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
+            post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+            if (VERBOSE) console.groupEnd();
+            return;
+        }
+
+        // --- PHASE 3: Upload chunks ---
         if (VERBOSE) console.log("[uploading] Sending", totalChunks, "chunks...");
         let loaded = 0;
         const startTime = performance.now();
@@ -208,7 +240,7 @@ async function doUpload(data) {
         post({ type: "progress", uploadId, filename, loaded: 0, total: totalSize, percent: 0, speed: 0, status: "uploading" });
 
         for (let i = 0; i < totalChunks; i++) {
-            if (aborted) {
+            if (isAborted(uploadId)) {
                 console.warn("[cancelled] Upload aborted by user");
                 try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
                 post({ type: "error", uploadId, filename, error: "Upload cancelled" });
@@ -247,8 +279,7 @@ async function doUpload(data) {
 
         if (VERBOSE) console.log("[uploading] All", totalChunks, "chunks uploaded. Waiting for server...");
 
-        // --- PHASE 3: Server-side processing ---
-        // Use AbortController to cleanly cancel the poll when finish completes.
+        // --- PHASE 4: Server-side processing ---
         const pollAbort = new AbortController();
         const pollPromise = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
@@ -269,12 +300,12 @@ async function doUpload(data) {
         }
 
         post({ type: "complete", uploadId, filename, result });
-        activeUpload = null;
     } catch (error) {
         console.error("[error]", filename, error.message || error);
         if (VERBOSE) console.groupEnd();
         post({ type: "error", uploadId, filename, error: error.message || String(error) });
-        activeUpload = null;
+    } finally {
+        activeUploads.delete(uploadId);
     }
 }
 
@@ -283,15 +314,16 @@ self.addEventListener("message", (event) => {
     const data = event.data || {};
 
     if (data.type === "upload") {
+        // Start a new concurrent upload. Each upload runs independently.
         doUpload(data);
         return;
     }
 
     if (data.type === "cancel") {
-        aborted = true;
-        if (activeUpload) {
-            const { token, noteId, uploadId } = activeUpload;
-            cancelUpload(token, noteId, uploadId).catch(() => { /* fire-and-forget */ });
+        // Set the abort flag for this specific upload.
+        const state = activeUploads.get(data.uploadId);
+        if (state) {
+            state.aborted = true;
         }
     }
 });

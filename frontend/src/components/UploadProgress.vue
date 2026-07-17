@@ -1,36 +1,40 @@
 <template>
     <div v-if="hasContent" class="upload-progress-panel">
-        <!-- Active upload -->
-        <div v-if="active" class="upload-active">
+        <!-- Active uploads -->
+        <div
+            v-for="entry in active"
+            :key="entry.uploadId"
+            class="upload-active"
+        >
             <div class="upload-header">
-                <span class="upload-filename" :title="active.filename">
-                    {{ active.filename }}
+                <span class="upload-filename" :title="entry.filename">
+                    {{ entry.filename }}
                 </span>
                 <button
-                    v-if="isCancellable"
-                    class="upload-cancel-btn"
-                    title="Cancel upload"
-                    @click="$emit('cancel', active.uploadId)"
-                >
+                        v-if="isCancellable(entry)"
+                        class="upload-cancel-btn"
+                        title="Cancel upload"
+                        @click="cancel(entry.uploadId)"
+                    >
                     ✕
                 </button>
             </div>
             <div class="upload-stats">
-                <span>{{ statusLabel }}</span>
-                <span v-if="active.speed > 0 && active.percent < 100">{{ formatSpeed(active.speed) }}</span>
-                <span v-if="active.percent > 0 && active.percent < 100 && active.speed > 0">{{ formatETA() }}</span>
+                <span>{{ statusLabel(entry) }}</span>
+                <span v-if="entry.speed > 0 && entry.percent < 100">{{ formatSpeed(entry.speed) }}</span>
+                <span v-if="entry.percent > 0 && entry.percent < 100 && entry.speed > 0">{{ formatETA(entry) }}</span>
             </div>
             <div class="progress-bar">
                 <div
                     class="progress-fill"
-                    :class="{ indeterminate: isProcessing }"
-                    :style="isProcessing ? {} : { width: active.percent + '%' }"
+                    :class="{ indeterminate: isProcessing(entry) }"
+                    :style="isProcessing(entry) ? {} : { width: entry.percent + '%' }"
                 />
             </div>
         </div>
 
         <!-- Recently completed -->
-        <div v-if="completed.length && !active" class="upload-completed">
+        <div v-if="completed.length && active.length === 0" class="upload-completed">
             <template v-for="entry in completed" :key="entry.uploadId">
                 <div v-if="entry.error" class="completed-entry error">
                     <span class="completed-check">✕</span>
@@ -55,31 +59,30 @@
 import { computed } from "vue";
 import { useUploadQueue } from "../composables/useUploadQueue.js";
 
-const { queue, active, completed, queueCount } = useUploadQueue();
+const { queue, active, completed, queueCount, cancel } = useUploadQueue();
 
-const hasContent = computed(() => active.value || completed.length > 0 || queueCount.value > 0);
+const hasContent = computed(() => active.value.length > 0 || completed.length > 0 || queueCount.value > 0);
 
-// Show status text or fall back to percent
-const statusLabel = computed(() => {
-    if (!active.value) return "";
-    const s = active.value.status;
-    if (!s || s === "uploading") return `${active.value.percent}%`;
+function statusLabel(entry) {
+    if (!entry) return "";
+    const s = entry.status;
+    if (!s || s === "uploading") return `${entry.percent}%`;
     return s.charAt(0).toUpperCase() + s.slice(1);
-});
+}
 
 // Processing phases: server is doing work, bar should animate
-const isProcessing = computed(() => {
-    if (!active.value) return false;
-    const s = active.value.status;
+function isProcessing(entry) {
+    if (!entry) return false;
+    const s = entry.status;
     return s === "assembling" || s === "verifying" || s === "processing" || s === "done" || s === "Assembling chunks..." || s === "Verifying integrity..." || s === "Encrypting and uploading..." || s === "Done";
-});
+}
 
 // Allow cancel only during chunk upload, not during server processing
-const isCancellable = computed(() => {
-    if (!active.value) return false;
-    const s = active.value.status;
+function isCancellable(entry) {
+    if (!entry) return false;
+    const s = entry.status;
     return s === "uploading" || s === "hashing" || !s;
-});
+}
 
 function formatSpeed(bytesPerSec) {
     if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
@@ -87,11 +90,11 @@ function formatSpeed(bytesPerSec) {
     return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
 }
 
-function formatETA() {
-    if (!active.value) return "";
-    const speed = active.value.speed;
+function formatETA(entry) {
+    if (!entry) return "";
+    const speed = entry.speed;
     if (!speed || speed <= 0) return "";
-    const remaining = active.value.total - active.value.loaded;
+    const remaining = entry.total - entry.loaded;
     const seconds = remaining / speed;
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
@@ -114,12 +117,21 @@ function formatETA() {
     box-shadow: 0 4px 24px var(--shadow-color, rgba(0, 0, 0, 0.6));
     font-size: 0.85rem;
     color: var(--font-color, #e0e8e4);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
 .upload-active {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color, #444);
+}
+.upload-active:last-of-type {
+    padding-bottom: 0;
+    border-bottom: none;
 }
 
 .upload-header {
@@ -223,7 +235,6 @@ function formatETA() {
 }
 
 .upload-queue-badge {
-    margin-top: 8px;
     padding-top: 6px;
     border-top: 1px solid var(--border-color, #444);
     text-align: center;
