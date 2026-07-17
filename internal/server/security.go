@@ -12,7 +12,7 @@ import (
 
 const (
 	appContentSecurityPolicy  = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:; form-action 'self'"
-	fileContentSecurityPolicy = "default-src 'none'; frame-ancestors 'none'; sandbox"
+	fileContentSecurityPolicy = "default-src 'none'; base-uri 'none'; form-action 'none'"
 )
 
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
