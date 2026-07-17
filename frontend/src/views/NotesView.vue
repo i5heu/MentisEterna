@@ -3954,10 +3954,7 @@ async function onAttachFile() {
 
 function onChunkedUploadComplete(result) {
     if (!selected.value) return;
-    if (result && result.file) {
-        if (!selected.value.attachments) selected.value.attachments = [];
-        selected.value.attachments.push(result.file);
-    }
+    addAttachmentIfNew(result?.file);
 }
 
 async function onBodyDrop(e) {
@@ -3976,10 +3973,7 @@ async function onBodyDrop(e) {
             if (result && result.markdown) {
                 insertAtCursor(result.markdown);
             }
-            if (result && result.file) {
-                if (!selected.value.attachments) selected.value.attachments = [];
-                selected.value.attachments.push(result.file);
-            }
+            addAttachmentIfNew(result?.file);
         },
     });
 }
@@ -4017,12 +4011,19 @@ async function onBodyPaste(e) {
             if (result && result.markdown) {
                 insertAtCursor(result.markdown);
             }
-            if (result && result.file) {
-                if (!selected.value.attachments) selected.value.attachments = [];
-                selected.value.attachments.push(result.file);
-            }
+            addAttachmentIfNew(result?.file);
         },
     });
+}
+
+function addAttachmentIfNew(file) {
+    if (!file) return;
+    if (!selected.value.attachments) selected.value.attachments = [];
+    // Avoid duplicates — a save between upload completion and this callback
+    // may have already populated attachments from the server.
+    if (!selected.value.attachments.some(a => a.id === file.id)) {
+        selected.value.attachments.push(file);
+    }
 }
 
 async function removeAttachment(file) {

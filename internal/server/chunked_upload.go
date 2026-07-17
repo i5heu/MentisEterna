@@ -293,7 +293,12 @@ func (s *Server) handleChunkedStatus(w http.ResponseWriter, r *http.Request, not
 
 	row, err := s.loadUploadSession(uploadID, noteID)
 	if err != nil {
-		http.Error(w, "upload session not found", http.StatusNotFound)
+		// Session may have been cleaned up concurrently (finish handler runs
+		// cleanup after writing the response). Return 200 with a terminal
+		// status so the frontend poller doesn't log 404 errors.
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status": "not_found",
+		})
 		return
 	}
 

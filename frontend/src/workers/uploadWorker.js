@@ -161,6 +161,7 @@ async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filenam
                 else if (status === "processing") statusText = "Encrypting and uploading...";
                 else if (status === "done") statusText = "Done";
                 else if (status === "failed") statusText = "Failed";
+                else if (status === "not_found") statusText = "Finalizing...";
 
                 if (VERBOSE && status !== lastLoggedStatus) {
                     console.log("[" + status + "]", statusText);
