@@ -7,7 +7,7 @@
                     {{ active.filename }}
                 </span>
                 <button
-                    v-if="active.status !== 'finalizing'"
+                    v-if="isCancellable"
                     class="upload-cancel-btn"
                     title="Cancel upload"
                     @click="$emit('cancel', active.uploadId)"
@@ -16,15 +16,15 @@
                 </button>
             </div>
             <div class="upload-stats">
-                <span>{{ active.status === 'hashing' ? 'Hashing…' : active.status === 'finalizing' ? 'Finalizing…' : `${active.percent}%` }}</span>
-                <span v-if="active.speed > 0">{{ formatSpeed(active.speed) }}</span>
-                <span v-if="active.percent > 0 && active.percent < 100 && active.speed > 0">{{ formatETA(active) }}</span>
+                <span>{{ statusLabel }}</span>
+                <span v-if="active.speed > 0 && active.percent < 100">{{ formatSpeed(active.speed) }}</span>
+                <span v-if="active.percent > 0 && active.percent < 100 && active.speed > 0">{{ formatETA() }}</span>
             </div>
             <div class="progress-bar">
                 <div
                     class="progress-fill"
-                    :class="{ finalizing: active.status === 'finalizing' }"
-                    :style="{ width: active.percent + '%' }"
+                    :class="{ indeterminate: isProcessing }"
+                    :style="isProcessing ? {} : { width: active.percent + '%' }"
                 />
             </div>
         </div>
@@ -59,16 +59,40 @@ const { queue, active, completed, queueCount } = useUploadQueue();
 
 const hasContent = computed(() => active.value || completed.length > 0 || queueCount.value > 0);
 
+// Show status text or fall back to percent
+const statusLabel = computed(() => {
+    if (!active.value) return "";
+    const s = active.value.status;
+    if (!s || s === "uploading") return `${active.value.percent}%`;
+    return s.charAt(0).toUpperCase() + s.slice(1);
+});
+
+// Processing phases: server is doing work, bar should animate
+const isProcessing = computed(() => {
+    if (!active.value) return false;
+    const s = active.value.status;
+    return s === "assembling" || s === "verifying" || s === "processing" || s === "done" || s === "Assembling chunks..." || s === "Verifying integrity..." || s === "Encrypting and uploading..." || s === "Done";
+});
+
+// Allow cancel only during chunk upload, not during server processing
+const isCancellable = computed(() => {
+    if (!active.value) return false;
+    const s = active.value.status;
+    return s === "uploading" || s === "hashing" || !s;
+});
+
 function formatSpeed(bytesPerSec) {
     if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
     if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
     return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
 }
 
-function formatETA(active) {
-    if (!active.speed || active.speed <= 0) return "";
-    const remaining = active.total - active.loaded;
-    const seconds = remaining / active.speed;
+function formatETA() {
+    if (!active.value) return "";
+    const speed = active.value.speed;
+    if (!speed || speed <= 0) return "";
+    const remaining = active.value.total - active.value.loaded;
+    const seconds = remaining / speed;
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
@@ -100,87 +124,88 @@ function formatETA(active) {
 
 .upload-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
     gap: 8px;
 }
 
 .upload-filename {
     font-weight: 600;
+    font-size: 0.85rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
-    min-width: 0;
 }
 
 .upload-cancel-btn {
-    background: transparent;
-    border: 1px solid var(--border-color, #7e7567);
-    color: var(--font-color-secondary, #a5b0ad);
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 0.75rem;
+    background: none;
+    border: none;
+    color: var(--font-color-secondary, #999);
     cursor: pointer;
-    flex-shrink: 0;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 2px;
 }
 .upload-cancel-btn:hover {
-    background: var(--raised-bg, #0a1d2d);
     color: var(--heading-color, #bf0604);
 }
 
 .upload-stats {
     display: flex;
+    align-items: center;
     gap: 12px;
     font-size: 0.75rem;
-    color: var(--font-color-secondary, #a5b0ad);
+    color: var(--font-color-secondary, #999);
 }
 
 .progress-bar {
     width: 100%;
-    height: 6px;
-    background: var(--raised-bg, #0a1d2d);
-    border-radius: 3px;
+    height: 4px;
+    background: var(--border-color, #444);
+    border-radius: 2px;
     overflow: hidden;
-    margin-top: 4px;
 }
 
 .progress-fill {
     height: 100%;
-    background: var(--accent-teal, #6d9484);
-    border-radius: 3px;
+    background: var(--accent-teal, #60a5fa);
+    border-radius: 2px;
     transition: width 0.2s ease;
 }
-.progress-fill.finalizing {
-    animation: pulse 1s ease-in-out infinite;
+
+.progress-fill.indeterminate {
+    width: 100%;
+    animation: indeterminate-bar 1.5s ease-in-out infinite;
 }
 
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+@keyframes indeterminate-bar {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
 }
 
 .upload-completed {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
 }
 
 .completed-entry {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 0.85rem;
+    gap: 8px;
+    font-size: 0.8rem;
 }
+
 .completed-entry.error {
     color: var(--heading-color, #bf0604);
 }
 
 .completed-check {
-    color: var(--accent-teal, #6d9484);
     font-weight: 700;
+    color: var(--accent-teal, #60a5fa);
     flex-shrink: 0;
 }
+
 .completed-entry.error .completed-check {
     color: var(--heading-color, #bf0604);
 }
@@ -192,15 +217,17 @@ function formatETA(active) {
 }
 
 .completed-error {
-    font-size: 0.75rem;
-    color: var(--heading-color, #bf0604);
+    font-size: 0.7rem;
+    margin-left: auto;
+    opacity: 0.8;
 }
 
 .upload-queue-badge {
-    margin-top: 6px;
+    margin-top: 8px;
     padding-top: 6px;
-    border-top: 1px solid var(--border-color, #7e7567);
-    font-size: 0.75rem;
-    color: var(--font-color-secondary, #a5b0ad);
+    border-top: 1px solid var(--border-color, #444);
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--font-color-secondary, #999);
 }
 </style>

@@ -727,10 +727,23 @@ func (d *DB) ensureUploadSessions() error {
 			file_sha256 TEXT,
 			inline      INTEGER NOT NULL DEFAULT 0,
 			chunks_done TEXT NOT NULL DEFAULT '[]',
+			status      TEXT NOT NULL DEFAULT 'uploading',
 			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			expires_at  DATETIME NOT NULL
 		);
 	`)
+	if err != nil {
+		return err
+	}
+
+	// Migration: add status column if it doesn't exist (for DBs created before this column was added).
+	cols, err := d.tableColumns("upload_sessions")
+	if err != nil {
+		return err
+	}
+	if !cols["status"] {
+		_, err = d.Exec(`ALTER TABLE upload_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'uploading'`)
+	}
 	return err
 }
 
