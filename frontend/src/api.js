@@ -511,6 +511,28 @@ export async function fetchSTTResult(token, fileId) {
     });
 }
 
+export async function triggerSTT(token, fileId) {
+    return request(`/files/${fileId}/stt`, {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
+// --- OCR API ---
+
+export async function fetchOCRResult(token, fileId) {
+    return request(`/files/${fileId}/ocr`, {
+        headers: authHeaders(token),
+    });
+}
+
+export async function triggerOCR(token, fileId) {
+    return request(`/files/${fileId}/ocr`, {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 // --- WebAuthn / Passkey API ---
 
 function toBase64Url(buffer) {
