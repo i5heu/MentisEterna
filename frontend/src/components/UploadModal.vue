@@ -284,9 +284,8 @@ function formatETA(entry) {
 .upload-filename {
     font-weight: 600;
     font-size: 0.85rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .upload-stats {
