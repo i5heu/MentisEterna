@@ -18,7 +18,7 @@
             </li>
 
             <!-- Finished attachments -->
-            <li v-for="file in attachments" :key="file.id" class="attachment-row">
+            <li v-for="file in visibleAttachments" :key="file.id" class="attachment-row">
                 <!-- Column 1: filename + action button -->
                 <div class="attach-file">
                     <template v-if="file.is_audio">
@@ -136,6 +136,14 @@ const { active } = useUploadQueue();
 const pendingAttachments = computed(() => {
     if (!props.noteId) return [];
     return active.value.filter(a => a.noteId === props.noteId);
+});
+
+// Exclude finished attachments whose filename still has a pending upload.
+// The spinner takes priority until processing completes.
+const visibleAttachments = computed(() => {
+    if (!props.attachments) return [];
+    const pendingNames = new Set(pendingAttachments.value.map(p => p.filename));
+    return props.attachments.filter(f => !pendingNames.has(f.filename));
 });
 
 function statusLabel(p) {
