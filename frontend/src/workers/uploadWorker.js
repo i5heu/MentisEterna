@@ -1,6 +1,17 @@
 // Chunked Upload Web Worker
 // Handles large file uploads with progress tracking and SHA-256 integrity checks.
-// Supports multiple concurrent uploads.
+// Supports multiple concurrent uploads and resume after tab close / browser crash.
+//
+// Upload flow:
+//   1. Hash the file → compute file_sha256
+//   2. Read all chunks into IndexedDB (so we can resume if the browser crashes)
+//   3. POST /notes/{id}/chunked/start (idempotent: returns existing session if same hash)
+//   4. Upload each missing chunk from IndexedDB
+//   5. POST /notes/{id}/chunked/{uploadID}/finish
+//   6. Poll for server-side processing completion
+//   7. Clean up IndexedDB entry
+
+import * as ChunkStore from "./chunkStore.js";
 
 const VERBOSE = true;
 
@@ -22,12 +33,12 @@ async function sha256(buffer) {
 }
 
 /**
- * Read a specific chunk of a file as an ArrayBuffer.
+ * Read a specific chunk of a file as a Uint8Array.
  */
 function readChunk(file, start, end) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
+        reader.onload = () => resolve(new Uint8Array(reader.result));
         reader.onerror = () => reject(reader.error);
         reader.readAsArrayBuffer(file.slice(start, end));
     });
@@ -139,7 +150,6 @@ async function cancelUpload(token, noteId, uploadId) {
 /**
  * Poll server status during finish phase. Returns when the session is done
  * or when the `done` flag in the state object is set to true.
- * Uses a simple flag instead of AbortController to avoid NS_BINDING_ABORTED noise.
  */
 async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filename, totalSize, totalChunks, state) {
     let lastLoggedStatus = "uploading";
@@ -175,7 +185,6 @@ async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filenam
                 });
             }
         } catch (err) {
-            // Network blips during poll are fine — just retry on next loop iteration.
             if (VERBOSE) console.warn("[poll] status check failed:", err.message);
         }
 
@@ -189,6 +198,23 @@ function isAborted(uploadId) {
     return !state || state.aborted;
 }
 
+/**
+ * Fetch pending upload sessions for a note from the server.
+ * This allows resuming uploads where previously uploaded chunks are still on the server.
+ * @returns {Promise<Array>}
+ */
+async function fetchPendingSessions(noteId, token) {
+    const res = await fetch(`/notes/${noteId}/chunked/pending`, {
+        credentials: "include",
+    });
+    if (!res.ok) return [];
+    return res.json();
+}
+
+/**
+ * Main upload orchestrator.
+ * @param {{ file: File, noteId: number, token: string, inline: boolean, chunkSize: number, uploadId: string }} data
+ */
 async function doUpload(data) {
     const { file, noteId, token, inline, chunkSize, uploadId } = data;
     const filename = file.name;
@@ -201,12 +227,10 @@ async function doUpload(data) {
         console.log("File size:", totalSize, "bytes,", "Chunks:", totalChunks, "Chunk size:", chunkSize);
     }
 
-    // Register this upload's state.
     activeUploads.set(uploadId, { aborted: false });
 
     try {
-        // --- PHASE 1: Compute file SHA-256 while chunks are fresh ---
-        // We compute the full file SHA-256 upfront so the server can validate integrity.
+        // --- PHASE 1: Compute file SHA-256 ---
         if (VERBOSE) console.log("[hashing] Computing file SHA-256...");
         post({ type: "progress", uploadId, filename, loaded: 0, total: totalSize, percent: 0, speed: 0, status: "hashing" });
 
@@ -221,11 +245,43 @@ async function doUpload(data) {
             return;
         }
 
-        // --- PHASE 2: Start session ---
-        if (VERBOSE) console.log("[start] Creating upload session...");
+        // --- PHASE 2: Persist all chunks to IndexedDB for resume ---
+        if (VERBOSE) console.log("[staging] Persisting chunks to IndexedDB...");
+        post({ type: "progress", uploadId, filename, loaded: 0, total: totalSize, percent: 0, speed: 0, status: "staging" });
+
+        const meta = { filename, mimeType, totalSize, chunkSize, totalChunks, inline, noteId, token };
+        for (let i = 0; i < totalChunks; i++) {
+            if (isAborted(uploadId)) {
+                if (VERBOSE) console.warn("[cancelled] Upload aborted during staging");
+                post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+                if (VERBOSE) console.groupEnd();
+                return;
+            }
+            const chunkStart = i * chunkSize;
+            const chunkEnd = Math.min(chunkStart + chunkSize, totalSize);
+            const chunkData = await readChunk(file, chunkStart, chunkEnd);
+            await ChunkStore.putChunk(fileSha256, meta, i, chunkData);
+        }
+        if (VERBOSE) console.log("[staging] All", totalChunks, "chunks persisted to IndexedDB");
+
+        if (isAborted(uploadId)) {
+            if (VERBOSE) console.warn("[cancelled] Upload aborted after staging");
+            post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+            if (VERBOSE) console.groupEnd();
+            return;
+        }
+
+        // --- PHASE 3: Start or resume session ---
+        if (VERBOSE) console.log("[start] Creating/resuming upload session...");
         const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256);
         const serverUploadId = session.upload_id || uploadId;
-        if (VERBOSE) console.log("[start] Server upload_id:", serverUploadId);
+        const alreadyDone = session.chunks_done || [];
+        if (VERBOSE) {
+            console.log("[start] Server upload_id:", serverUploadId);
+            if (alreadyDone.length > 0) {
+                console.log("[start] Resuming — server already has", alreadyDone.length, "/", totalChunks, "chunks");
+            }
+        }
 
         if (isAborted(uploadId)) {
             if (VERBOSE) console.warn("[cancelled] Upload aborted after start");
@@ -235,12 +291,12 @@ async function doUpload(data) {
             return;
         }
 
-        // --- PHASE 3: Upload chunks ---
-        if (VERBOSE) console.log("[uploading] Sending", totalChunks, "chunks...");
-        let loaded = 0;
+        // --- PHASE 4: Upload missing chunks from IndexedDB ---
+        if (VERBOSE) console.log("[uploading] Sending chunks...");
+        let loaded = alreadyDone.length * chunkSize;
         const startTime = performance.now();
 
-        post({ type: "progress", uploadId, filename, loaded: 0, total: totalSize, percent: 0, speed: 0, status: "uploading" });
+        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.round((loaded / totalSize) * 100), speed: 0, status: "uploading" });
 
         for (let i = 0; i < totalChunks; i++) {
             if (isAborted(uploadId)) {
@@ -251,15 +307,28 @@ async function doUpload(data) {
                 return;
             }
 
-            const chunkStart = i * chunkSize;
-            const chunkEnd = Math.min(chunkStart + chunkSize, totalSize);
-            const chunkBuffer = await readChunk(file, chunkStart, chunkEnd);
+            // Skip chunks the server already has.
+            if (alreadyDone.includes(i)) {
+                loaded += chunkSize;
+                continue;
+            }
+
+            // Read chunk from IndexedDB.
+            const chunkData = await ChunkStore.getChunkData(fileSha256, i);
+            if (!chunkData) {
+                throw new Error(`Chunk ${i} missing from IndexedDB — cannot resume. Re-add the file.`);
+            }
+
+            const chunkBuffer = chunkData.buffer.slice(
+                chunkData.byteOffset,
+                chunkData.byteOffset + chunkData.byteLength,
+            );
             const chunkSha256 = await sha256(chunkBuffer);
             const chunkBlob = new Blob([chunkBuffer], { type: "application/octet-stream" });
 
             await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
 
-            loaded += chunkBuffer.byteLength;
+            loaded += chunkData.byteLength;
 
             const elapsed = (performance.now() - startTime) / 1000;
             const speed = elapsed > 0 ? loaded / elapsed : 0;
@@ -280,23 +349,21 @@ async function doUpload(data) {
             });
         }
 
-        if (VERBOSE) console.log("[uploading] All", totalChunks, "chunks uploaded. Waiting for server...");
+        if (VERBOSE) console.log("[uploading] All chunks uploaded. Waiting for server...");
 
-        // --- PHASE 4: Server-side processing ---
-        // Use a simple flag object instead of AbortController to avoid
-        // NS_BINDING_ABORTED noise in browser devtools.
+        // --- PHASE 5: Server-side processing ---
         const pollState = { done: false };
         const pollPromise = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
             totalSize, totalChunks, pollState,
         );
 
-        // finishUpload blocks until server is done. Once it returns, signal the poll to stop.
         const result = await finishUpload(token, noteId, serverUploadId);
         pollState.done = true;
-
-        // Wait for the poll to notice the flag and exit cleanly.
         await pollPromise;
+
+        // --- PHASE 6: Clean up IndexedDB ---
+        await ChunkStore.deleteChunkEntry(fileSha256);
 
         if (VERBOSE) {
             console.log("[done] Upload complete:", filename);
@@ -314,18 +381,151 @@ async function doUpload(data) {
     }
 }
 
+/**
+ * Resume a pending upload from IndexedDB.
+ * Used when the user returns to a page and we detect a stored partial upload.
+ * @param {string} fileHash
+ * @param {object} entry - chunk store entry
+ * @param {string} uploadId - fresh upload ID for this resume attempt
+ */
+async function doResume(fileHash, entry, uploadId) {
+    const { filename, mimeType, totalSize, chunkSize, totalChunks, inline, noteId, token } = entry;
+
+    if (VERBOSE) {
+        console.group("uploadWorker [resume]:", filename);
+        console.log("Resuming upload of", totalSize, "bytes,", totalChunks, "chunks");
+    }
+
+    activeUploads.set(uploadId, { aborted: false });
+
+    try {
+        // Check if server has a pending session already.
+        const pendingSessions = await fetchPendingSessions(noteId, token);
+        let serverUploadId = null;
+        let alreadyDone = [];
+
+        // Try to match by file hash.
+        for (const s of pendingSessions) {
+            if (s.file_sha256 === fileHash) {
+                serverUploadId = s.upload_id;
+                alreadyDone = s.chunks_done || [];
+                break;
+            }
+        }
+
+        if (!alreadyDone.length && !serverUploadId) {
+            if (VERBOSE) console.log("[resume] No pending server session. Starting fresh.");
+        }
+
+        // Start (idempotent) or resume session.
+        if (VERBOSE) console.log("[resume] Starting upload session (idempotent)...");
+        const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileHash);
+        serverUploadId = session.upload_id || uploadId;
+        alreadyDone = session.chunks_done || [];
+
+        if (VERBOSE) {
+            console.log("[resume] Server upload_id:", serverUploadId);
+            console.log("[resume] Server already has", alreadyDone.length, "/", totalChunks, "chunks");
+        }
+
+        // Upload missing chunks from IndexedDB.
+        let loaded = Math.min(alreadyDone.length * chunkSize, totalSize);
+        const startTime = performance.now();
+
+        post({ type: "progress", uploadId, filename, loaded, total: totalSize, percent: Math.round((loaded / totalSize) * 100), speed: 0, status: "uploading" });
+
+        for (let i = 0; i < totalChunks; i++) {
+            if (isAborted(uploadId)) {
+                console.warn("[cancelled] Upload aborted by user");
+                try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
+                post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+                if (VERBOSE) console.groupEnd();
+                return;
+            }
+
+            // Skip chunks the server already has.
+            if (alreadyDone.includes(i)) continue;
+
+            const chunkData = await ChunkStore.getChunkData(fileHash, i);
+            if (!chunkData) {
+                throw new Error(`Chunk ${i} missing from IndexedDB — cannot resume. Re-add the file.`);
+            }
+
+            const chunkBuffer = chunkData.buffer.slice(
+                chunkData.byteOffset,
+                chunkData.byteOffset + chunkData.byteLength,
+            );
+            const chunkSha256 = await sha256(chunkBuffer);
+            const chunkBlob = new Blob([chunkBuffer], { type: "application/octet-stream" });
+
+            await uploadChunkWithRetry(token, noteId, serverUploadId, i, chunkBlob, chunkSha256);
+
+            loaded += chunkData.byteLength;
+
+            const elapsed = (performance.now() - startTime) / 1000;
+            const speed = elapsed > 0 ? loaded / elapsed : 0;
+            const percent = Math.round((loaded / totalSize) * 100);
+
+            post({ type: "chunk_done", uploadId, index: i });
+            post({
+                type: "progress",
+                uploadId,
+                filename,
+                loaded,
+                total: totalSize,
+                percent,
+                speed,
+                status: "uploading",
+            });
+        }
+
+        if (VERBOSE) console.log("[resume] All chunks uploaded. Waiting for server...");
+
+        // Server-side processing.
+        const pollState = { done: false };
+        const pollPromise = pollFinishStatus(
+            noteId, serverUploadId, token, uploadId, filename,
+            totalSize, totalChunks, pollState,
+        );
+
+        const result = await finishUpload(token, noteId, serverUploadId);
+        pollState.done = true;
+        await pollPromise;
+
+        // Clean up IndexedDB.
+        await ChunkStore.deleteChunkEntry(fileHash);
+
+        if (VERBOSE) {
+            console.log("[resume] Upload complete:", filename);
+            console.groupEnd();
+        }
+
+        post({ type: "complete", uploadId, filename, result });
+    } catch (error) {
+        console.error("[resume error]", filename, error.message || error);
+        if (VERBOSE) console.groupEnd();
+        post({ type: "error", uploadId, filename, error: error.message || String(error) });
+    } finally {
+        activeUploads.delete(uploadId);
+    }
+}
+
 // Handle messages from the main thread
 self.addEventListener("message", (event) => {
     const data = event.data || {};
 
     if (data.type === "upload") {
-        // Start a new concurrent upload. Each upload runs independently.
         doUpload(data);
         return;
     }
 
+    if (data.type === "resume") {
+        // data: { fileHash, entry, uploadId }
+        doResume(data.fileHash, data.entry, data.uploadId);
+        return;
+    }
+
     if (data.type === "cancel") {
-        // Set the abort flag for this specific upload.
         const state = activeUploads.get(data.uploadId);
         if (state) {
             state.aborted = true;

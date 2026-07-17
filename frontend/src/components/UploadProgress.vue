@@ -67,21 +67,23 @@ function statusLabel(entry) {
     if (!entry) return "";
     const s = entry.status;
     if (!s || s === "uploading") return `${entry.percent}%`;
+    if (s === "staging") return "Staging...";
+    if (s === "resuming") return "Resuming...";
     return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// Processing phases: server is doing work, bar should animate
+// Processing phases: server is doing work or we're staging chunks, bar should animate
 function isProcessing(entry) {
     if (!entry) return false;
     const s = entry.status;
-    return s === "assembling" || s === "verifying" || s === "processing" || s === "done" || s === "Assembling chunks..." || s === "Verifying integrity..." || s === "Encrypting and uploading..." || s === "Done";
+    return s === "staging" || s === "assembling" || s === "verifying" || s === "processing" || s === "done" || s === "Assembling chunks..." || s === "Verifying integrity..." || s === "Encrypting and uploading..." || s === "Done";
 }
 
 // Allow cancel only during chunk upload, not during server processing
 function isCancellable(entry) {
     if (!entry) return false;
     const s = entry.status;
-    return s === "uploading" || s === "hashing" || !s;
+    return s === "uploading" || s === "hashing" || s === "staging" || s === "resuming" || !s;
 }
 
 function formatSpeed(bytesPerSec) {

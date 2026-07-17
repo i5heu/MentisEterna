@@ -71,6 +71,11 @@ func (s *Server) handleChunkedRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if path == "pending" {
+		s.handleChunkedPending(w, r, noteID)
+		return
+	}
+
 	// Parse "/{uploadID}" or "/{uploadID}/chunk" or "/{uploadID}/finish" or "/{uploadID}/cancel"
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 1 || parts[0] == "" {
@@ -149,12 +154,29 @@ func (s *Server) handleChunkedStart(w http.ResponseWriter, r *http.Request, note
 		return
 	}
 
-	uploadID := uuid.New().String()
-	expiresAt := time.Now().UTC().Add(24 * time.Hour)
 	var fileSHA256 *string
 	if req.FileSHA256 != "" {
 		fileSHA256 = &req.FileSHA256
 	}
+
+	// Idempotency: if a non-expired, non-terminal session already exists for
+	// this note with the same file_sha256, return the existing session so the
+	// frontend can resume after a tab close or browser crash.
+	if fileSHA256 != nil && *fileSHA256 != "" {
+		existing := s.loadUploadSessionByHash(noteID, *fileSHA256)
+		if existing != nil {
+			var chunksDone []int
+			_ = json.Unmarshal([]byte(existing.ChunksDone), &chunksDone)
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"upload_id":   existing.UploadID,
+				"chunks_done": chunksDone,
+			})
+			return
+		}
+	}
+
+	uploadID := uuid.New().String()
+	expiresAt := time.Now().UTC().Add(12 * time.Hour)
 	inlineVal := 0
 	if req.Inline {
 		inlineVal = 1
@@ -500,29 +522,123 @@ func (s *Server) handleChunkedCancel(w http.ResponseWriter, r *http.Request, not
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
+// handleChunkedPending returns all unfinished (non-terminal) upload sessions for
+// a note so the frontend can resume uploads after tab close or browser crash.
+// GET /notes/{id}/chunked/pending
+func (s *Server) handleChunkedPending(w http.ResponseWriter, r *http.Request, noteID int64) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	rows, err := s.db.Query(
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, created_at, expires_at
+		 FROM upload_sessions
+		 WHERE note_id = ? AND expires_at > ?
+		   AND status NOT IN ('done', 'failed', 'finished')
+		 ORDER BY created_at ASC`,
+		noteID, now,
+	)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer rows.Close()
+
+	type pendingSession struct {
+		UploadID    string `json:"upload_id"`
+		Filename    string `json:"filename"`
+		MimeType    string `json:"mime_type"`
+		TotalSize   int64  `json:"total_size"`
+		ChunkSize   int64  `json:"chunk_size"`
+		TotalChunks int    `json:"total_chunks"`
+		FileSHA256  string `json:"file_sha256,omitempty"`
+		Inline      bool   `json:"inline"`
+		ChunksDone  []int  `json:"chunks_done"`
+		Status      string `json:"status"`
+	}
+
+	var pending []pendingSession
+	for rows.Next() {
+		var r uploadSessionRow
+		var inlineVal int
+		var fileSHA256 sql.NullString
+		if err := rows.Scan(&r.UploadID, &r.NoteID, &r.Filename, &r.MimeType,
+			&r.TotalSize, &r.ChunkSize, &r.TotalChunks, &fileSHA256, &inlineVal,
+			&r.ChunksDone, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
+			continue
+		}
+		var chunksDone []int
+		_ = json.Unmarshal([]byte(r.ChunksDone), &chunksDone)
+		ps := pendingSession{
+			UploadID:    r.UploadID,
+			Filename:    r.Filename,
+			MimeType:    r.MimeType,
+			TotalSize:   r.TotalSize,
+			ChunkSize:   r.ChunkSize,
+			TotalChunks: r.TotalChunks,
+			Inline:      inlineVal != 0,
+			ChunksDone:  chunksDone,
+			Status:      r.Status,
+		}
+		if fileSHA256.Valid {
+			ps.FileSHA256 = fileSHA256.String
+		}
+		pending = append(pending, ps)
+	}
+	if pending == nil {
+		pending = []pendingSession{}
+	}
+	writeJSON(w, http.StatusOK, pending)
+}
+
 // --- Helpers ---
 
 // loadUploadSession fetches a session row, verifying it belongs to the given note.
 func (s *Server) loadUploadSession(uploadID string, noteID int64) (*uploadSessionRow, error) {
-	row := &uploadSessionRow{}
-	var inlineVal int
-	var fileSHA256 sql.NullString
-	err := s.db.QueryRow(
+	return scanUploadSession(s.db.QueryRow(
 		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, created_at, expires_at
 		 FROM upload_sessions WHERE upload_id = ? AND note_id = ?`,
 		uploadID, noteID,
-	).Scan(&row.UploadID, &row.NoteID, &row.Filename, &row.MimeType, &row.TotalSize,
-		&row.ChunkSize, &row.TotalChunks, &fileSHA256, &inlineVal,
-		&row.ChunksDone, &row.Status, &row.CreatedAt, &row.ExpiresAt,
+	))
+}
+
+// loadUploadSessionByHash finds a non-expired, non-terminal session for a note
+// matching the given file_sha256. Returns nil if none found.
+func (s *Server) loadUploadSessionByHash(noteID int64, fileSHA256 string) *uploadSessionRow {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	row, err := scanUploadSession(s.db.QueryRow(
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, created_at, expires_at
+		 FROM upload_sessions
+		 WHERE note_id = ? AND file_sha256 = ? AND expires_at > ?
+		   AND status NOT IN ('done', 'failed', 'finished')
+		 ORDER BY created_at DESC LIMIT 1`,
+		noteID, fileSHA256, now,
+	))
+	if err != nil {
+		return nil
+	}
+	return row
+}
+
+// scanUploadSession scans an uploadSessionRow from a *sql.Row.
+func scanUploadSession(row *sql.Row) (*uploadSessionRow, error) {
+	r := &uploadSessionRow{}
+	var inlineVal int
+	var fileSHA256 sql.NullString
+	err := row.Scan(&r.UploadID, &r.NoteID, &r.Filename, &r.MimeType, &r.TotalSize,
+		&r.ChunkSize, &r.TotalChunks, &fileSHA256, &inlineVal,
+		&r.ChunksDone, &r.Status, &r.CreatedAt, &r.ExpiresAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	if fileSHA256.Valid {
-		row.FileSHA256 = &fileSHA256.String
+		r.FileSHA256 = &fileSHA256.String
 	}
-	row.Inline = inlineVal != 0
-	return row, nil
+	r.Inline = inlineVal != 0
+	return r, nil
 }
 
 // addChunkDone appends a chunk index to the session's chunks_done JSON array.
