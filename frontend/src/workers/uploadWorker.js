@@ -138,17 +138,19 @@ async function cancelUpload(token, noteId, uploadId) {
 
 /**
  * Poll server status during finish phase. Returns when the session is done
- * or when the AbortController's signal fires.
+ * or when the `done` flag in the state object is set to true.
+ * Uses a simple flag instead of AbortController to avoid NS_BINDING_ABORTED noise.
  */
-async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filename, totalSize, totalChunks, signal) {
+async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filename, totalSize, totalChunks, state) {
     let lastLoggedStatus = "uploading";
 
-    while (!signal.aborted) {
+    while (!state.done) {
         try {
             const statusRes = await fetch(`/notes/${noteId}/chunked/${serverUploadId}`, {
                 credentials: "include",
-                signal,
             });
+
+            if (state.done) break;
 
             if (statusRes.ok) {
                 const statusData = await statusRes.json();
@@ -172,11 +174,11 @@ async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filenam
                 });
             }
         } catch (err) {
-            // AbortError means we cancelled the poll — that's expected.
-            // Other errors (network blip) just retry on next loop iteration.
-            if (err.name === "AbortError") break;
+            // Network blips during poll are fine — just retry on next loop iteration.
+            if (VERBOSE) console.warn("[poll] status check failed:", err.message);
         }
 
+        if (state.done) break;
         await new Promise(r => setTimeout(r, 300));
     }
 }
@@ -280,17 +282,19 @@ async function doUpload(data) {
         if (VERBOSE) console.log("[uploading] All", totalChunks, "chunks uploaded. Waiting for server...");
 
         // --- PHASE 4: Server-side processing ---
-        const pollAbort = new AbortController();
+        // Use a simple flag object instead of AbortController to avoid
+        // NS_BINDING_ABORTED noise in browser devtools.
+        const pollState = { done: false };
         const pollPromise = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
-            totalSize, totalChunks, pollAbort.signal,
+            totalSize, totalChunks, pollState,
         );
 
-        // finishUpload blocks until server is done. Once it returns, abort the poll.
+        // finishUpload blocks until server is done. Once it returns, signal the poll to stop.
         const result = await finishUpload(token, noteId, serverUploadId);
-        pollAbort.abort();
+        pollState.done = true;
 
-        // Wait for the poll to notice the abort signal
+        // Wait for the poll to notice the flag and exit cleanly.
         await pollPromise;
 
         if (VERBOSE) {

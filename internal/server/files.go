@@ -335,6 +335,8 @@ func (s *Server) handleTriggerOCR(w http.ResponseWriter, r *http.Request) {
 
 // serveFile handles GET /file/:noteID/:fileID
 // noteID is cosmetic; auth + fileID control access.
+// Includes a brief retry for files that were just uploaded (cache entry may still
+// be flushing to disk when the concurrent browser render triggers the load).
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -351,32 +353,35 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load file record for content-type detection
-	var mimeType, filename string
-	var sizeBytes int64
-	err := s.db.QueryRow(`SELECT mime_type, filename, size_bytes FROM files WHERE id = ? AND deleted_at IS NULL`, fileID).Scan(&mimeType, &filename, &sizeBytes)
-	if err != nil {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
+	// Check file availability. Freshly uploaded files may have their cache entry
+	// still being written, so retry once after a brief delay.
+	var rec media.FileRecord
+	var availErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(200 * time.Millisecond)
+		}
+		rec, availErr = s.mediaService.CanReadFile(r.Context(), fileID)
+		if availErr == nil {
+			break
+		}
 	}
-
-	if _, err := s.mediaService.CanReadFile(r.Context(), fileID); err != nil {
+	if availErr != nil {
+		log.Printf("media: serve file %d unavailable: %v", fileID, availErr)
 		http.Error(w, "file unavailable", http.StatusBadGateway)
 		return
 	}
 
-	applyFileResponseHeaders(w, mimeType, filename, sizeBytes)
+	applyFileResponseHeaders(w, rec.MimeType, rec.Filename, rec.SizeBytes)
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	rec, err := s.mediaService.ReadFile(r.Context(), fileID, w)
-	if err != nil {
+	if _, err := s.mediaService.ReadFile(r.Context(), fileID, w); err != nil {
 		log.Printf("media: serve file %d: %v", fileID, err)
 		return
 	}
-	_ = rec // metadata for logging if needed
 }
 
 // --- Helpers ---
