@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,6 +238,102 @@ func TestUpdateNoteReparentBroadcastsOldAndNewParents(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", msg.Reason, "updated")
 	}
 	assertNoteIDsEqual(t, msg.NoteIDs, child.ID, oldParent.ID, newParent.ID)
+}
+
+func TestChunkedInlineFinishBroadcastsUploadResolution(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	s.liveHub = newLiveHub()
+	token := createTestSession(t, s)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/notes",
+		bytes.NewReader([]byte(`{"title":"live-upload","body":"before ![clip.webm](__upload__:live-token) after"}`)))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Content-Type", "application/json")
+	cw := httptest.NewRecorder()
+	s.createNote(cw, createReq)
+	if cw.Code != http.StatusCreated {
+		t.Fatalf("create note: %d: %s", cw.Code, cw.Body.String())
+	}
+
+	var noteID int64
+	if err := s.db.QueryRow(`SELECT id FROM notes WHERE title = 'live-upload'`).Scan(&noteID); err != nil {
+		t.Fatalf("find note: %v", err)
+	}
+
+	httpServer, wsURL := newLiveTestHTTPServer(t, s)
+	conn, _, err := dialLiveWebSocket(t, wsURL, token, httpServer.URL)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+	requireLiveMessageType(t, conn, liveTypeReady)
+
+	startBody := `{"filename":"clip.webm","mime_type":"video/webm","total_size":12,"chunk_size":1048576,"total_chunks":1,"inline":true,"placeholder_token":"live-token"}`
+	startReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/notes/%d/chunked/start", noteID),
+		bytes.NewReader([]byte(startBody)))
+	startReq.Header.Set("Authorization", "Bearer "+token)
+	startReq.Header.Set("Content-Type", "application/json")
+	sw := httptest.NewRecorder()
+	s.handleChunkedStart(sw, startReq, noteID)
+	if sw.Code != http.StatusOK {
+		t.Fatalf("start session: %d: %s", sw.Code, sw.Body.String())
+	}
+
+	var startResp struct {
+		UploadID string `json:"upload_id"`
+	}
+	if err := json.Unmarshal(sw.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+
+	chunkData := []byte("live upload!")
+	var chunkBuf bytes.Buffer
+	mw := multipart.NewWriter(&chunkBuf)
+	part, _ := mw.CreateFormFile("chunk", "chunk")
+	part.Write(chunkData)
+	mw.Close()
+
+	chunkReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/notes/%d/chunked/%s/chunk?index=0", noteID, startResp.UploadID),
+		&chunkBuf)
+	chunkReq.Header.Set("Authorization", "Bearer "+token)
+	chunkReq.Header.Set("Content-Type", mw.FormDataContentType())
+	chunkW := httptest.NewRecorder()
+	s.handleChunkedChunk(chunkW, chunkReq, noteID, startResp.UploadID)
+	if chunkW.Code != http.StatusOK {
+		t.Fatalf("upload chunk: %d: %s", chunkW.Code, chunkW.Body.String())
+	}
+
+	finishReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/notes/%d/chunked/%s/finish", noteID, startResp.UploadID), nil)
+	finishReq.Header.Set("Authorization", "Bearer "+token)
+	finishW := httptest.NewRecorder()
+	s.handleChunkedFinish(finishW, finishReq, noteID, startResp.UploadID)
+	if finishW.Code != http.StatusCreated {
+		t.Fatalf("finish upload: %d: %s", finishW.Code, finishW.Body.String())
+	}
+
+	msg := requireLiveMessageType(t, conn, liveTypeNotesChange)
+	if msg.Reason != liveReasonInlineUploadResolved {
+		t.Fatalf("reason = %q, want %q", msg.Reason, liveReasonInlineUploadResolved)
+	}
+	assertNoteIDsEqual(t, msg.NoteIDs, noteID)
+	if msg.UploadResolution == nil {
+		t.Fatal("expected upload_resolution payload")
+	}
+	if msg.UploadResolution.NoteID != noteID {
+		t.Fatalf("upload_resolution.note_id = %d, want %d", msg.UploadResolution.NoteID, noteID)
+	}
+	if msg.UploadResolution.PlaceholderToken != "live-token" {
+		t.Fatalf("placeholder_token = %q, want %q", msg.UploadResolution.PlaceholderToken, "live-token")
+	}
+	if !strings.Contains(msg.UploadResolution.Markdown, "/file/") {
+		t.Fatalf("markdown should contain /file/ URL, got %q", msg.UploadResolution.Markdown)
+	}
+	if msg.UploadResolution.File == nil || msg.UploadResolution.File.ID <= 0 {
+		t.Fatalf("upload_resolution.file = %#v, want populated file payload", msg.UploadResolution.File)
+	}
 }
 
 func TestDeleteNoteBroadcastsParentAndDetachedChildren(t *testing.T) {

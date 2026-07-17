@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"log"
@@ -25,20 +26,21 @@ const chunkTempDirName = "mentis-chunked"
 
 // uploadSessionRow mirrors a row in the upload_sessions table.
 type uploadSessionRow struct {
-	UploadID     string
-	NoteID       int64
-	Filename     string
-	MimeType     string
-	TotalSize    int64
-	ChunkSize    int64
-	TotalChunks  int
-	FileSHA256   *string
-	Inline       bool
-	ChunksDone   string // JSON array of ints
-	Status       string
-	FinishResult *string // JSON result blob when status=done
-	CreatedAt    string
-	ExpiresAt    string
+	UploadID         string
+	NoteID           int64
+	Filename         string
+	MimeType         string
+	TotalSize        int64
+	ChunkSize        int64
+	TotalChunks      int
+	FileSHA256       *string
+	Inline           bool
+	ChunksDone       string // JSON array of ints
+	Status           string
+	FinishResult     *string // JSON result blob when status=done
+	PlaceholderToken *string // client-generated token for body replacement
+	CreatedAt        string
+	ExpiresAt        string
 }
 
 // chunksDir returns the temp directory for a given upload session.
@@ -126,13 +128,14 @@ func (s *Server) handleChunkedStart(w http.ResponseWriter, r *http.Request, note
 	}
 
 	var req struct {
-		Filename    string `json:"filename"`
-		MimeType    string `json:"mime_type"`
-		TotalSize   int64  `json:"total_size"`
-		ChunkSize   int64  `json:"chunk_size"`
-		TotalChunks int    `json:"total_chunks"`
-		FileSHA256  string `json:"file_sha256,omitempty"`
-		Inline      bool   `json:"inline"`
+		Filename         string `json:"filename"`
+		MimeType         string `json:"mime_type"`
+		TotalSize        int64  `json:"total_size"`
+		ChunkSize        int64  `json:"chunk_size"`
+		TotalChunks      int    `json:"total_chunks"`
+		FileSHA256       string `json:"file_sha256,omitempty"`
+		Inline           bool   `json:"inline"`
+		PlaceholderToken string `json:"placeholder_token,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -183,11 +186,16 @@ func (s *Server) handleChunkedStart(w http.ResponseWriter, r *http.Request, note
 		inlineVal = 1
 	}
 
+	var placeholderToken *string
+	if req.PlaceholderToken != "" {
+		placeholderToken = &req.PlaceholderToken
+	}
+
 	_, err := s.db.Exec(
-		`INSERT INTO upload_sessions (upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO upload_sessions (upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, expires_at, placeholder_token)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		uploadID, noteID, req.Filename, req.MimeType, req.TotalSize, req.ChunkSize, req.TotalChunks,
-		fileSHA256, inlineVal, expiresAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+		fileSHA256, inlineVal, expiresAt.UTC().Format("2006-01-02T15:04:05.000Z"), placeholderToken,
 	)
 	if err != nil {
 		writeErr(w, err)
@@ -300,6 +308,11 @@ func (s *Server) handleChunkedChunk(w http.ResponseWriter, r *http.Request, note
 		return
 	}
 
+	// Once the final chunk lands, the server can finalize the upload on its own.
+	// This makes placeholder replacement robust even if the browser reloads or
+	// disappears before it can call /finish.
+	s.maybeAutoFinishChunkedUpload(noteID, uploadID, len(done), row.TotalChunks)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"index":    chunkIndex,
 		"received": true,
@@ -351,76 +364,85 @@ func (s *Server) handleChunkedStatus(w http.ResponseWriter, r *http.Request, not
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleChunkedFinish assembles all chunks, verifies the whole-file SHA-256 if
-// provided, and finalizes the upload via the existing media service.
-// POST /notes/{id}/chunked/{uploadID}/finish
-//
-// Encryption and S3 upload use context.Background() so they survive HTTP
-// request cancellation (page reload, tab close). The assembled-and-verified
-// file is guaranteed to land in the media store regardless of client state.
-//
-// This endpoint is guarded against re-entry: if the session is already being
-// finalized (processing) or completed (done), subsequent calls are rejected
-// to prevent duplicate file rows.
-func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, noteID int64, uploadID string) {
-	if s.mediaService == nil {
-		http.Error(w, "media not configured", http.StatusServiceUnavailable)
-		return
+var (
+	errChunkedUploadNotFound          = stderrors.New("upload session not found")
+	errChunkedUploadExpired           = stderrors.New("upload session expired")
+	errChunkedUploadAlreadyFinalizing = stderrors.New("upload already being finalized")
+	errChunkedUploadAlreadyCompleted  = stderrors.New("upload already completed")
+)
+
+func (s *Server) claimChunkedUploadFinalization(noteID int64, uploadID string, row *uploadSessionRow) error {
+	if row == nil {
+		return errChunkedUploadNotFound
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+	if row.Status == "processing" || row.Status == "assembling" || row.Status == "verifying" {
+		return errChunkedUploadAlreadyFinalizing
+	}
+	if row.Status == "done" {
+		return errChunkedUploadAlreadyCompleted
+	}
+	if row.Status != "" && row.Status != "uploading" {
+		return fmt.Errorf("upload session is in terminal state: %s", row.Status)
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE upload_sessions
+		 SET status = 'assembling'
+		 WHERE upload_id = ? AND note_id = ? AND (status = 'uploading' OR status = '')`,
+		uploadID, noteID,
+	)
+	if err != nil {
+		return err
+	}
+	if affected, _ := res.RowsAffected(); affected > 0 {
+		return nil
+	}
+
+	current, err := s.loadUploadSession(uploadID, noteID)
+	if err != nil {
+		return errChunkedUploadNotFound
+	}
+	if current.Status == "processing" || current.Status == "assembling" || current.Status == "verifying" {
+		return errChunkedUploadAlreadyFinalizing
+	}
+	if current.Status == "done" {
+		return errChunkedUploadAlreadyCompleted
+	}
+	if current.Status != "" && current.Status != "uploading" {
+		return fmt.Errorf("upload session is in terminal state: %s", current.Status)
+	}
+	return errChunkedUploadAlreadyFinalizing
+}
+
+func (s *Server) finalizeChunkedUploadSession(noteID int64, uploadID string) (map[string]interface{}, *NoteFile, error) {
+	if s.mediaService == nil {
+		return nil, nil, fmt.Errorf("media not configured")
 	}
 
 	row, err := s.loadUploadSession(uploadID, noteID)
 	if err != nil {
-		http.Error(w, "upload session not found", http.StatusNotFound)
-		return
+		return nil, nil, errChunkedUploadNotFound
 	}
-
 	if t := parseTime(row.ExpiresAt); t.IsZero() || time.Now().UTC().After(t) {
-		http.Error(w, "upload session expired", http.StatusGone)
-		return
+		return nil, nil, errChunkedUploadExpired
+	}
+	if err := s.claimChunkedUploadFinalization(noteID, uploadID, row); err != nil {
+		return nil, nil, err
 	}
 
-	// Guard: reject re-entry while a finish is already in progress or completed.
-	// Without this, a browser reload during the finish phase would cause the
-	// new frontend to call finish again, creating duplicate file rows.
-	if row.Status == "processing" || row.Status == "assembling" || row.Status == "verifying" {
-		http.Error(w, "upload already being finalized", http.StatusConflict)
-		return
-	}
-	if row.Status == "done" {
-		// Upload already completed. Return success without creating a new file.
-		// The session row was already cleaned up by the first finish call, so
-		// we shouldn't reach here — but guard defensively.
-		http.Error(w, "upload already completed", http.StatusConflict)
-		return
-	}
-	if row.Status != "" && row.Status != "uploading" {
-		http.Error(w, "upload session is in terminal state: "+row.Status, http.StatusConflict)
-		return
-	}
-
-	// Check all chunks are present.
 	var chunksDone []int
 	_ = json.Unmarshal([]byte(row.ChunksDone), &chunksDone)
 	if len(chunksDone) != row.TotalChunks {
 		s.updateUploadStatus(uploadID, "failed")
-		http.Error(w, fmt.Sprintf("not all chunks received: %d/%d", len(chunksDone), row.TotalChunks), http.StatusConflict)
-		return
+		return nil, nil, fmt.Errorf("not all chunks received: %d/%d", len(chunksDone), row.TotalChunks)
 	}
 
-	s.updateUploadStatus(uploadID, "assembling")
-
-	// Assemble file from chunks.
 	dir := chunksDir(uploadID)
 	assembledPath := filepath.Join(dir, "assembled")
 	out, err := os.Create(assembledPath)
 	if err != nil {
 		s.updateUploadStatus(uploadID, "failed")
-		writeErr(w, fmt.Errorf("create assembled file: %w", err))
-		return
+		return nil, nil, fmt.Errorf("create assembled file: %w", err)
 	}
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(out, hasher)
@@ -431,47 +453,37 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		if err != nil {
 			out.Close()
 			s.updateUploadStatus(uploadID, "failed")
-			http.Error(w, fmt.Sprintf("missing chunk %d", i), http.StatusConflict)
-			return
+			return nil, nil, fmt.Errorf("missing chunk %d", i)
 		}
 		if _, err := multiWriter.Write(chunkData); err != nil {
 			out.Close()
 			s.updateUploadStatus(uploadID, "failed")
-			writeErr(w, fmt.Errorf("assemble chunk %d: %w", i, err))
-			return
+			return nil, nil, fmt.Errorf("assemble chunk %d: %w", i, err)
 		}
 	}
-	out.Close()
+	if err := out.Close(); err != nil {
+		s.updateUploadStatus(uploadID, "failed")
+		return nil, nil, fmt.Errorf("close assembled file: %w", err)
+	}
 
 	s.updateUploadStatus(uploadID, "verifying")
-
-	// Verify whole-file SHA-256 if provided.
 	if row.FileSHA256 != nil && *row.FileSHA256 != "" {
 		actual := hex.EncodeToString(hasher.Sum(nil))
 		if !strings.EqualFold(actual, *row.FileSHA256) {
 			s.updateUploadStatus(uploadID, "failed")
-			http.Error(w, fmt.Sprintf("file sha256 mismatch: got %s, expected %s", actual, *row.FileSHA256), http.StatusBadRequest)
-			return
+			return nil, nil, fmt.Errorf("file sha256 mismatch: got %s, expected %s", actual, *row.FileSHA256)
 		}
 	}
 
 	s.updateUploadStatus(uploadID, "processing")
-
-	// Pass assembled file to the existing media service.
 	f, err := os.Open(assembledPath)
 	if err != nil {
 		s.updateUploadStatus(uploadID, "failed")
-		writeErr(w, fmt.Errorf("open assembled file: %w", err))
-		return
+		return nil, nil, fmt.Errorf("open assembled file: %w", err)
 	}
 	defer f.Close()
 
-	s.setLongWriteDeadline(w)
-
-	// Use context.Background() so encryption + S3 upload survives HTTP
-	// request cancellation (page reload, tab close, etc.).
 	bgCtx := context.Background()
-
 	var rec media.FileRecord
 	var results []media.ReplicaResult
 	if row.Inline {
@@ -481,16 +493,14 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 	}
 	if err != nil {
 		s.updateUploadStatus(uploadID, "failed")
-		writeErr(w, err)
-		return
+		return nil, nil, err
 	}
 
-	// Enqueue OCR/STT.
 	s.enqueueOCR(rec.ID)
 	s.enqueueSTT(rec.ID)
 
 	url := fmt.Sprintf("/file/%d/%d", noteID, rec.ID)
-	nf := media.NoteFile{
+	nf := &NoteFile{
 		ID:        rec.ID,
 		Filename:  rec.Filename,
 		MimeType:  rec.MimeType,
@@ -505,10 +515,8 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		"file":    nf,
 		"results": results,
 	}
+	markdown := ""
 	if row.Inline {
-		var markdown string
-		// Use image syntax (![](url)) for any media type that renders inline:
-		// images, videos, and audio.
 		if media.AllowsInline(rec.MimeType) && (media.IsImage(rec.MimeType) || media.IsVideo(rec.MimeType) || media.IsAudio(rec.MimeType)) {
 			markdown = fmt.Sprintf("![%s](%s)", rec.Filename, url)
 		} else {
@@ -517,28 +525,76 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		resp["markdown"] = markdown
 	}
 
-	reason := "attachment_uploaded"
-	if row.Inline {
-		reason = "inline_attachment_uploaded"
-		// For inline uploads, the frontend's onComplete callback already
-		// handles inserting the markdown and updating attachments. Skip
-		// notifyNotesChanged to avoid triggering a live refresh that would
-		// show the "newer version available" banner while the user edits.
-	} else {
-		s.notifyNotesChanged(reason, noteID)
-	}
-	writeJSON(w, http.StatusCreated, resp)
-
-	// Store the result on the session row so the status poller can retrieve
-	// it even if the original HTTP response was lost (browser reload).
 	respBytes, _ := json.Marshal(resp)
-	s.db.Exec(`UPDATE upload_sessions SET status = 'done', finish_result = ? WHERE upload_id = ?`, string(respBytes), uploadID)
+	if _, err := s.db.Exec(`UPDATE upload_sessions SET status = 'done', finish_result = ? WHERE upload_id = ?`, string(respBytes), uploadID); err != nil {
+		log.Printf("chunked upload: persist finish result for %s: %v", uploadID, err)
+	}
 
-	// Clean up chunk files after responding. The session row stays in the DB
-	// with status=done+finish_result. Expired sessions are cleaned up
-	// periodically by CleanupExpiredUploadSessions.
-	dir = chunksDir(uploadID)
+	if row.Inline {
+		if _, changed, err := s.persistResolvedUploadPlaceholders(noteID); err != nil {
+			log.Printf("chunked upload: persist resolved placeholders for note %d: %v", noteID, err)
+		} else if changed {
+			placeholderToken := ""
+			if row.PlaceholderToken != nil {
+				placeholderToken = *row.PlaceholderToken
+			}
+			s.notifyInlineUploadResolved(noteID, placeholderToken, markdown, nf)
+		}
+	} else {
+		s.notifyNotesChanged("attachment_uploaded", noteID)
+	}
+
 	_ = os.RemoveAll(dir)
+	return resp, nf, nil
+}
+
+func (s *Server) maybeAutoFinishChunkedUpload(noteID int64, uploadID string, chunksDone, totalChunks int) {
+	if chunksDone != totalChunks {
+		return
+	}
+	go func() {
+		if _, _, err := s.finalizeChunkedUploadSession(noteID, uploadID); err != nil &&
+			!stderrors.Is(err, errChunkedUploadAlreadyFinalizing) &&
+			!stderrors.Is(err, errChunkedUploadAlreadyCompleted) {
+			log.Printf("chunked upload: auto-finish %s for note %d: %v", uploadID, noteID, err)
+		}
+	}()
+}
+
+// handleChunkedFinish assembles all chunks, verifies the whole-file SHA-256 if
+// provided, and finalizes the upload via the existing media service.
+// POST /notes/{id}/chunked/{uploadID}/finish
+func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, noteID int64, uploadID string) {
+	if s.mediaService == nil {
+		http.Error(w, "media not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	resp, _, err := s.finalizeChunkedUploadSession(noteID, uploadID)
+	if err != nil {
+		switch {
+		case stderrors.Is(err, errChunkedUploadNotFound):
+			http.Error(w, errChunkedUploadNotFound.Error(), http.StatusNotFound)
+		case stderrors.Is(err, errChunkedUploadExpired):
+			http.Error(w, errChunkedUploadExpired.Error(), http.StatusGone)
+		case stderrors.Is(err, errChunkedUploadAlreadyFinalizing), stderrors.Is(err, errChunkedUploadAlreadyCompleted):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case strings.HasPrefix(err.Error(), "not all chunks received:") || strings.HasPrefix(err.Error(), "missing chunk "):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case strings.HasPrefix(err.Error(), "file sha256 mismatch:"):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			writeErr(w, err)
+		}
+		return
+	}
+
+	s.setLongWriteDeadline(w)
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // handleChunkedCancel cancels an upload session and cleans up its chunks.
@@ -570,7 +626,7 @@ func (s *Server) handleChunkedPending(w http.ResponseWriter, r *http.Request, no
 
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	rows, err := s.db.Query(
-		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, created_at, expires_at
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, placeholder_token, created_at, expires_at
 		 FROM upload_sessions
 		 WHERE note_id = ? AND expires_at > ?
 		   AND status NOT IN ('done', 'failed', 'finished')
@@ -602,9 +658,10 @@ func (s *Server) handleChunkedPending(w http.ResponseWriter, r *http.Request, no
 		var inlineVal int
 		var fileSHA256 sql.NullString
 		var finishResult sql.NullString
+		var placeholderToken sql.NullString
 		if err := rows.Scan(&r.UploadID, &r.NoteID, &r.Filename, &r.MimeType,
 			&r.TotalSize, &r.ChunkSize, &r.TotalChunks, &fileSHA256, &inlineVal,
-			&r.ChunksDone, &r.Status, &finishResult, &r.CreatedAt, &r.ExpiresAt); err != nil {
+			&r.ChunksDone, &r.Status, &finishResult, &placeholderToken, &r.CreatedAt, &r.ExpiresAt); err != nil {
 			continue
 		}
 		var chunksDone []int
@@ -636,7 +693,7 @@ func (s *Server) handleChunkedPending(w http.ResponseWriter, r *http.Request, no
 // loadUploadSession fetches a session row, verifying it belongs to the given note.
 func (s *Server) loadUploadSession(uploadID string, noteID int64) (*uploadSessionRow, error) {
 	return scanUploadSession(s.db.QueryRow(
-		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, created_at, expires_at
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, placeholder_token, created_at, expires_at
 		 FROM upload_sessions WHERE upload_id = ? AND note_id = ?`,
 		uploadID, noteID,
 	))
@@ -647,7 +704,7 @@ func (s *Server) loadUploadSession(uploadID string, noteID int64) (*uploadSessio
 func (s *Server) loadUploadSessionByHash(noteID int64, fileSHA256 string) *uploadSessionRow {
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	row, err := scanUploadSession(s.db.QueryRow(
-		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, created_at, expires_at
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, placeholder_token, created_at, expires_at
 		 FROM upload_sessions
 		 WHERE note_id = ? AND file_sha256 = ? AND expires_at > ?
 		   AND status NOT IN ('done', 'failed', 'finished')
@@ -666,9 +723,10 @@ func scanUploadSession(row *sql.Row) (*uploadSessionRow, error) {
 	var inlineVal int
 	var fileSHA256 sql.NullString
 	var finishResult sql.NullString
+	var placeholderToken sql.NullString
 	err := row.Scan(&r.UploadID, &r.NoteID, &r.Filename, &r.MimeType, &r.TotalSize,
 		&r.ChunkSize, &r.TotalChunks, &fileSHA256, &inlineVal,
-		&r.ChunksDone, &r.Status, &finishResult, &r.CreatedAt, &r.ExpiresAt,
+		&r.ChunksDone, &r.Status, &finishResult, &placeholderToken, &r.CreatedAt, &r.ExpiresAt,
 	)
 	if err != nil {
 		return nil, err
@@ -678,6 +736,9 @@ func scanUploadSession(row *sql.Row) (*uploadSessionRow, error) {
 	}
 	if finishResult.Valid {
 		r.FinishResult = &finishResult.String
+	}
+	if placeholderToken.Valid {
+		r.PlaceholderToken = &placeholderToken.String
 	}
 	r.Inline = inlineVal != 0
 	return r, nil
