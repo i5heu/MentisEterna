@@ -156,6 +156,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] Media with OCR and STT jobs, will not be retried if "Re-Index STT Files" or "Re-Index OCR Files" is pressed in the settings. We need aditional buttongs with "Re-Index missing X" and "Re-Index all X" should re-index all files regardless if they have been indexed before or not ("re-index all X" with warning) 
 - [x] The .note-attachments audio "Transcribe" button should trigger a new stt job if the file has a failed transciption (not that it should like now just show that it is running if a job is already running), if there is a transcription, it should change to "transcription" button.
 - [x] .note-attachments Pictures need like .note-attachments audio has a "Transcribe" button, a "OCR" button that triggers a new ocr job if the file has a failed ocr (not that it should like now just show that it is running if a job is already running), if there is a ocr, it should change to "ocr" button. 
+- [ ] If inline upload the uploaded file is added 2 times to the .note-attachments list until reload.
 
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
