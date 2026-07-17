@@ -1692,7 +1692,7 @@ const autoTagsError = ref("");
 const autoTagsInfo = ref("");
 
 // Upload queue composable + upload modal
-const { enqueueAttachment, enqueueInline, enqueueMultipleInline, active: activeUploads } = useUploadQueue();
+const { enqueueAttachment, enqueueInline, enqueueMultipleInline, resumeStoredUploads, active: activeUploads } = useUploadQueue();
 const showUploadModal = ref(false);
 
 function insertAtCursor(text) {
@@ -3267,6 +3267,8 @@ onMounted(() => {
     loadNotes();
     fetchAndMergeManifests(props.token);
     window.addEventListener("live:message", onLiveMessage);
+    // Resume any interrupted uploads from IndexedDB
+    resumeStoredUploads(props.token);
 });
 
 onUnmounted(() => {

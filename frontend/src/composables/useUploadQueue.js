@@ -1,4 +1,5 @@
 import { ref, reactive, computed, onUnmounted } from "vue";
+import * as ChunkStore from "../workers/chunkStore.js";
 
 // Module-level singleton -- one worker shared across all components.
 let worker = null;
@@ -30,7 +31,8 @@ const DEFAULT_CONCURRENCY = 2; // max simultaneous uploads
 
 /**
  * Vue composable: manages a shared upload queue with a Web Worker backend.
- * Supports multiple concurrent uploads via a configurable concurrency limit.
+ * Supports multiple concurrent uploads via a configurable concurrency limit,
+ * and auto-resume of interrupted uploads from IndexedDB.
  */
 export function useUploadQueue() {
     const queue = ref([]);
@@ -131,15 +133,26 @@ export function useUploadQueue() {
                 uploadCallbacks.set(next._id, next.onComplete);
             }
 
-            worker.postMessage({
-                type: "upload",
-                uploadId: next._id,
-                file: next.file,
-                noteId: next.noteId,
-                token: next.token,
-                inline: next.inline,
-                chunkSize: next.chunkSize || DEFAULT_CHUNK_SIZE,
-            });
+            if (next._resumeEntry) {
+                // Resume upload from IndexedDB
+                worker.postMessage({
+                    type: "resume",
+                    uploadId: next._id,
+                    fileHash: next._fileHash,
+                    entry: next._resumeEntry,
+                });
+            } else {
+                // Fresh upload (file provided)
+                worker.postMessage({
+                    type: "upload",
+                    uploadId: next._id,
+                    file: next.file,
+                    noteId: next.noteId,
+                    token: next.token,
+                    inline: next.inline,
+                    chunkSize: next.chunkSize || DEFAULT_CHUNK_SIZE,
+                });
+            }
         }
     }
 
@@ -181,7 +194,6 @@ export function useUploadQueue() {
 
     /**
      * Enqueue multiple files as inline uploads.
-     * Each file gets its own queue entry and they upload concurrently.
      * @param {File[]} files
      * @param {number} noteId
      * @param {string} token
@@ -199,6 +211,59 @@ export function useUploadQueue() {
             activeUploadIds.delete(uploadId);
             active.value = active.value.filter(a => a.uploadId !== uploadId);
             processQueue();
+        }
+    }
+
+    /**
+     * Check IndexedDB for stored partial uploads and resume them.
+     * Call this when a note is selected so we can resume orphaned uploads
+     * from a previous browser session.
+     * @param {string} token - auth token
+     */
+    async function resumeStoredUploads(token) {
+        try {
+            const entries = await ChunkStore.listEntries();
+            for (const entry of entries) {
+                // Skip entries we're already processing
+                if (activeUploadIds.has(entry.fileHash)) continue;
+
+                // Skip if no token yet
+                if (!token) continue;
+
+                const resumeEntry = {
+                    _id: `resume-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                    _fileHash: entry.fileHash,
+                    _resumeEntry: {
+                        noteId: entry.noteId,
+                        token,
+                        chunkSize: DEFAULT_CHUNK_SIZE,
+                    },
+                };
+
+                // Try to get the full entry from IndexedDB
+                const fullEntry = await ChunkStore.getChunkEntry(entry.fileHash);
+                if (!fullEntry) continue;
+
+                // Update token on the entry
+                fullEntry.token = token;
+
+                resumeEntry._resumeEntry = fullEntry;
+
+                queue.value.push(resumeEntry);
+                // Add to active immediately so the progress panel shows it
+                active.value.push({
+                    uploadId: resumeEntry._id,
+                    filename: entry.filename,
+                    loaded: 0,
+                    total: fullEntry.totalSize,
+                    percent: 0,
+                    speed: 0,
+                    status: "resuming",
+                });
+            }
+            processQueue();
+        } catch (err) {
+            console.warn("[useUploadQueue] Failed to resume stored uploads:", err);
         }
     }
 
@@ -222,6 +287,7 @@ export function useUploadQueue() {
         enqueueInline,
         enqueueMultipleInline,
         cancel,
+        resumeStoredUploads,
         defaultChunkSize: DEFAULT_CHUNK_SIZE,
         defaultConcurrency: DEFAULT_CONCURRENCY,
     };
