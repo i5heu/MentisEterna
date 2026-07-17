@@ -10,6 +10,8 @@ const activeUploadIds = new Set();
 const resumedFileHashes = new Set(); // prevent duplicate resume entries
 /** @type {Map<string, Function>} */
 const uploadCallbacks = new Map();
+/** @type {Map<string, number>} */
+const uploadNoteIds = new Map(); // uploadId -> noteId
 
 function ensureWorker() {
     if (!worker) {
@@ -51,19 +53,20 @@ export function useUploadQueue() {
     function handleWorkerMessage(event) {
         const msg = event.data || {};
 
-        switch (msg.type) {
-            case "progress": {
-                // Update or insert an active entry.
-                const idx = active.value.findIndex(a => a.uploadId === msg.uploadId);
-                const entry = {
-                    uploadId: msg.uploadId,
-                    filename: msg.filename,
-                    loaded: msg.loaded,
-                    total: msg.total,
-                    percent: msg.percent,
-                    speed: msg.speed,
-                    status: msg.status,
-                };
+    	    switch (msg.type) {
+    	        case "progress": {
+    	            // Update or insert an active entry.
+    	            const idx = active.value.findIndex(a => a.uploadId === msg.uploadId);
+    	            const entry = {
+    	                uploadId: msg.uploadId,
+    	                filename: msg.filename,
+    	                loaded: msg.loaded,
+    	                total: msg.total,
+    	                percent: msg.percent,
+    	                speed: msg.speed,
+    	                status: msg.status,
+    	                noteId: msg.noteId || uploadNoteIds.get(msg.uploadId) || 0,
+    	            };
                 if (idx >= 0) {
                     active.value[idx] = entry;
                 } else {
@@ -97,6 +100,7 @@ export function useUploadQueue() {
 
                 // Remove from active list.
                 activeUploadIds.delete(msg.uploadId);
+                uploadNoteIds.delete(msg.uploadId);
                 active.value = active.value.filter(a => a.uploadId !== msg.uploadId);
                 processQueue();
                 break;
@@ -115,6 +119,7 @@ export function useUploadQueue() {
                 }
 
                 activeUploadIds.delete(msg.uploadId);
+                uploadNoteIds.delete(msg.uploadId);
                 active.value = active.value.filter(a => a.uploadId !== msg.uploadId);
                 processQueue();
                 break;
@@ -139,6 +144,7 @@ export function useUploadQueue() {
                 // Resume upload from IndexedDB — strip Vue proxies before posting
                 // because structuredClone can't handle Proxy objects.
                 const plain = JSON.parse(JSON.stringify(next._resumeEntry));
+                uploadNoteIds.set(next._id, plain.noteId || 0);
                 worker.postMessage({
                     type: "resume",
                     uploadId: next._id,
@@ -147,6 +153,7 @@ export function useUploadQueue() {
                 });
             } else {
                 // Fresh upload (file provided)
+                uploadNoteIds.set(next._id, next.noteId || 0);
                 worker.postMessage({
                     type: "upload",
                     uploadId: next._id,

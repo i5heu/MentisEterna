@@ -183,7 +183,7 @@ async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filenam
                 post({
                     type: "progress", uploadId, filename,
                     loaded: totalSize, total: totalSize, percent: 100, speed: 0,
-                    status: statusText,
+                    status: statusText, noteId,
                 });
 
                 // If done, return the result so the caller can propagate it.
@@ -523,6 +523,7 @@ async function doResume(fileHash, entry, uploadId) {
                     percent,
                     speed,
                     status: "uploading",
+                    noteId,
                 });
             }
             if (VERBOSE) console.log("[resume] All chunks uploaded. Waiting for server...");

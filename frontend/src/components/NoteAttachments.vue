@@ -1,7 +1,23 @@
 <template>
-    <div v-if="attachments?.length" class="note-attachments">
+    <div v-if="attachments?.length || pendingAttachments.length" class="note-attachments">
         <h4>Attachments</h4>
         <ul>
+            <!-- Pending uploads (in progress) -->
+            <li
+                v-for="p in pendingAttachments"
+                :key="'pending-' + p.uploadId"
+                class="attachment-row pending"
+            >
+                <div class="attach-file">
+                    <span class="pending-spinner" />
+                    <span class="pending-filename">{{ p.filename }}</span>
+                    <span class="pending-status">{{ statusLabel(p) }}</span>
+                </div>
+                <span class="attachment-size">{{ formatSize(p.total) }}</span>
+                <span class="attachment-size" />
+            </li>
+
+            <!-- Finished attachments -->
             <li v-for="file in attachments" :key="file.id" class="attachment-row">
                 <!-- Column 1: filename + action button -->
                 <div class="attach-file">
@@ -97,20 +113,40 @@
 </template>
 
 <script setup>
-import { reactive } from "vue";
+import { reactive, computed } from "vue";
 import {
     fetchSTTResult,
     triggerSTT,
     fetchOCRResult,
     triggerOCR,
 } from "../api.js";
+import { useUploadQueue } from "../composables/useUploadQueue.js";
 
 const props = defineProps({
     attachments: Array,
     editing: Boolean,
     token: String,
+    noteId: { type: Number, default: null },
 });
 const emit = defineEmits(["remove"]);
+
+const { active } = useUploadQueue();
+
+// Show uploads that are in progress for this note.
+const pendingAttachments = computed(() => {
+    if (!props.noteId) return [];
+    return active.value.filter(a => a.noteId === props.noteId);
+});
+
+function statusLabel(p) {
+    if (!p) return "";
+    const s = p.status;
+    if (!s || s === "uploading") return `${p.percent}%`;
+    if (s === "staging") return "Preparing...";
+    if (s === "hashing") return "Hashing...";
+    if (s === "resuming") return "Resuming...";
+    return s;
+}
 
 // STT state per file: "idle" | "loading" | "has_text" | "error"
 const sttState = reactive({});
@@ -270,6 +306,37 @@ function formatSize(bytes) {
 }
 .attach-file a:hover {
     text-decoration: underline;
+}
+
+/* Pending upload spinner */
+.pending-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border-color, #444);
+    border-top-color: var(--accent-teal, #60a5fa);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+    margin-right: 4px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.pending-filename {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--font-color-secondary, #999);
+}
+
+.pending-status {
+    font-size: 0.72rem;
+    color: var(--font-color-secondary, #888);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* Action button (Transcribe / OCR), 1em left margin from filename */
