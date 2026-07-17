@@ -35,6 +35,7 @@ func applyFileResponseHeaders(w http.ResponseWriter, mimeType, filename string, 
 	h := w.Header()
 	h.Set("Content-Type", mimeType)
 	h.Set("Content-Disposition", fileDisposition(mimeType, filename))
+	h.Set("Accept-Ranges", "bytes")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", fileContentSecurityPolicy)
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")

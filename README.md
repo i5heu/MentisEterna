@@ -162,7 +162,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [ ] User uploads in chunks, verify checksum and resume if connection is lost.
 - [ ] Upload spinner and overview
 - [ ] Setup building pipeline
-- [ ] audio inline playback does not work
+- [x] audio inline playback does not work
 - [x] In note edit add "//" to search and add a page link to the note
 - [x] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
 - [x] Add automatic tags in a new "Auto Tags" to the NoteType. 
@@ -207,7 +207,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
     - [ ] Inline note editing (From Child or thread or thread child)
     - [ ] Autocomplete and predictive text
     - [ ] Brainstorm and Research mode
-    - [ ] Fast note creation with AI parent selection
+    - [ ] Fast note creation with LLM parent selection
   - [ ] New Input Methods
     - [ ] Fast Handnote import
     - [ ] Quick Voice Input
