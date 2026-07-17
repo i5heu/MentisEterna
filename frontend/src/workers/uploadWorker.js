@@ -148,19 +148,21 @@ async function cancelUpload(token, noteId, uploadId) {
 }
 
 /**
- * Poll server status during finish phase. Returns when the session is done
- * or when the `done` flag in the state object is set to true.
+ * Poll server status during finish phase. If the session reaches "done"
+ * with a result, returns the result. If the poll is stopped externally
+ * (pollState.done set to true), returns null.
+ * @returns {Promise<object|null>}
  */
-async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filename, totalSize, totalChunks, state) {
+async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filename, totalSize, totalChunks, pollState) {
     let lastLoggedStatus = "uploading";
 
-    while (!state.done) {
+    while (!pollState.done) {
         try {
             const statusRes = await fetch(`/notes/${noteId}/chunked/${serverUploadId}`, {
                 credentials: "include",
             });
 
-            if (state.done) break;
+            if (pollState.done) break;
 
             if (statusRes.ok) {
                 const statusData = await statusRes.json();
@@ -183,14 +185,21 @@ async function pollFinishStatus(noteId, serverUploadId, token, uploadId, filenam
                     loaded: totalSize, total: totalSize, percent: 100, speed: 0,
                     status: statusText,
                 });
+
+                // If done, return the result so the caller can propagate it.
+                if (status === "done") {
+                    pollState.done = true;
+                    return statusData.result || null;
+                }
             }
         } catch (err) {
             if (VERBOSE) console.warn("[poll] status check failed:", err.message);
         }
 
-        if (state.done) break;
+        if (pollState.done) break;
         await new Promise(r => setTimeout(r, 300));
     }
+    return null;
 }
 
 function isAborted(uploadId) {
@@ -352,15 +361,32 @@ async function doUpload(data) {
         if (VERBOSE) console.log("[uploading] All chunks uploaded. Waiting for server...");
 
         // --- PHASE 5: Server-side processing ---
+        // Start polling before we call finish, so we can observe the status
+        // even if finish is rejected because the server is already processing
+        // (from a previous request that survived a client reload).
         const pollState = { done: false };
-        const pollPromise = pollFinishStatus(
+        let pollPromise = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
             totalSize, totalChunks, pollState,
         );
 
-        const result = await finishUpload(token, noteId, serverUploadId);
+        let result = null;
+        try {
+            result = await finishUpload(token, noteId, serverUploadId);
+        } catch (err) {
+            // 409 Conflict = already being finalized by a previous request.
+            // The poll is already running and will return the result when done.
+            if (err.message && err.message.includes("409")) {
+                if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
+            } else {
+                pollState.done = true;
+                throw err;
+            }
+        }
         pollState.done = true;
-        await pollPromise;
+        const pollResult = await pollPromise;
+        // Prefer the poll result if finish returned 409 (poll saw the done state).
+        if (!result) result = pollResult;
 
         // --- PHASE 6: Clean up IndexedDB ---
         await ChunkStore.deleteChunkEntry(fileSha256);
@@ -485,15 +511,26 @@ async function doResume(fileHash, entry, uploadId) {
         if (VERBOSE) console.log("[resume] All chunks uploaded. Waiting for server...");
 
         // Server-side processing.
-        const pollState = { done: false };
-        const pollPromise = pollFinishStatus(
+        const pollState2 = { done: false };
+        let pollPromise2 = pollFinishStatus(
             noteId, serverUploadId, token, uploadId, filename,
-            totalSize, totalChunks, pollState,
+            totalSize, totalChunks, pollState2,
         );
 
-        const result = await finishUpload(token, noteId, serverUploadId);
-        pollState.done = true;
-        await pollPromise;
+        let result2 = null;
+        try {
+            result2 = await finishUpload(token, noteId, serverUploadId);
+        } catch (err) {
+            if (err.message && err.message.includes("409")) {
+                if (VERBOSE) console.log("[finish] Server already processing. Waiting for poll...");
+            } else {
+                pollState2.done = true;
+                throw err;
+            }
+        }
+        pollState2.done = true;
+        const pollResult2 = await pollPromise2;
+        if (!result2) result2 = pollResult2;
 
         // Clean up IndexedDB.
         await ChunkStore.deleteChunkEntry(fileHash);
@@ -503,7 +540,7 @@ async function doResume(fileHash, entry, uploadId) {
             console.groupEnd();
         }
 
-        post({ type: "complete", uploadId, filename, result });
+        post({ type: "complete", uploadId, filename, result: result2 });
     } catch (error) {
         console.error("[resume error]", filename, error.message || error);
         if (VERBOSE) console.groupEnd();
