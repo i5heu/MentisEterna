@@ -163,18 +163,27 @@ func (s *Server) handleChunkedStart(w http.ResponseWriter, r *http.Request, note
 		fileSHA256 = &req.FileSHA256
 	}
 
-	// Idempotency: if a non-expired, non-terminal session already exists for
-	// this note with the same file_sha256, return the existing session so the
-	// frontend can resume after a tab close or browser crash.
+	var placeholderToken *string
+	if req.PlaceholderToken != "" {
+		placeholderToken = &req.PlaceholderToken
+	}
+
+	// Strong idempotency: if this exact placeholder token already has a live or
+	// completed upload session, return it. This prevents stale IndexedDB resume
+	// entries from re-uploading a file after the browser or server restarts.
+	if placeholderToken != nil && *placeholderToken != "" {
+		existing := s.loadUploadSessionByPlaceholder(noteID, *placeholderToken)
+		if existing != nil {
+			writeJSON(w, http.StatusOK, buildChunkedStartResponse(existing))
+			return
+		}
+	}
+
+	// Fallback idempotency for unfinished sessions matched by file hash.
 	if fileSHA256 != nil && *fileSHA256 != "" {
 		existing := s.loadUploadSessionByHash(noteID, *fileSHA256)
 		if existing != nil {
-			var chunksDone []int
-			_ = json.Unmarshal([]byte(existing.ChunksDone), &chunksDone)
-			writeJSON(w, http.StatusOK, map[string]interface{}{
-				"upload_id":   existing.UploadID,
-				"chunks_done": chunksDone,
-			})
+			writeJSON(w, http.StatusOK, buildChunkedStartResponse(existing))
 			return
 		}
 	}
@@ -184,11 +193,6 @@ func (s *Server) handleChunkedStart(w http.ResponseWriter, r *http.Request, note
 	inlineVal := 0
 	if req.Inline {
 		inlineVal = 1
-	}
-
-	var placeholderToken *string
-	if req.PlaceholderToken != "" {
-		placeholderToken = &req.PlaceholderToken
 	}
 
 	_, err := s.db.Exec(
@@ -205,7 +209,32 @@ func (s *Server) handleChunkedStart(w http.ResponseWriter, r *http.Request, note
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"upload_id":   uploadID,
 		"chunks_done": []int{},
+		"status":      "uploading",
 	})
+}
+
+func buildChunkedStartResponse(row *uploadSessionRow) map[string]interface{} {
+	if row == nil {
+		return map[string]interface{}{
+			"upload_id":   "",
+			"chunks_done": []int{},
+			"status":      "",
+		}
+	}
+	var chunksDone []int
+	_ = json.Unmarshal([]byte(row.ChunksDone), &chunksDone)
+	resp := map[string]interface{}{
+		"upload_id":   row.UploadID,
+		"chunks_done": chunksDone,
+		"status":      row.Status,
+	}
+	if row.FinishResult != nil && *row.FinishResult != "" {
+		var result json.RawMessage
+		if json.Unmarshal([]byte(*row.FinishResult), &result) == nil {
+			resp["result"] = result
+		}
+	}
+	return resp
 }
 
 // handleChunkedChunk uploads a single chunk.
@@ -717,6 +746,23 @@ func (s *Server) loadUploadSessionByHash(noteID int64, fileSHA256 string) *uploa
 	return row
 }
 
+func (s *Server) loadUploadSessionByPlaceholder(noteID int64, placeholderToken string) *uploadSessionRow {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	row, err := scanUploadSession(s.db.QueryRow(
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, placeholder_token, created_at, expires_at
+		 FROM upload_sessions
+		 WHERE note_id = ? AND placeholder_token = ? AND expires_at > ?
+		   AND status NOT IN ('failed', 'finished')
+		 ORDER BY created_at DESC LIMIT 1`,
+		noteID, placeholderToken, now,
+	))
+	if err != nil {
+		return nil
+	}
+	return row
+}
+
+// scanUploadSession scans a DB row into an uploadSessionRow.
 // scanUploadSession scans an uploadSessionRow from a *sql.Row.
 func scanUploadSession(row *sql.Row) (*uploadSessionRow, error) {
 	r := &uploadSessionRow{}
