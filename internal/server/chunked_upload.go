@@ -25,19 +25,20 @@ const chunkTempDirName = "mentis-chunked"
 
 // uploadSessionRow mirrors a row in the upload_sessions table.
 type uploadSessionRow struct {
-	UploadID    string
-	NoteID      int64
-	Filename    string
-	MimeType    string
-	TotalSize   int64
-	ChunkSize   int64
-	TotalChunks int
-	FileSHA256  *string
-	Inline      bool
-	ChunksDone  string // JSON array of ints
-	Status      string
-	CreatedAt   string
-	ExpiresAt   string
+	UploadID     string
+	NoteID       int64
+	Filename     string
+	MimeType     string
+	TotalSize    int64
+	ChunkSize    int64
+	TotalChunks  int
+	FileSHA256   *string
+	Inline       bool
+	ChunksDone   string // JSON array of ints
+	Status       string
+	FinishResult *string // JSON result blob when status=done
+	CreatedAt    string
+	ExpiresAt    string
 }
 
 // chunksDir returns the temp directory for a given upload session.
@@ -328,7 +329,7 @@ func (s *Server) handleChunkedStatus(w http.ResponseWriter, r *http.Request, not
 	var chunksDone []int
 	_ = json.Unmarshal([]byte(row.ChunksDone), &chunksDone)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"upload_id":    row.UploadID,
 		"filename":     row.Filename,
 		"total_chunks": row.TotalChunks,
@@ -338,7 +339,16 @@ func (s *Server) handleChunkedStatus(w http.ResponseWriter, r *http.Request, not
 		"inline":       row.Inline,
 		"mime_type":    row.MimeType,
 		"status":       row.Status,
-	})
+	}
+	// Include finish result when the upload is done, so the worker
+	// can get the file record even if finish returned 409 (reload scenario).
+	if row.FinishResult != nil && *row.FinishResult != "" {
+		var result json.RawMessage
+		if json.Unmarshal([]byte(*row.FinishResult), &result) == nil {
+			resp["result"] = result
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleChunkedFinish assembles all chunks, verifies the whole-file SHA-256 if
@@ -348,6 +358,10 @@ func (s *Server) handleChunkedStatus(w http.ResponseWriter, r *http.Request, not
 // Encryption and S3 upload use context.Background() so they survive HTTP
 // request cancellation (page reload, tab close). The assembled-and-verified
 // file is guaranteed to land in the media store regardless of client state.
+//
+// This endpoint is guarded against re-entry: if the session is already being
+// finalized (processing) or completed (done), subsequent calls are rejected
+// to prevent duplicate file rows.
 func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, noteID int64, uploadID string) {
 	if s.mediaService == nil {
 		http.Error(w, "media not configured", http.StatusServiceUnavailable)
@@ -366,6 +380,25 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 
 	if t := parseTime(row.ExpiresAt); t.IsZero() || time.Now().UTC().After(t) {
 		http.Error(w, "upload session expired", http.StatusGone)
+		return
+	}
+
+	// Guard: reject re-entry while a finish is already in progress or completed.
+	// Without this, a browser reload during the finish phase would cause the
+	// new frontend to call finish again, creating duplicate file rows.
+	if row.Status == "processing" || row.Status == "assembling" || row.Status == "verifying" {
+		http.Error(w, "upload already being finalized", http.StatusConflict)
+		return
+	}
+	if row.Status == "done" {
+		// Upload already completed. Return success without creating a new file.
+		// The session row was already cleaned up by the first finish call, so
+		// we shouldn't reach here — but guard defensively.
+		http.Error(w, "upload already completed", http.StatusConflict)
+		return
+	}
+	if row.Status != "" && row.Status != "uploading" {
+		http.Error(w, "upload session is in terminal state: "+row.Status, http.StatusConflict)
 		return
 	}
 
@@ -452,8 +485,6 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		return
 	}
 
-	s.updateUploadStatus(uploadID, "done")
-
 	// Enqueue OCR/STT.
 	s.enqueueOCR(rec.ID)
 	s.enqueueSTT(rec.ID)
@@ -498,10 +529,16 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 	}
 	writeJSON(w, http.StatusCreated, resp)
 
-	// Clean up chunks and session after responding — the frontend poller
-	// may make a final status request after this call, so delete only after
-	// we've written the response.
-	s.cleanupUploadSession(uploadID)
+	// Store the result on the session row so the status poller can retrieve
+	// it even if the original HTTP response was lost (browser reload).
+	respBytes, _ := json.Marshal(resp)
+	s.db.Exec(`UPDATE upload_sessions SET status = 'done', finish_result = ? WHERE upload_id = ?`, string(respBytes), uploadID)
+
+	// Clean up chunk files after responding. The session row stays in the DB
+	// with status=done+finish_result. Expired sessions are cleaned up
+	// periodically by CleanupExpiredUploadSessions.
+	dir = chunksDir(uploadID)
+	_ = os.RemoveAll(dir)
 }
 
 // handleChunkedCancel cancels an upload session and cleans up its chunks.
@@ -533,7 +570,7 @@ func (s *Server) handleChunkedPending(w http.ResponseWriter, r *http.Request, no
 
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	rows, err := s.db.Query(
-		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, created_at, expires_at
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, created_at, expires_at
 		 FROM upload_sessions
 		 WHERE note_id = ? AND expires_at > ?
 		   AND status NOT IN ('done', 'failed', 'finished')
@@ -564,9 +601,10 @@ func (s *Server) handleChunkedPending(w http.ResponseWriter, r *http.Request, no
 		var r uploadSessionRow
 		var inlineVal int
 		var fileSHA256 sql.NullString
+		var finishResult sql.NullString
 		if err := rows.Scan(&r.UploadID, &r.NoteID, &r.Filename, &r.MimeType,
 			&r.TotalSize, &r.ChunkSize, &r.TotalChunks, &fileSHA256, &inlineVal,
-			&r.ChunksDone, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
+			&r.ChunksDone, &r.Status, &finishResult, &r.CreatedAt, &r.ExpiresAt); err != nil {
 			continue
 		}
 		var chunksDone []int
@@ -598,7 +636,7 @@ func (s *Server) handleChunkedPending(w http.ResponseWriter, r *http.Request, no
 // loadUploadSession fetches a session row, verifying it belongs to the given note.
 func (s *Server) loadUploadSession(uploadID string, noteID int64) (*uploadSessionRow, error) {
 	return scanUploadSession(s.db.QueryRow(
-		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, created_at, expires_at
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, created_at, expires_at
 		 FROM upload_sessions WHERE upload_id = ? AND note_id = ?`,
 		uploadID, noteID,
 	))
@@ -609,7 +647,7 @@ func (s *Server) loadUploadSession(uploadID string, noteID int64) (*uploadSessio
 func (s *Server) loadUploadSessionByHash(noteID int64, fileSHA256 string) *uploadSessionRow {
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	row, err := scanUploadSession(s.db.QueryRow(
-		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, created_at, expires_at
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, finish_result, created_at, expires_at
 		 FROM upload_sessions
 		 WHERE note_id = ? AND file_sha256 = ? AND expires_at > ?
 		   AND status NOT IN ('done', 'failed', 'finished')
@@ -627,15 +665,19 @@ func scanUploadSession(row *sql.Row) (*uploadSessionRow, error) {
 	r := &uploadSessionRow{}
 	var inlineVal int
 	var fileSHA256 sql.NullString
+	var finishResult sql.NullString
 	err := row.Scan(&r.UploadID, &r.NoteID, &r.Filename, &r.MimeType, &r.TotalSize,
 		&r.ChunkSize, &r.TotalChunks, &fileSHA256, &inlineVal,
-		&r.ChunksDone, &r.Status, &r.CreatedAt, &r.ExpiresAt,
+		&r.ChunksDone, &r.Status, &finishResult, &r.CreatedAt, &r.ExpiresAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	if fileSHA256.Valid {
 		r.FileSHA256 = &fileSHA256.String
+	}
+	if finishResult.Valid {
+		r.FinishResult = &finishResult.String
 	}
 	r.Inline = inlineVal != 0
 	return r, nil

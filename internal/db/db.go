@@ -728,6 +728,7 @@ func (d *DB) ensureUploadSessions() error {
 			inline      INTEGER NOT NULL DEFAULT 0,
 			chunks_done TEXT NOT NULL DEFAULT '[]',
 			status      TEXT NOT NULL DEFAULT 'uploading',
+			finish_result TEXT DEFAULT NULL,
 			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			expires_at  DATETIME NOT NULL
 		);
@@ -736,15 +737,24 @@ func (d *DB) ensureUploadSessions() error {
 		return err
 	}
 
-	// Migration: add status column if it doesn't exist (for DBs created before this column was added).
+	// Migration: add columns that may not exist in older DBs.
 	cols, err := d.tableColumns("upload_sessions")
 	if err != nil {
 		return err
 	}
 	if !cols["status"] {
 		_, err = d.Exec(`ALTER TABLE upload_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'uploading'`)
+		if err != nil {
+			return err
+		}
 	}
-	return err
+	if !cols["finish_result"] {
+		_, err = d.Exec(`ALTER TABLE upload_sessions ADD COLUMN finish_result TEXT DEFAULT NULL`)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureOCRTables() error {

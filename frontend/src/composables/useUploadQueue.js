@@ -6,6 +6,8 @@ let worker = null;
 let workerRefs = 0;
 /** @type {Set<string>} */
 const activeUploadIds = new Set();
+/** @type {Set<string>} */
+const resumedFileHashes = new Set(); // prevent duplicate resume entries
 /** @type {Map<string, Function>} */
 const uploadCallbacks = new Map();
 
@@ -226,8 +228,11 @@ export function useUploadQueue() {
         try {
             const entries = await ChunkStore.listEntries();
             for (const entry of entries) {
-                // Skip entries we're already processing
-                if (activeUploadIds.has(entry.fileHash)) continue;
+                // Skip entries we're already processing or have already enqueued for resume.
+                if (activeUploadIds.has(entry.fileHash) || resumedFileHashes.has(entry.fileHash)) continue;
+
+                // Skip entries already sitting in the queue waiting to be picked up.
+                if (queue.value.some(q => q._fileHash === entry.fileHash)) continue;
 
                 // Skip if no token yet
                 if (!token) continue;
@@ -251,6 +256,7 @@ export function useUploadQueue() {
 
                 resumeEntry._resumeEntry = fullEntry;
 
+                resumedFileHashes.add(entry.fileHash);
                 queue.value.push(resumeEntry);
                 // Add to active immediately so the progress panel shows it
                 active.value.push({
