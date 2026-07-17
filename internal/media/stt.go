@@ -70,7 +70,7 @@ func (s *Service) RunSTTForFile(ctx context.Context, fileID int64, sttClient llm
 	ctReader, cacheErr := s.Cache.Open(fileID, rec.CiphertextSHA256)
 	if cacheErr == nil {
 		defer ctReader.Close()
-		if err := DecryptToWriter(ctReader, &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
+		if err := DecryptToWriter(ctx, ctReader, &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
 			return s.saveSTTError(fileID, model, fmt.Errorf("stt: decrypt cache: %w", err))
 		}
 	} else {
@@ -86,7 +86,7 @@ func (s *Service) RunSTTForFile(ctx context.Context, fileID int64, sttClient llm
 			if readErr != nil {
 				continue
 			}
-			if err := DecryptToWriter(bytes.NewReader(ctData), &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
+			if err := DecryptToWriter(ctx, bytes.NewReader(ctData), &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
 				continue
 			}
 			// Cache for future use.

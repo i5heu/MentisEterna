@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -94,7 +95,8 @@ func EncryptToFile(src io.Reader, dst *os.File, key, baseNonce []byte) (cipherte
 
 // DecryptToWriter decrypts encrypted data from src to dst using AES-256-GCM.
 // Each chunk is authenticated before its plaintext is written to dst.
-func DecryptToWriter(src io.Reader, dst io.Writer, key, baseNonce []byte) error {
+// ctx is checked before each chunk write; on cancellation the function returns early.
+func DecryptToWriter(ctx context.Context, src io.Reader, dst io.Writer, key, baseNonce []byte) error {
 	if len(key) != 32 {
 		return fmt.Errorf("key must be 32 bytes, got %d", len(key))
 	}
@@ -127,6 +129,9 @@ func DecryptToWriter(src io.Reader, dst io.Writer, key, baseNonce []byte) error 
 	lenBuf := make([]byte, 4)
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("%w", err)
+		}
 		_, err := io.ReadFull(src, lenBuf)
 		if err == io.EOF {
 			break

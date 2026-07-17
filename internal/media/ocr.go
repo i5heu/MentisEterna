@@ -66,7 +66,7 @@ func (s *Service) RunOCRForFile(ctx context.Context, fileID int64, ocrClient llm
 	ctReader, cacheErr := s.Cache.Open(fileID, rec.CiphertextSHA256)
 	if cacheErr == nil {
 		defer ctReader.Close()
-		if err := DecryptToWriter(ctReader, &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
+		if err := DecryptToWriter(ctx, ctReader, &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
 			return s.saveOCRError(fileID, model, fmt.Errorf("ocr: decrypt cache: %w", err))
 		}
 	} else {
@@ -82,7 +82,7 @@ func (s *Service) RunOCRForFile(ctx context.Context, fileID int64, ocrClient llm
 			if readErr != nil {
 				continue
 			}
-			if err := DecryptToWriter(bytes.NewReader(ctData), &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
+			if err := DecryptToWriter(ctx, bytes.NewReader(ctData), &plainBuf, rec.AESKey, rec.AESNonce); err != nil {
 				continue
 			}
 			// Cache for future use

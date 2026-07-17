@@ -339,7 +339,7 @@ func (s *Service) ReadFile(ctx context.Context, fileID int64, w io.Writer) (File
 	ctReader, cacheErr := s.Cache.Open(fileID, rec.CiphertextSHA256)
 	if cacheErr == nil {
 		defer ctReader.Close()
-		if err := DecryptToWriter(ctReader, w, rec.AESKey, rec.AESNonce); err != nil {
+		if err := DecryptToWriter(ctx, ctReader, w, rec.AESKey, rec.AESNonce); err != nil {
 			return rec, fmt.Errorf("decrypt cache: %w", err)
 		}
 		return rec, nil
@@ -381,7 +381,7 @@ func (s *Service) ReadFile(ctx context.Context, fileID int64, w io.Writer) (File
 		if err != nil {
 			continue
 		}
-		decryptErr := DecryptToWriter(serveReader, w, rec.AESKey, rec.AESNonce)
+		decryptErr := DecryptToWriter(ctx, serveReader, w, rec.AESKey, rec.AESNonce)
 		serveReader.Close()
 		if decryptErr != nil {
 			return rec, fmt.Errorf("decrypt replica: %w", decryptErr)
