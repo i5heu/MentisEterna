@@ -164,6 +164,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] User uploads (including inline uploads) in chunks, verify checksum and resume if connection is lost. Chunking in webworker if possible to keep the UI responsive.
 - [x] Upload spinner and stats in the left bottom corner for inline uploads and for attachment uploads a modal with upload progress and stats.
 - [ ] delte stall upload chunks after a timeout (12h)
+- [ ] delete embeddings for deleted notes and files
 - [ ] Setup building pipeline
 - [x] audio inline playback does not work
 - [x] In note edit add "//" to search and add a page link to the note

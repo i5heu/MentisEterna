@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -321,6 +322,10 @@ func (s *Server) handleChunkedStatus(w http.ResponseWriter, r *http.Request, not
 // handleChunkedFinish assembles all chunks, verifies the whole-file SHA-256 if
 // provided, and finalizes the upload via the existing media service.
 // POST /notes/{id}/chunked/{uploadID}/finish
+//
+// Encryption and S3 upload use context.Background() so they survive HTTP
+// request cancellation (page reload, tab close). The assembled-and-verified
+// file is guaranteed to land in the media store regardless of client state.
 func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, noteID int64, uploadID string) {
 	if s.mediaService == nil {
 		http.Error(w, "media not configured", http.StatusServiceUnavailable)
@@ -408,12 +413,16 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 
 	s.setLongWriteDeadline(w)
 
+	// Use context.Background() so encryption + S3 upload survives HTTP
+	// request cancellation (page reload, tab close, etc.).
+	bgCtx := context.Background()
+
 	var rec media.FileRecord
 	var results []media.ReplicaResult
 	if row.Inline {
-		rec, results, err = s.mediaService.CreatePendingInline(r.Context(), noteID, row.Filename, row.MimeType, f)
+		rec, results, err = s.mediaService.CreatePendingInline(bgCtx, noteID, row.Filename, row.MimeType, f)
 	} else {
-		rec, results, err = s.mediaService.CreateAttachment(r.Context(), noteID, row.Filename, row.MimeType, f)
+		rec, results, err = s.mediaService.CreateAttachment(bgCtx, noteID, row.Filename, row.MimeType, f)
 	}
 	if err != nil {
 		s.updateUploadStatus(uploadID, "failed")
