@@ -645,8 +645,22 @@ export async function reindexOCR(token) {
     });
 }
 
+export async function reindexAllOCR(token) {
+    return request("/maintenance/reindex-ocr-all", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 export async function reindexSTT(token) {
     return request("/maintenance/reindex-stt", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
+export async function reindexAllSTT(token) {
+    return request("/maintenance/reindex-stt-all", {
         method: "POST",
         headers: authHeaders(token),
     });
