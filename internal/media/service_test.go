@@ -3,9 +3,11 @@ package media
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -445,6 +447,235 @@ func TestReadFileFallsBackToReplica(t *testing.T) {
 	cachePath := svc.Cache.PathFor(rec.ID, rec.CiphertextSHA256)
 	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
 		t.Error("expected cache to be repopulated after replica fetch")
+	}
+}
+
+func TestReadFileWithFailedWriter(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	// Use a payload large enough to produce multiple chunks.
+	plaintext := make([]byte, 3*ChunkSize+500)
+	if _, err := rand.Read(plaintext); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "big.bin", "application/octet-stream", bytes.NewReader(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a client that disconnects mid-stream (broken pipe).
+	// failingWriter fails after 1.5 chunks of plaintext.
+	fakePipeErr := fmt.Errorf("write tcp 127.0.0.1:8080->127.0.0.1:12345: write: broken pipe")
+	fw := &failingWriter{
+		failAfter: ChunkSize + ChunkSize/2,
+		failErr:   fakePipeErr,
+	}
+
+	_, err = svc.ReadFile(ctx, rec.ID, fw)
+	if err == nil {
+		t.Error("expected ReadFile to fail with broken pipe, got nil")
+	}
+	if !strings.Contains(err.Error(), "broken pipe") {
+		t.Errorf("expected 'broken pipe' in error, got: %v", err)
+	}
+	t.Logf("ReadFile with failing writer: %v", err)
+}
+
+func TestReadFileFromCacheCancelledContext(t *testing.T) {
+	// When the context is cancelled, DecryptToWriter checks ctx.Err()
+	// before each chunk and returns context.Canceled early.
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	plaintext := make([]byte, 100)
+	if _, err := rand.Read(plaintext); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "small.bin", "application/octet-stream", bytes.NewReader(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var decrypted bytes.Buffer
+	_, err = svc.ReadFile(cancelCtx, rec.ID, &decrypted)
+	if err == nil {
+		t.Error("expected error from cancelled context during cache read, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+	t.Logf("cache read with cancelled ctx: %v", err)
+}
+
+func TestReadFileFromCacheWriterFailsFirstByte(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	plaintext := make([]byte, ChunkSize+200)
+	if _, err := rand.Read(plaintext); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "data.bin", "application/octet-stream", bytes.NewReader(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fw := &failingWriter{
+		failAfter: 0,
+		failErr:   fmt.Errorf("write tcp [::1]:8080->[::1]:12345: i/o timeout"),
+	}
+
+	_, err = svc.ReadFile(ctx, rec.ID, fw)
+	if err == nil {
+		t.Error("expected error from failing writer, got nil")
+	}
+	if !strings.Contains(err.Error(), "i/o timeout") {
+		t.Errorf("expected 'i/o timeout' in error, got: %v", err)
+	}
+	t.Logf("ReadFile from cache, writer fails first byte: %v", err)
+}
+
+func TestCanReadFileReturnsErrorWhenFileUnavailable(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	plaintext := []byte("hello")
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "test.txt", "text/plain", bytes.NewReader(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete cache AND the S3 objects to make file fully unavailable.
+	svc.Cache.Delete(rec.ID, rec.CiphertextSHA256)
+	// Remove from the fake store as well.
+	store := svc.Store.(*fakeReplicaStore)
+	store.mu.Lock()
+	for k := range store.objects {
+		if strings.Contains(k, rec.StorageKey) {
+			delete(store.objects, k)
+		}
+	}
+	store.mu.Unlock()
+
+	_, err = svc.CanReadFile(ctx, rec.ID)
+	if err == nil {
+		t.Error("expected CanReadFile to return error when file is unavailable")
+	}
+	if !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("expected 'unavailable' in error, got: %v", err)
+	}
+	t.Logf("CanReadFile unavailable: %v", err)
+}
+
+func TestReadFileUnavailableFromAllReplicas(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	plaintext := []byte("hello")
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "test.txt", "text/plain", bytes.NewReader(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete cache and all S3 objects.
+	svc.Cache.Delete(rec.ID, rec.CiphertextSHA256)
+	store := svc.Store.(*fakeReplicaStore)
+	store.mu.Lock()
+	for k := range store.objects {
+		if strings.Contains(k, rec.StorageKey) {
+			delete(store.objects, k)
+		}
+	}
+	store.mu.Unlock()
+
+	var decrypted bytes.Buffer
+	_, err = svc.ReadFile(ctx, rec.ID, &decrypted)
+	if err == nil {
+		t.Error("expected ReadFile to fail when file is unavailable from all replicas")
+	}
+	if !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("expected 'unavailable' in error, got: %v", err)
+	}
+	t.Logf("ReadFile unavailable: %v", err)
+}
+
+func TestReadFileCreatesOnlyOneCacheEntry(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	res, err := svc.DB.Exec(`INSERT INTO notes (title) VALUES ('test note')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteID, _ := res.LastInsertId()
+
+	plaintext := []byte("hello cache once")
+	rec, _, err := svc.CreateAttachment(ctx, noteID, "test.txt", "text/plain", bytes.NewReader(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back (from cache).
+	var decrypted1 bytes.Buffer
+	_, err = svc.ReadFile(ctx, rec.ID, &decrypted1)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// Cache path is stable — delete cache, read again (from replica),
+	// and verify cache is recreated at the same path.
+	cachePath := svc.Cache.PathFor(rec.ID, rec.CiphertextSHA256)
+	os.Remove(cachePath)
+
+	var decrypted2 bytes.Buffer
+	_, err = svc.ReadFile(ctx, rec.ID, &decrypted2)
+	if err != nil {
+		t.Fatalf("ReadFile after cache delete: %v", err)
+	}
+
+	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+		t.Error("expected cache to be recreated after replica fetch")
+	}
+
+	if !bytes.Equal(decrypted1.Bytes(), plaintext) {
+		t.Error("first read: decrypted data doesn't match plaintext")
+	}
+	if !bytes.Equal(decrypted2.Bytes(), plaintext) {
+		t.Error("second read (after cache delete): decrypted data doesn't match plaintext")
 	}
 }
 

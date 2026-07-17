@@ -379,6 +379,11 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := s.mediaService.ReadFile(r.Context(), fileID, w); err != nil {
+		// Client disconnect is not a real error — the context is already
+		// done (DecryptToWriter checks ctx.Err() between chunks now).
+		if r.Context().Err() != nil {
+			return
+		}
 		log.Printf("media: serve file %d: %v", fileID, err)
 		return
 	}
