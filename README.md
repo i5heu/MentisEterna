@@ -188,8 +188,9 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
     - [x] Note titles
     - [x] Note Paths
     - [x] Note tags
-    - [ ] Uploaded files (pdf and text files) should be added to embedding search.
-    - [ ] OCR, STT and all attachmend where possible should be added to SQLite FTS4 search.
+    - [ ] Uploaded text files (.txt, .srt, .vtt) should be added to embedding search and SQLite FTS4 search
+    - [ ] Uploaded pdfs should be added to embedding search and SQLite FTS4 search
+    - [ ] OCR and STT should be added to SQLite FTS4 search.
   - [x] Filter by note type
     - [x] Default exclution: Anything but default notes
     - [x] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.

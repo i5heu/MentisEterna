@@ -5,7 +5,7 @@
             <li v-for="file in attachments" :key="file.id">
                 <!-- Audio player for audio files -->
                 <template v-if="file.is_audio">
-                    <div class="audio-row">
+                    <div class="media-row">
                         <audio
                             :src="file.url"
                             controls
@@ -44,7 +44,7 @@
 
                 <!-- Image: OCR button -->
                 <template v-else-if="file.is_image">
-                    <div class="audio-row">
+                    <div class="media-row">
                         <a :href="file.url" target="_blank" rel="noreferrer">{{
                             file.filename
                         }}</a>
@@ -155,7 +155,7 @@ async function onTranscribe(file) {
             sttError[file.id] = result.error;
             sttState[file.id] = "error";
         } else if (result && result.stt_text) {
-            sttText[file.id] = result.stt_text;
+            sttText[file.id] = result.stt_text.trim();
             sttState[file.id] = "has_text";
         } else {
             sttError[file.id] =
@@ -203,7 +203,7 @@ async function onOCR(file) {
             ocrError[file.id] = result.error;
             ocrState[file.id] = "error";
         } else if (result && result.ocr_text) {
-            ocrText[file.id] = result.ocr_text;
+            ocrText[file.id] = result.ocr_text.trim();
             ocrState[file.id] = "has_text";
         } else {
             ocrError[file.id] =
@@ -277,7 +277,7 @@ function formatSize(bytes) {
 }
 
 /* Audio/image row + action buttons */
-.audio-row {
+.media-row {
     display: flex;
     align-items: center;
     gap: 8px;
