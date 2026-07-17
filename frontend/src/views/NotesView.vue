@@ -740,8 +740,9 @@
                                     "
                                     @keydown="onLinkEditorKeydown('body', $event)"
                                     @scroll="onLinkEditorScroll('body')"
-                                    @dragover.prevent
-                                    @drop.prevent="onBodyDrop"
+                                                    @dragover.prevent
+                                                    @drop.prevent="onBodyDrop"
+                                                    @paste="onBodyPaste"
                                 />
                                 <ShortcutHint
                                     v-if="
@@ -1691,7 +1692,7 @@ const autoTagsError = ref("");
 const autoTagsInfo = ref("");
 
 // Upload queue composable + upload modal
-const { enqueueAttachment, enqueueInline } = useUploadQueue();
+const { enqueueAttachment, enqueueInline, enqueueMultipleInline } = useUploadQueue();
 const showUploadModal = ref(false);
 
 function insertAtCursor(text) {
@@ -3952,16 +3953,58 @@ function onChunkedUploadComplete(result) {
 }
 
 async function onBodyDrop(e) {
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
     try {
         await ensureSelectedNoteSaved();
     } catch (err) {
         saveError.value = err.message;
         return;
     }
-    // Use chunked upload via the composable queue
-    enqueueInline(file, selected.value.id, props.token, {
+    // Use chunked upload via the composable queue — supports multiple files
+    const fileArray = Array.from(files);
+    enqueueMultipleInline(fileArray, selected.value.id, props.token, {
+        onComplete: (result) => {
+            if (result && result.markdown) {
+                insertAtCursor(result.markdown);
+            }
+            if (result && result.file) {
+                if (!selected.value.attachments) selected.value.attachments = [];
+                selected.value.attachments.push(result.file);
+            }
+        },
+    });
+}
+
+async function onBodyPaste(e) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const files = [];
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === "file") {
+            const file = item.getAsFile();
+            if (file) files.push(file);
+        }
+    }
+    if (files.length === 0) return;
+
+    // If there are text items too, let the default paste handle the text.
+    // We prevent default only for the file items so text still pastes normally.
+    const hasText = Array.from(items).some(item => item.kind === "string");
+    if (!hasText) {
+        e.preventDefault();
+    }
+
+    try {
+        await ensureSelectedNoteSaved();
+    } catch (err) {
+        saveError.value = err.message;
+        return;
+    }
+
+    enqueueMultipleInline(files, selected.value.id, props.token, {
         onComplete: (result) => {
             if (result && result.markdown) {
                 insertAtCursor(result.markdown);
