@@ -419,6 +419,9 @@ func (s *Service) RemoveAttachment(ctx context.Context, noteID, fileID int64) er
 		if _, err := tx.Exec(`UPDATE files SET deleted_at = ? WHERE id = ?`, now, fileID); err != nil {
 			return err
 		}
+		// Clean up vector embeddings for this file.
+		tx.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, fileID)
+		tx.Exec(`DELETE FROM vss_files_stt WHERE rowid = ?`, fileID)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -560,7 +563,8 @@ func (s *Service) CollectDeletableFilesAfterNoteDelete(ctx context.Context, note
 	return deletable, nil
 }
 
-// SoftDeleteFiles marks files as deleted and enqueues replica delete jobs.
+// SoftDeleteFiles marks files as deleted, cleans up their vector embeddings,
+// and enqueues replica delete jobs.
 func (s *Service) SoftDeleteFiles(fileIDs []int64) error {
 	if len(fileIDs) == 0 {
 		return nil
@@ -570,6 +574,9 @@ func (s *Service) SoftDeleteFiles(fileIDs []int64) error {
 		if _, err := s.DB.Exec(`UPDATE files SET deleted_at = ? WHERE id = ?`, now, fid); err != nil {
 			return fmt.Errorf("soft delete file %d: %w", fid, err)
 		}
+		// Clean up vector embeddings for this file.
+		s.DB.Exec(`DELETE FROM vss_files_ocr WHERE rowid = ?`, fid)
+		s.DB.Exec(`DELETE FROM vss_files_stt WHERE rowid = ?`, fid)
 		s.enqueueDelete(fid)
 	}
 	return nil
