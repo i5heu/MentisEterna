@@ -292,15 +292,21 @@ async function doUpload(data) {
             }
         }
 
-        if (isAborted(uploadId)) {
-            if (VERBOSE) console.warn("[cancelled] Upload aborted after start");
-            try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
-            post({ type: "error", uploadId, filename, error: "Upload cancelled" });
-            if (VERBOSE) console.groupEnd();
-            return;
-        }
+        	if (isAborted(uploadId)) {
+        		if (VERBOSE) console.warn("[cancelled] Upload aborted after start");
+        		try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
+        		post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+        		if (VERBOSE) console.groupEnd();
+        		return;
+        	}
 
-        // --- PHASE 4: Upload missing chunks from IndexedDB (if any) ---
+        	// Tell the main thread the session is created so it can insert
+        	// placeholder markdown immediately (before the upload completes).
+        	if (inline) {
+        		post({ type: "started", uploadId, filename, noteId });
+        	}
+
+        	// --- PHASE 4: Upload missing chunks from IndexedDB (if any) ---
         const allDone = alreadyDone.length === totalChunks;
         if (allDone) {
             if (VERBOSE) console.log("[uploading] All chunks already on server. Skipping to poll.");

@@ -91,12 +91,16 @@ export function useUploadQueue() {
                     completed.length = 0;
                 }, 5000);
 
-                // Fire per-upload completion callback if registered
-                if (uploadCallbacks.has(msg.uploadId)) {
-                    const cb = uploadCallbacks.get(msg.uploadId);
-                    uploadCallbacks.delete(msg.uploadId);
-                    cb(msg.result);
-                }
+                		// Fire per-upload completion callback if registered
+                		if (uploadCallbacks.has(msg.uploadId)) {
+                			const cb = uploadCallbacks.get(msg.uploadId);
+                			uploadCallbacks.delete(msg.uploadId);
+                			// Attach the uploadId as placeholder token so the callback
+                			// can replace the provisional markdown link with the real URL.
+                			const result = msg.result || {};
+                			result._placeholderToken = msg.uploadId;
+                			cb(result);
+                		}
 
                 // Remove from active list.
                 activeUploadIds.delete(msg.uploadId);
@@ -167,41 +171,45 @@ export function useUploadQueue() {
         }
     }
 
-    function enqueue(file, noteId, token, opts = {}) {
-        const entry = {
-            _id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-            file,
-            noteId,
-            token,
-            inline: !!opts.inline,
-            chunkSize: opts.chunkSize || DEFAULT_CHUNK_SIZE,
-            onComplete: opts.onComplete || null,
-        };
-        queue.value.push(entry);
-        processQueue();
-    }
+    	function enqueue(file, noteId, token, opts = {}) {
+    		const entry = {
+    			_id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    			file,
+    			noteId,
+    			token,
+    			inline: !!opts.inline,
+    			chunkSize: opts.chunkSize || DEFAULT_CHUNK_SIZE,
+    			onComplete: opts.onComplete || null,
+    		};
+    		queue.value.push(entry);
+    		processQueue();
+    		return entry._id;
+    	}
 
-    /**
-     * Enqueue multiple files at once. Each file gets its own queue entry
-     * and they will upload concurrently (up to the concurrency limit).
-     * @param {File[]} files
-     * @param {number} noteId
-     * @param {string} token
-     * @param {{ inline?: boolean, chunkSize?: number, onComplete?: (result: any) => void }} [opts]
-     */
-    function enqueueMultiple(files, noteId, token, opts = {}) {
-        for (const file of files) {
-            enqueue(file, noteId, token, opts);
-        }
-    }
+    	/**
+    	 * Enqueue multiple files at once. Each file gets its own queue entry
+    	 * and they will upload concurrently (up to the concurrency limit).
+    	 * @param {File[]} files
+    	 * @param {number} noteId
+    	 * @param {string} token
+    	 * @param {{ inline?: boolean, chunkSize?: number, onComplete?: (result: any) => void }} [opts]
+    	 * @returns {string[]}
+    	 */
+    	function enqueueMultiple(files, noteId, token, opts = {}) {
+    		const ids = [];
+    		for (const file of files) {
+    			ids.push(enqueue(file, noteId, token, opts));
+    		}
+    		return ids;
+    	}
 
-    function enqueueAttachment(file, noteId, token, opts = {}) {
-        enqueue(file, noteId, token, { ...opts, inline: false });
-    }
+    	function enqueueAttachment(file, noteId, token, opts = {}) {
+    		return enqueue(file, noteId, token, { ...opts, inline: false });
+    	}
 
-    function enqueueInline(file, noteId, token, opts = {}) {
-        enqueue(file, noteId, token, { ...opts, inline: true });
-    }
+    	function enqueueInline(file, noteId, token, opts = {}) {
+    		return enqueue(file, noteId, token, { ...opts, inline: true });
+    	}
 
     /**
      * Enqueue multiple files as inline uploads.
@@ -210,11 +218,9 @@ export function useUploadQueue() {
      * @param {string} token
      * @param {{ chunkSize?: number, onComplete?: (result: any) => void }} [opts]
      */
-    function enqueueMultipleInline(files, noteId, token, opts = {}) {
-        for (const file of files) {
-            enqueueInline(file, noteId, token, opts);
-        }
-    }
+	function enqueueMultipleInline(files, noteId, token, opts = {}) {
+		return enqueueMultiple(files, noteId, token, { ...opts, inline: true });
+	}
 
     function cancel(uploadId) {
         if (activeUploadIds.has(uploadId)) {
