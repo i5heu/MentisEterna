@@ -117,28 +117,38 @@ async function doUpload(data) {
     const totalSize = file.size;
     const totalChunks = Math.ceil(totalSize / chunkSize);
 
+    console.group("uploadWorker:", filename);
+    console.log("File size:", totalSize, "bytes,", "Chunks:", totalChunks, "Chunk size:", chunkSize);
+
     activeUpload = { uploadId, noteId, token };
     aborted = false;
 
     try {
-        // Compute full-file SHA-256 for server-side validation
+        // --- PHASE 1: Hash whole file ---
+        console.log("[hashing] Computing SHA-256 for:", filename);
         post({ type: "progress", uploadId, filename, loaded: 0, total: totalSize, percent: 0, speed: 0, status: "hashing" });
 
         const fileBuffer = await readChunk(file, 0, totalSize);
         const fileSha256 = await sha256(fileBuffer);
+        console.log("[hashing] SHA-256:", fileSha256);
 
-        // Start the upload session on server
+        // --- PHASE 2: Start session ---
+        console.log("[start] Creating upload session...");
         const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256);
         const serverUploadId = session.upload_id || uploadId;
+        console.log("[start] Server upload_id:", serverUploadId);
 
-        // Upload chunks
+        // --- PHASE 3: Upload chunks ---
+        console.log("[uploading] Sending", totalChunks, "chunks...");
         let loaded = 0;
         const startTime = performance.now();
 
         for (let i = 0; i < totalChunks; i++) {
             if (aborted) {
+                console.warn("[cancelled] Upload aborted by user");
                 try { await cancelUpload(token, noteId, serverUploadId); } catch (_) { /* ignore */ }
                 post({ type: "error", uploadId, filename, error: "Upload cancelled" });
+                console.groupEnd();
                 return;
             }
 
@@ -152,10 +162,11 @@ async function doUpload(data) {
 
             loaded += chunkBuffer.byteLength;
 
-            // Calculate speed
             const elapsed = (performance.now() - startTime) / 1000;
             const speed = elapsed > 0 ? loaded / elapsed : 0;
             const percent = Math.round((loaded / totalSize) * 100);
+
+            console.log("[uploading] Chunk", i + 1, "/", totalChunks, "sha256:", chunkSha256.slice(0, 12) + "...", percent + "%");
 
             post({ type: "chunk_done", uploadId, index: i });
             post({
@@ -170,7 +181,10 @@ async function doUpload(data) {
             });
         }
 
-        // Finish the upload — poll for detailed status while server does the work
+        console.log("[uploading] All", totalChunks, "chunks uploaded. Waiting for server...");
+
+        // --- PHASE 4: Server-side processing (poll status) ---
+        let lastLoggedStatus = "uploading";
         let stopPolling = false;
         const poller = (async () => {
             while (!stopPolling) {
@@ -188,6 +202,12 @@ async function doUpload(data) {
                         else if (status === "processing") statusText = "Encrypting and uploading...";
                         else if (status === "done") statusText = "Done";
                         else if (status === "failed") statusText = "Failed";
+
+                        if (status !== lastLoggedStatus) {
+                            console.log("[" + status + "]", statusText);
+                            lastLoggedStatus = status;
+                        }
+
                         post({
                             type: "progress", uploadId, filename,
                             loaded: totalSize, total: totalSize, percent: 100, speed: 0,
@@ -201,9 +221,15 @@ async function doUpload(data) {
         const result = await finishUpload(token, noteId, serverUploadId);
         stopPolling = true;
 
+        console.log("[done] Upload complete:", filename);
+        console.log("[done] Result:", result);
+        console.groupEnd();
+
         post({ type: "complete", uploadId, filename, result });
         activeUpload = null;
     } catch (error) {
+        console.error("[error]", filename, error.message || error);
+        console.groupEnd();
         post({ type: "error", uploadId, filename, error: error.message || String(error) });
         activeUpload = null;
     }
