@@ -2,10 +2,10 @@
     <div v-if="attachments?.length" class="note-attachments">
         <h4>Attachments</h4>
         <ul>
-            <li v-for="file in attachments" :key="file.id">
-                <!-- Audio player for audio files -->
-                <template v-if="file.is_audio">
-                    <div class="media-row">
+            <li v-for="file in attachments" :key="file.id" class="attachment-row">
+                <!-- Column 1: filename + action button -->
+                <div class="attach-file">
+                    <template v-if="file.is_audio">
                         <audio
                             :src="file.url"
                             controls
@@ -14,7 +14,7 @@
                         />
                         <button
                             v-if="sttState[file.id] !== 'has_text'"
-                            class="btn-ghost stt-btn"
+                            class="btn-ghost action-btn"
                             :title="sttState[file.id] === 'loading' ? 'Transcribing…' : 'Transcribe audio'"
                             :disabled="sttState[file.id] === 'loading'"
                             @click="onTranscribe(file)"
@@ -27,30 +27,18 @@
                         </button>
                         <button
                             v-else
-                            class="btn-ghost stt-btn"
+                            class="btn-ghost action-btn"
                             title="Hide transcription"
                             @click="onDismissSTT(file)"
                         >
                             Transcription
                         </button>
-                    </div>
-                    <div v-if="sttText[file.id]" class="stt-result">
-                        <pre class="stt-text">{{ sttText[file.id] }}</pre>
-                    </div>
-                    <div v-if="sttError[file.id]" class="stt-error">
-                        {{ sttError[file.id] }}
-                    </div>
-                </template>
-
-                <!-- Image: OCR button -->
-                <template v-else-if="file.is_image">
-                    <div class="media-row">
-                        <a :href="file.url" target="_blank" rel="noreferrer">{{
-                            file.filename
-                        }}</a>
+                    </template>
+                    <template v-else-if="file.is_image">
+                        <a :href="file.url" target="_blank" rel="noreferrer">{{ file.filename }}</a>
                         <button
                             v-if="ocrState[file.id] !== 'has_text'"
-                            class="btn-ghost stt-btn"
+                            class="btn-ghost action-btn"
                             :title="ocrState[file.id] === 'loading' ? 'Running OCR…' : 'Run OCR on image'"
                             :disabled="ocrState[file.id] === 'loading'"
                             @click="onOCR(file)"
@@ -63,31 +51,24 @@
                         </button>
                         <button
                             v-else
-                            class="btn-ghost stt-btn"
+                            class="btn-ghost action-btn"
                             title="Hide OCR result"
                             @click="onDismissOCR(file)"
                         >
                             OCR
                         </button>
-                    </div>
-                    <div v-if="ocrText[file.id]" class="stt-result">
-                        <pre class="stt-text">{{ ocrText[file.id] }}</pre>
-                    </div>
-                    <div v-if="ocrError[file.id]" class="stt-error">
-                        {{ ocrError[file.id] }}
-                    </div>
-                </template>
+                    </template>
+                    <template v-else>
+                        <a :href="file.url" target="_blank" rel="noreferrer">{{ file.filename }}</a>
+                    </template>
+                </div>
 
-                <!-- Regular file link for other files -->
-                <template v-else>
-                    <a :href="file.url" target="_blank" rel="noreferrer">{{
-                        file.filename
-                    }}</a>
-                </template>
-
+                <!-- Column 2: size -->
                 <span class="attachment-size">{{
                     formatSize(file.size_bytes)
                 }}</span>
+
+                <!-- Column 4: delete (only in edit mode) -->
                 <button
                     v-if="editing"
                     class="btn-ghost attachment-remove-btn"
@@ -96,6 +77,20 @@
                 >
                     ✕
                 </button>
+
+                <!-- Full-width results below the row -->
+                <div v-if="file.is_audio && sttText[file.id]" class="stt-result">
+                    <pre class="stt-text">{{ sttText[file.id] }}</pre>
+                </div>
+                <div v-if="file.is_audio && sttError[file.id]" class="stt-error">
+                    {{ sttError[file.id] }}
+                </div>
+                <div v-if="file.is_image && ocrText[file.id]" class="stt-result">
+                    <pre class="stt-text">{{ ocrText[file.id] }}</pre>
+                </div>
+                <div v-if="file.is_image && ocrError[file.id]" class="stt-error">
+                    {{ ocrError[file.id] }}
+                </div>
             </li>
         </ul>
     </div>
@@ -247,56 +242,64 @@ function formatSize(bytes) {
     margin: 0;
     padding: 0;
 }
-.note-attachments li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+
+/* Grid row */
+.attachment-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: baseline;
     gap: 8px;
     padding: 4px 0;
     font-size: 0.85rem;
 }
-.note-attachments a {
+
+/* Column 1: filename area */
+.attach-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: hidden;
+}
+.attach-file a {
     color: var(--accent-color, #60a5fa);
     text-decoration: none;
-    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.note-attachments a:hover {
+.attach-file a:hover {
     text-decoration: underline;
 }
-.attachment-size {
-    color: var(--font-color-secondary, #666);
+
+/* Action button (Transcribe / OCR), 1em left margin from filename */
+.action-btn {
     font-size: 0.75rem;
+    padding: 3px 8px;
     white-space: nowrap;
-}
-.attachment-remove-btn {
-    font-size: 0.75rem;
-    padding: 2px 6px;
+    margin-left: 0.5em;
 }
 
-/* Audio/image row + action buttons */
-.media-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
-}
 .audio-player {
     height: 32px;
     max-width: 260px;
     flex-shrink: 0;
 }
-.stt-btn {
+
+.attachment-size {
+    color: var(--font-color-secondary, #666);
     font-size: 0.75rem;
-    padding: 3px 8px;
     white-space: nowrap;
-    flex-shrink: 0;
 }
+
+.attachment-remove-btn {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+}
+
+/* Full-width results span all grid columns */
 .stt-result {
-    width: 100%;
+    grid-column: 1 / -1;
     margin-top: 4px;
 }
 .stt-text {
@@ -314,6 +317,7 @@ function formatSize(bytes) {
     margin: 0;
 }
 .stt-error {
+    grid-column: 1 / -1;
     width: 100%;
     color: var(--heading-color, #bf0604);
     font-size: 0.75rem;
