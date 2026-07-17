@@ -16,12 +16,19 @@ import (
 	"time"
 )
 
+// S3ObjectInfo holds key and size for a listed S3 object.
+type S3ObjectInfo struct {
+	Key  string
+	Size int64
+}
+
 // ReplicaStore defines the interface for S3-compatible object storage.
 type ReplicaStore interface {
 	Put(ctx context.Context, endpoint EndpointConfig, key string, src io.Reader, size int64) (etag string, err error)
 	Get(ctx context.Context, endpoint EndpointConfig, key string) (io.ReadCloser, error)
 	Delete(ctx context.Context, endpoint EndpointConfig, key string) error
 	List(ctx context.Context, endpoint EndpointConfig, prefix string) ([]string, error)
+	ListObjects(ctx context.Context, endpoint EndpointConfig, prefix string) ([]S3ObjectInfo, error)
 }
 
 // S3Store implements ReplicaStore using SigV4-signed HTTP requests.
@@ -148,7 +155,8 @@ type listObjectsV2Response struct {
 }
 
 type s3Object struct {
-	Key string
+	Key  string
+	Size int64
 }
 
 // List returns all object keys under the given prefix using the ListObjectsV2 API.
@@ -221,6 +229,73 @@ func (s *S3Store) List(ctx context.Context, ep EndpointConfig, prefix string) ([
 	}
 
 	return allKeys, nil
+}
+
+// ListObjects returns all objects (key + size) under the given prefix.
+// Handles pagination automatically via continuation tokens.
+func (s *S3Store) ListObjects(ctx context.Context, ep EndpointConfig, prefix string) ([]S3ObjectInfo, error) {
+	var allObjects []S3ObjectInfo
+	var continuationToken string
+
+	for {
+		u := s.objectURL(ep, "")
+		parsed, err := url.Parse(u)
+		if err != nil {
+			return nil, fmt.Errorf("parse base url: %w", err)
+		}
+
+		var qparts []string
+		qparts = append(qparts, "list-type=2")
+		qparts = append(qparts, "prefix="+prefix)
+		if continuationToken != "" {
+			qparts = append(qparts, "continuation-token="+continuationToken)
+		}
+		parsed.RawQuery = strings.Join(qparts, "&")
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := s.signRequest(req, ep, sha256Hex(nil)); err != nil {
+			return nil, fmt.Errorf("sign list: %w", err)
+		}
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("s3 list: %w", err)
+		}
+
+		if resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("s3 list: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read list body: %w", err)
+		}
+
+		var result listObjectsV2Response
+		if err := xml.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("parse list xml: %w (body=%s)", err, string(body))
+		}
+
+		for _, obj := range result.Contents {
+			if obj.Key != "" {
+				allObjects = append(allObjects, S3ObjectInfo{Key: obj.Key, Size: obj.Size})
+			}
+		}
+
+		if !result.IsTruncated {
+			break
+		}
+		continuationToken = result.NextToken
+	}
+
+	return allObjects, nil
 }
 
 // signRequest adds AWS Signature V4 authentication headers to the request.

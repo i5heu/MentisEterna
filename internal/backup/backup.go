@@ -15,6 +15,12 @@ import (
 	"github.com/i5heu/MentisEterna/internal/media"
 )
 
+// BackupStats holds summary statistics about stored backups.
+type BackupStats struct {
+	Count          int   `json:"count"`
+	TotalSizeBytes int64 `json:"total_size_bytes"`
+}
+
 // Service orchestrates encrypted database backups to S3-compatible storage.
 // It uses SQLite's Online Backup API for safe, consistent snapshots of a
 // running WAL-mode database, then encrypts with AES-256-GCM and uploads to
@@ -141,6 +147,32 @@ func (s *Service) Purge(ctx context.Context) (string, error) {
 
 	log.Printf("backup/purge: complete in %v (%d total deleted)", time.Since(start), totalDeleted)
 	return fmt.Sprintf("Retention purge: %s", strings.Join(parts, "; ")), nil
+}
+
+// Stats returns the total count and size of all backup objects across all
+// configured S3 endpoints. Objects are deduplicated by key so each logical
+// backup is counted once even if replicated to multiple endpoints.
+func (s *Service) Stats(ctx context.Context) (*BackupStats, error) {
+	seen := map[string]bool{}
+	stats := &BackupStats{}
+
+	for _, ep := range s.Endpoints {
+		objects, err := s.Store.ListObjects(ctx, ep, "backups/")
+		if err != nil {
+			log.Printf("backup/stats: list on %s failed: %v", ep.ID, err)
+			continue
+		}
+		for _, obj := range objects {
+			if seen[obj.Key] {
+				continue
+			}
+			seen[obj.Key] = true
+			stats.Count++
+			stats.TotalSizeBytes += obj.Size
+		}
+	}
+
+	return stats, nil
 }
 
 // snapshot creates a consistent point-in-time copy of the database using

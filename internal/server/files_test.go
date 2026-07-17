@@ -85,6 +85,20 @@ func (f *fakeMediaStore) List(_ context.Context, ep media.EndpointConfig, prefix
 	return keys, nil
 }
 
+func (f *fakeMediaStore) ListObjects(_ context.Context, ep media.EndpointConfig, prefix string) ([]media.S3ObjectInfo, error) {
+	var objs []media.S3ObjectInfo
+	fullPrefix := ep.ID + "/" + prefix
+	for k, v := range f.objects {
+		if strings.HasPrefix(k, fullPrefix) {
+			objs = append(objs, media.S3ObjectInfo{
+				Key:  strings.TrimPrefix(k, ep.ID+"/"),
+				Size: int64(len(v)),
+			})
+		}
+	}
+	return objs, nil
+}
+
 // createTestNoteWithSession creates a note and returns the note ID + session token.
 func createTestNoteWithSession(t *testing.T, s *Server) (int64, string) {
 	t.Helper()

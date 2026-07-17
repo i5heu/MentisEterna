@@ -69,6 +69,22 @@ func (f *fakeBackupStore) List(_ context.Context, ep media.EndpointConfig, prefi
 	return keys, nil
 }
 
+func (f *fakeBackupStore) ListObjects(_ context.Context, ep media.EndpointConfig, prefix string) ([]media.S3ObjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var objs []media.S3ObjectInfo
+	for k, v := range f.objects {
+		fullPrefix := ep.ID + "/" + prefix
+		if strings.HasPrefix(k, fullPrefix) {
+			objs = append(objs, media.S3ObjectInfo{
+				Key:  strings.TrimPrefix(k, ep.ID+"/"),
+				Size: int64(len(v)),
+			})
+		}
+	}
+	return objs, nil
+}
+
 func backupTestEndpoints() []media.EndpointConfig {
 	return []media.EndpointConfig{
 		{ID: "primary", Bucket: "test", Endpoint: "http://localhost:9000", AccessKeyID: "key", SecretAccessKey: "secret", Region: "us-east-1", ForcePathStyle: true},

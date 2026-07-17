@@ -31,6 +31,97 @@
                     </button>
             </div>
 
+            <!-- Section: Server Stats -->
+            <section class="options-section">
+                <h2 class="section-title">Server Stats</h2>
+                <p class="section-desc">
+                    Overview of database size, embeddings, media usage, and
+                    backup storage.
+                </p>
+                <button
+                    class="btn-ghost"
+                    :disabled="fetchingStats"
+                    @click="fetchStats"
+                >
+                    {{ fetchingStats ? "Loading…" : "Refresh Stats" }}
+                </button>
+                <div v-if="serverStats" class="status-block">
+                    <!-- Embeddings -->
+                    <div class="status-row">
+                        <span class="status-label">Note Embeddings</span>
+                        <code class="status-value">{{
+                            serverStats.vss_notes_count >= 0
+                                ? serverStats.vss_notes_count
+                                : "N/A"
+                        }}</code>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">OCR Embeddings</span>
+                        <code class="status-value">{{
+                            serverStats.vss_ocr_count >= 0
+                                ? serverStats.vss_ocr_count
+                                : "N/A"
+                        }}</code>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">STT Embeddings</span>
+                        <code class="status-value">{{
+                            serverStats.vss_stt_count >= 0
+                                ? serverStats.vss_stt_count
+                                : "N/A"
+                        }}</code>
+                    </div>
+                    <!-- Totals -->
+                    <div class="status-row">
+                        <span class="status-label">Total Notes</span>
+                        <code class="status-value">{{
+                            serverStats.total_notes >= 0
+                                ? serverStats.total_notes.toLocaleString()
+                                : "N/A"
+                        }}</code>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">DB Size</span>
+                        <code class="status-value">{{
+                            formatBytes(serverStats.db_size_bytes)
+                        }}</code>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Media Usage</span>
+                        <code class="status-value">{{
+                            formatBytes(serverStats.media_size_bytes)
+                        }}</code>
+                    </div>
+                    <!-- Backups -->
+                    <div class="status-row">
+                        <span class="status-label">Backup Count</span>
+                        <code class="status-value">{{
+                            serverStats.backup_count >= 0
+                                ? serverStats.backup_count
+                                : "N/A"
+                        }}</code>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Backup Size</span>
+                        <code class="status-value">{{
+                            formatBytes(serverStats.backup_size_bytes)
+                        }}</code>
+                    </div>
+                    <div
+                        v-if="serverStats.backup_error"
+                        class="status-row"
+                    >
+                        <span class="status-label">Backup Error</span>
+                        <span class="status-msg status-err-msg">{{
+                            serverStats.backup_error
+                        }}</span>
+                    </div>
+                </div>
+                <p v-if="serverStatsErr" class="msg-error">
+                    {{ serverStatsErr }}
+                </p>
+            </section>
+
             <!-- Section: Job Queue -->
             <section class="options-section">
                 <h2 class="section-title">Job Queue</h2>
@@ -689,7 +780,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import JobQueue from "../components/JobQueue.vue";
 import ShortcutHint from "../components/ShortcutHint.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
@@ -705,6 +796,7 @@ import {
     deleteUnknownS3Files as apiDeleteUnknownS3,
     fetchPrinterStatus,
     fetchAIStatus,
+    fetchServerStats,
 } from "../api.js";
 import { useKeyboardShortcuts } from "../composables/useKeyboardShortcuts.js";
 
@@ -767,10 +859,15 @@ const recalculatingRecipeCategories = ref(false);
 const recalculateRecipeCategoriesErr = ref("");
 const recalculateRecipeCategoriesOk = ref("");
 
-// Delete unknown S3 files
-const deletingUnknownS3 = ref(false);
-const deleteUnknownS3Err = ref("");
-const deleteUnknownS3Result = ref(null);
+	// Delete unknown S3 files
+	const deletingUnknownS3 = ref(false);
+	const deleteUnknownS3Err = ref("");
+	const deleteUnknownS3Result = ref(null);
+
+	// Server stats
+	const fetchingStats = ref(false);
+	const serverStats = ref(null);
+	const serverStatsErr = ref("");
 
 function goBack() {
     if (showHotkeys.value) {
@@ -1069,6 +1166,32 @@ async function doLogout() {
         emit("logout");
     }
 }
+
+function formatBytes(bytes) {
+    if (bytes == null || bytes < 0) return "N/A";
+    if (bytes === 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const val = bytes / Math.pow(1024, i);
+    return val.toFixed(val < 10 ? 1 : 0) + " " + units[i];
+}
+
+async function fetchStats() {
+    serverStatsErr.value = "";
+    serverStats.value = null;
+    fetchingStats.value = true;
+    try {
+        serverStats.value = await fetchServerStats(props.token);
+    } catch (e) {
+        serverStatsErr.value = e.message || "Failed to load server stats";
+    } finally {
+        fetchingStats.value = false;
+    }
+}
+
+onMounted(() => {
+    fetchStats();
+});
 </script>
 
 <style scoped>
