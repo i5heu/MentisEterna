@@ -393,6 +393,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// System status endpoints
 	mux.Handle("/system/printer-status", protected(s.handlePrinterStatus))
 	mux.Handle("/system/ai-status", protected(s.handleAIStatus))
+	mux.Handle("/system/stats", protected(s.handleServerStats))
 
 	mux.Handle("/file/", protected(s.serveFile))
 
@@ -977,4 +978,81 @@ func (s *Server) handleDeleteUnknownS3Files(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// handleServerStats returns aggregate server statistics: embedding counts,
+// total notes, database file size, media storage usage, and backup info.
+func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	resp := map[string]any{}
+
+	// Embedding counts.
+	vssNotesCount := int64(-1)
+	vssOCRCount := int64(-1)
+	vssSTTCount := int64(-1)
+	if s.db.VSSAvailable() {
+		var count int64
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_notes`).Scan(&count); err == nil {
+			vssNotesCount = count
+		}
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_ocr`).Scan(&count); err == nil {
+			vssOCRCount = count
+		}
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM vss_files_stt`).Scan(&count); err == nil {
+			vssSTTCount = count
+		}
+	}
+	resp["vss_notes_count"] = vssNotesCount
+	resp["vss_ocr_count"] = vssOCRCount
+	resp["vss_stt_count"] = vssSTTCount
+	resp["vss_available"] = s.db.VSSAvailable()
+
+	// Total notes.
+	var totalNotes int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&totalNotes); err != nil {
+		resp["total_notes"] = int64(-1)
+	} else {
+		resp["total_notes"] = totalNotes
+	}
+
+	// Database file size.
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "mentis.db"
+	}
+	dbSize := int64(-1)
+	if fi, err := os.Stat(dbPath); err == nil {
+		dbSize = fi.Size()
+	}
+	resp["db_size_bytes"] = dbSize
+
+	// Media space usage: sum of size_bytes for non-deleted files.
+	mediaSize := int64(-1)
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE deleted_at IS NULL`).Scan(&mediaSize); err != nil {
+		mediaSize = -1
+	}
+	resp["media_size_bytes"] = mediaSize
+
+	// Backup stats.
+	if s.backupService != nil {
+		stats, err := s.backupService.Stats(context.Background())
+		if err != nil {
+			resp["backup_count"] = int64(-1)
+			resp["backup_size_bytes"] = int64(-1)
+			resp["backup_error"] = err.Error()
+		} else {
+			resp["backup_count"] = stats.Count
+			resp["backup_size_bytes"] = stats.TotalSizeBytes
+		}
+	} else {
+		resp["backup_count"] = int64(-1)
+		resp["backup_size_bytes"] = int64(-1)
+		resp["backup_error"] = "Backups not enabled"
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }

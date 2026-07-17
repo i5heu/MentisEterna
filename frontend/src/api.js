@@ -686,6 +686,10 @@ export async function fetchAIStatus(token) {
     return request("/system/ai-status", { headers: authHeaders(token) });
 }
 
+export async function fetchServerStats(token) {
+    return request("/system/stats", { headers: authHeaders(token) });
+}
+
 export async function beginPasskeyLogin() {
     const pubKeyOpts = await request("/webauthn/login/begin");
 

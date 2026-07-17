@@ -97,6 +97,22 @@ func (f *fakeReplicaStore) List(_ context.Context, ep EndpointConfig, prefix str
 	return keys, nil
 }
 
+func (f *fakeReplicaStore) ListObjects(_ context.Context, ep EndpointConfig, prefix string) ([]S3ObjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var objs []S3ObjectInfo
+	fullPrefix := ep.ID + "/" + prefix
+	for k, v := range f.objects {
+		if strings.HasPrefix(k, fullPrefix) {
+			objs = append(objs, S3ObjectInfo{
+				Key:  strings.TrimPrefix(k, ep.ID+"/"),
+				Size: int64(len(v)),
+			})
+		}
+	}
+	return objs, nil
+}
+
 // --- Helpers ---
 
 func openTestMediaDB(t *testing.T) *db.DB {

@@ -152,9 +152,11 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] files with wired MIMES will be uploaded correctly but the upload HTTP request will fail with 502 "STT for file 8 completed with error: unsupported MIME type for STT: image/RAF"
 - [x] The Pantry ingredients should not be added to the grocery list as default, they must be added manually via the "Add Pantry Staples" button in the recipe overview.
 - [x] Get rid of the auth proxy, rather harden code
+- [x] Video inline upload and playback
 
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
+- [ ] Uploads in chunks, verify checksum and resume if connection is lost.
 - [ ] Setup building pipeline
 - [x] In note edit add "//" to search and add a page link to the note
 - [x] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
