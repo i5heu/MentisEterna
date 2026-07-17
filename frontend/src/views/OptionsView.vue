@@ -46,6 +46,14 @@
                     {{ fetchingStats ? "Loading…" : "Refresh Stats" }}
                 </button>
                 <div v-if="serverStats" class="status-block">
+                    <div class="status-row">
+                        <span class="status-label">Total Notes</span>
+                        <code class="status-value">{{
+                            serverStats.total_notes >= 0
+                                ? serverStats.total_notes.toLocaleString()
+                                : "N/A"
+                        }}</code>
+                    </div>
                     <!-- Embeddings -->
                     <div class="status-row">
                         <span class="status-label">Note Embeddings</span>
@@ -71,15 +79,7 @@
                                 : "N/A"
                         }}</code>
                     </div>
-                    <!-- Totals -->
-                    <div class="status-row">
-                        <span class="status-label">Total Notes</span>
-                        <code class="status-value">{{
-                            serverStats.total_notes >= 0
-                                ? serverStats.total_notes.toLocaleString()
-                                : "N/A"
-                        }}</code>
-                    </div>
+                    <!-- Sizes -->
                     <div class="status-row">
                         <span class="status-label">DB Size</span>
                         <code class="status-value">{{
