@@ -262,6 +262,9 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Fatalf("Failed to start job manager: %v", err)
 	}
 
+	// Clean up any expired chunked upload sessions from a previous run.
+	s.CleanupExpiredUploadSessions()
+
 	mux := http.NewServeMux()
 	protected := func(h http.HandlerFunc) http.Handler {
 		return s.requireAuth(h)
@@ -340,12 +343,16 @@ func (s *Server) Start(ctx context.Context) error {
 			s.handleAutoTags(w, r)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/files") {
-			s.uploadAttachment(w, r)
+		if strings.Contains(r.URL.Path, "/chunked/") {
+			s.handleChunkedRoute(w, r)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/files/inline") {
 			s.uploadInlineFile(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/files") {
+			s.uploadAttachment(w, r)
 			return
 		}
 		// DELETE /notes/:id/files/:fileID

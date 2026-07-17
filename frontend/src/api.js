@@ -503,6 +503,50 @@ export async function deleteAttachment(token, noteId, fileId) {
     });
 }
 
+// --- Chunked Upload API ---
+
+export async function startChunkedUpload(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256) {
+    const params = new URLSearchParams();
+    if (inline) params.set("inline", "1");
+    params.set("filename", filename);
+    params.set("mime_type", mimeType);
+    params.set("total_size", String(totalSize));
+    params.set("chunk_size", String(chunkSize));
+    params.set("total_chunks", String(totalChunks));
+    params.set("sha256", fileSha256);
+    return request(`/notes/${noteId}/chunked/start?${params}`, { method: "POST" });
+}
+
+export async function uploadChunk(token, noteId, uploadId, chunkIndex, chunkBlob, sha256) {
+    const formData = new FormData();
+    formData.append("chunk", chunkBlob, "chunk");
+    formData.append("index", String(chunkIndex));
+    formData.append("sha256", sha256);
+    return request(`/notes/${noteId}/chunked/${uploadId}/chunk`, {
+        method: "POST",
+        body: formData,
+    });
+}
+
+export async function getChunkedUploadStatus(token, noteId, uploadId) {
+    return request(`/notes/${noteId}/chunked/${uploadId}/status`, {
+        headers: authHeaders(token),
+    });
+}
+
+export async function finishChunkedUpload(token, noteId, uploadId, inline) {
+    const opts = { method: "POST" };
+    if (inline) {
+        opts.headers = authHeaders(token);
+        opts.body = JSON.stringify({ inline: true });
+    }
+    return request(`/notes/${noteId}/chunked/${uploadId}/finish`, opts);
+}
+
+export async function cancelChunkedUpload(token, noteId, uploadId) {
+    return request(`/notes/${noteId}/chunked/${uploadId}/cancel`, { method: "POST" });
+}
+
 // --- STT / Transcription API ---
 
 export async function fetchSTTResult(token, fileId) {

@@ -167,6 +167,9 @@ func (d *DB) migrate() error {
 	if err := d.ensureMediaTables(); err != nil {
 		return err
 	}
+	if err := d.ensureUploadSessions(); err != nil {
+		return err
+	}
 	if err := d.ensureOCRTables(); err != nil {
 		return err
 	}
@@ -709,6 +712,26 @@ func (d *DB) ensureNotesFTS() error {
 		}
 	}
 	return nil
+}
+
+func (d *DB) ensureUploadSessions() error {
+	_, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS upload_sessions (
+			upload_id   TEXT PRIMARY KEY,
+			note_id     INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+			filename    TEXT NOT NULL,
+			mime_type   TEXT NOT NULL DEFAULT '',
+			total_size  INTEGER NOT NULL,
+			chunk_size  INTEGER NOT NULL,
+			total_chunks INTEGER NOT NULL,
+			file_sha256 TEXT,
+			inline      INTEGER NOT NULL DEFAULT 0,
+			chunks_done TEXT NOT NULL DEFAULT '[]',
+			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			expires_at  DATETIME NOT NULL
+		);
+	`)
+	return err
 }
 
 func (d *DB) ensureOCRTables() error {

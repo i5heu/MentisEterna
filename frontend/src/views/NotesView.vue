@@ -1579,6 +1579,18 @@
             :typedBuffer="linkHintTyped"
         />
         <KeyboardShortcutsHelpModal v-model="showHotkeys" :items="hotkeys" />
+
+        <!-- Upload modal -->
+        <UploadModal
+            :visible="showUploadModal"
+            :note-id="selected?.id"
+            :token="token"
+            @close="showUploadModal = false"
+            @uploaded="onChunkedUploadComplete"
+        />
+
+        <!-- Upload progress panel -->
+        <UploadProgress />
     </div>
 </template>
 
@@ -1610,9 +1622,10 @@ import NoteAttachments from "../components/NoteAttachments.vue";
 import ShortcutHint from "../components/ShortcutHint.vue";
 import LinkHintOverlay from "../components/LinkHintOverlay.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
+import UploadModal from "../components/UploadModal.vue";
+import UploadProgress from "../components/UploadProgress.vue";
+import { useUploadQueue } from "../composables/useUploadQueue.js";
 import {
-    uploadAttachment,
-    uploadInlineFile,
     deleteAttachment,
 } from "../api.js";
 import {
@@ -1676,6 +1689,10 @@ const tagOptions = ref([]);
 const autoTagsRefreshing = ref(false);
 const autoTagsError = ref("");
 const autoTagsInfo = ref("");
+
+// Upload queue composable + upload modal
+const { enqueueAttachment, enqueueInline } = useUploadQueue();
+const showUploadModal = ref(false);
 
 function insertAtCursor(text) {
     const el = bodyTextarea.value;
@@ -3923,24 +3940,15 @@ async function onAttachFile() {
         saveError.value = e.message;
         return;
     }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.onchange = async () => {
-        const file = input.files[0];
-        if (!file) return;
-        try {
-            const result = await uploadAttachment(
-                props.token,
-                selected.value.id,
-                file,
-            );
-            if (!selected.value.attachments) selected.value.attachments = [];
-            selected.value.attachments.push(result.file);
-        } catch (e) {
-            saveError.value = e.message;
-        }
-    };
-    input.click();
+    showUploadModal.value = true;
+}
+
+function onChunkedUploadComplete(result) {
+    if (!selected.value) return;
+    if (result && result.file) {
+        if (!selected.value.attachments) selected.value.attachments = [];
+        selected.value.attachments.push(result.file);
+    }
 }
 
 async function onBodyDrop(e) {
@@ -3952,18 +3960,18 @@ async function onBodyDrop(e) {
         saveError.value = err.message;
         return;
     }
-    try {
-        const result = await uploadInlineFile(
-            props.token,
-            selected.value.id,
-            file,
-        );
-        insertAtCursor(result.markdown);
-        if (!selected.value.attachments) selected.value.attachments = [];
-        selected.value.attachments.push(result.file);
-    } catch (err) {
-        saveError.value = err.message;
-    }
+    // Use chunked upload via the composable queue
+    enqueueInline(file, selected.value.id, props.token, {
+        onComplete: (result) => {
+            if (result && result.markdown) {
+                insertAtCursor(result.markdown);
+            }
+            if (result && result.file) {
+                if (!selected.value.attachments) selected.value.attachments = [];
+                selected.value.attachments.push(result.file);
+            }
+        },
+    });
 }
 
 async function removeAttachment(file) {
