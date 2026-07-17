@@ -2980,30 +2980,33 @@ const isEditing = ref(false);
 const renderedBody = computed(() => {
     if (!editBody.value)
         return '<p style="color: var(--font-color-secondary);">Nothing to preview</p>';
-    return postProcessVideoTags(md.render(editBody.value), selected.value?.attachments);
+	    return postProcessMediaTags(md.render(editBody.value), selected.value?.attachments);
 });
 
 // Render any markdown body (used for child messages)
 function renderMarkdown(body, attachments) {
     if (!body)
         return '<p style="color: var(--font-color-secondary);">Empty</p>';
-    return postProcessVideoTags(md.render(body), attachments);
+	    return postProcessMediaTags(md.render(body), attachments);
 }
 
-// Post-process rendered HTML: convert <img> tags pointing to video files into <video> elements.
-function postProcessVideoTags(html, attachments) {
+// Post-process rendered HTML: convert <img> tags to <video>/<audio> for media files.
+function postProcessMediaTags(html, attachments) {
     if (!html || !attachments?.length) return html;
-    const videoFiles = new Map();
+    const mediaFiles = new Map();
     for (const f of attachments) {
-        if (f.is_video && f.url) {
-            videoFiles.set(f.url, f);
+        if ((f.is_video || f.is_audio) && f.url) {
+            mediaFiles.set(f.url, f);
         }
     }
-    if (videoFiles.size === 0) return html;
-    // Match <img src="/file/X/Y" ...> and replace with <video> for known video files
+    if (mediaFiles.size === 0) return html;
+    // Replace <img src="/file/X/Y" ...> with <video> or <audio> for known media files
     return html.replace(/<img\b[^>]*\bsrc="([^"]*\/file\/[^"]+)"[^>]*>/gi, (match, src) => {
-        const file = videoFiles.get(src);
+        const file = mediaFiles.get(src);
         if (!file) return match;
+        if (file.is_audio) {
+            return `<audio src="${src}" controls class="inline-audio" preload="metadata"></audio>`;
+        }
         return `<video src="${src}" controls class="inline-video" preload="metadata"></video>`;
     });
 }
