@@ -336,11 +336,12 @@ export function useKeyboardShortcuts(shortcutDefinitions, options = {}) {
             return;
         }
 
-        if (event.key === hintModifierKey && !event.altKey && !event.metaKey) {
-            if (!hintModifierDown.value && !event.repeat) {
-                startHintInterception();
-            }
-            return;
+        	if (event.key === hintModifierKey && !event.altKey && !event.metaKey) {
+        		event.preventDefault();
+        		if (!hintModifierDown.value && !event.repeat) {
+        			startHintInterception();
+        		}
+        		return;
         }
 
         if (
