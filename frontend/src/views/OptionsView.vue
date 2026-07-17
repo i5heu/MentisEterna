@@ -735,6 +735,72 @@
                             </p>
                         </div>
                     </div>
+
+                    <!-- Delete Search Leftovers -->
+                    <div class="reindex-card">
+                        <div class="reindex-card-top">
+                            <div class="reindex-card-header">
+                                <span class="reindex-icon">&#x1F5D1;</span>
+                                <div>
+                                    <h3>Delete Search Leftovers</h3>
+                                    <p class="reindex-card-desc">
+                                        Remove orphaned vector embeddings and
+                                        search chunks for notes and files that
+                                        no longer exist.
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                class="btn-danger btn-sm shortcut-anchor"
+                                :title="
+                                    getShortcutLabel(
+                                        'delete-search-leftovers',
+                                    )
+                                "
+                                :disabled="deletingSearchLeftovers"
+                                @click="deleteSearchLeftovers"
+                            >
+                                {{
+                                    deletingSearchLeftovers
+                                        ? "Cleaning…"
+                                        : "Delete Search Leftovers"
+                                }}
+                                <ShortcutHint
+                                    v-if="
+                                        shortcutHintsVisible &&
+                                        isShortcutEnabled(
+                                            'delete-search-leftovers',
+                                        )
+                                    "
+                                    :label="
+                                        getHintLabel(
+                                            'delete-search-leftovers',
+                                        )
+                                    "
+                                />
+                            </button>
+                        </div>
+                        <div
+                            v-if="
+                                deleteSearchLeftoversErr ||
+                                deleteSearchLeftoversOk
+                            "
+                            class="reindex-card-status"
+                        >
+                            <p
+                                v-if="deleteSearchLeftoversErr"
+                                class="msg-error"
+                            >
+                                {{ deleteSearchLeftoversErr }}
+                            </p>
+                            <p
+                                v-if="deleteSearchLeftoversOk"
+                                class="msg-ok"
+                            >
+                                {{ deleteSearchLeftoversOk }}
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -853,6 +919,7 @@ import {
     refreshAllAutoTags as apiRefreshAllAutoTags,
     recalculateRecipeCategories as apiRecalculateRecipeCategories,
     deleteUnknownS3Files as apiDeleteUnknownS3,
+    deleteSearchLeftovers as apiDeleteSearchLeftovers,
     fetchPrinterStatus,
     fetchAIStatus,
     fetchServerStats,
@@ -925,6 +992,11 @@ const refreshAllAutoTagsOk = ref("");
 const recalculatingRecipeCategories = ref(false);
 const recalculateRecipeCategoriesErr = ref("");
 const recalculateRecipeCategoriesOk = ref("");
+
+// Delete search leftovers
+const deletingSearchLeftovers = ref(false);
+const deleteSearchLeftoversErr = ref("");
+const deleteSearchLeftoversOk = ref("");
 
 	// Delete unknown S3 files
 	const deletingUnknownS3 = ref(false);
@@ -1044,6 +1116,14 @@ const shortcutDefinitions = computed(() => [
         allowInInput: true,
         enabled: () => !deletingUnknownS3.value,
         handler: () => deleteUnknownS3(),
+    },
+    {
+        id: "delete-search-leftovers",
+        description: "Delete orphaned search embeddings and chunks",
+        hintKey: "X",
+        allowInInput: true,
+        enabled: () => !deletingSearchLeftovers.value,
+        handler: () => deleteSearchLeftovers(),
     },
     {
         id: "logout",
@@ -1263,6 +1343,28 @@ async function deleteUnknownS3() {
         deleteUnknownS3Err.value = e.message || "S3 cleanup failed";
     } finally {
         deletingUnknownS3.value = false;
+    }
+}
+
+async function deleteSearchLeftovers() {
+    deleteSearchLeftoversErr.value = "";
+    deleteSearchLeftoversOk.value = "";
+    deletingSearchLeftovers.value = true;
+    try {
+        const res = await apiDeleteSearchLeftovers(props.token);
+        const parts = [];
+        for (const [key, count] of Object.entries(res)) {
+            if (count > 0) parts.push(`${key}: ${count}`);
+        }
+        deleteSearchLeftoversOk.value =
+            parts.length > 0
+                ? "Removed: " + parts.join(", ")
+                : "No orphans found — everything is clean.";
+    } catch (e) {
+        deleteSearchLeftoversErr.value =
+            e.message || "Search leftover cleanup failed";
+    } finally {
+        deletingSearchLeftovers.value = false;
     }
 }
 

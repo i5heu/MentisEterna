@@ -398,6 +398,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.Handle("/maintenance/refresh-auto-tags", protected(s.handleRefreshAllAutoTags))
 	mux.Handle("/maintenance/recalculate-recipe-categories", protected(s.handleRecalculateRecipeIngredientCategories))
 	mux.Handle("/maintenance/delete-unknown-s3-files", protected(s.handleDeleteUnknownS3Files))
+	mux.Handle("/maintenance/delete-search-leftovers", protected(s.handleDeleteSearchLeftovers))
 
 	// System status endpoints
 	mux.Handle("/system/printer-status", protected(s.handlePrinterStatus))
@@ -610,6 +611,64 @@ func (s *Server) handleRecalculateRecipeIngredientCategories(w http.ResponseWrit
 		"run_id":  runID,
 		"message": "Ingredient category recalculation enqueued. Check /jobs for progress.",
 	})
+}
+
+// handleDeleteSearchLeftovers removes orphaned rows from all vector and chunk
+// tables: rows that reference deleted notes or files. Returns the count of
+// deleted rows per table.
+func (s *Server) handleDeleteSearchLeftovers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.db.VSSAvailable() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VSS not available"})
+		return
+	}
+
+	result := map[string]int64{}
+
+	// Delete vss_note_search vectors whose chunk no longer exists.
+	if n, err := s.db.Exec(`DELETE FROM vss_note_search WHERE rowid NOT IN (SELECT id FROM note_search_chunks)`); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("vss_note_search: %v", err)})
+		return
+	} else {
+		result["vss_note_search_orphaned"], _ = n.RowsAffected()
+	}
+
+	// Delete note_search_chunks whose note no longer exists.
+	if n, err := s.db.Exec(`DELETE FROM note_search_chunks WHERE note_id NOT IN (SELECT id FROM notes)`); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("note_search_chunks: %v", err)})
+		return
+	} else {
+		result["note_search_chunks_orphaned"], _ = n.RowsAffected()
+	}
+
+	// Delete legacy vss_notes vectors whose note no longer exists.
+	if n, err := s.db.Exec(`DELETE FROM vss_notes WHERE rowid NOT IN (SELECT id FROM notes)`); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("vss_notes: %v", err)})
+		return
+	} else {
+		result["vss_notes_orphaned"], _ = n.RowsAffected()
+	}
+
+	// Delete vss_files_ocr vectors whose file is deleted or doesn't exist.
+	if n, err := s.db.Exec(`DELETE FROM vss_files_ocr WHERE rowid NOT IN (SELECT id FROM files WHERE deleted_at IS NULL)`); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("vss_files_ocr: %v", err)})
+		return
+	} else {
+		result["vss_files_ocr_orphaned"], _ = n.RowsAffected()
+	}
+
+	// Delete vss_files_stt vectors whose file is deleted or doesn't exist.
+	if n, err := s.db.Exec(`DELETE FROM vss_files_stt WHERE rowid NOT IN (SELECT id FROM files WHERE deleted_at IS NULL)`); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("vss_files_stt: %v", err)})
+		return
+	} else {
+		result["vss_files_stt_orphaned"], _ = n.RowsAffected()
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleReindexNotes enqueues vss_index jobs for all notes that are missing

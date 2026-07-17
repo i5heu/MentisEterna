@@ -688,6 +688,7 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 	mux.Handle("/maintenance/refresh-auto-tags", protected(s.handleRefreshAllAutoTags))
 	mux.Handle("/maintenance/recalculate-recipe-categories", protected(s.handleRecalculateRecipeIngredientCategories))
 	mux.Handle("/maintenance/delete-unknown-s3-files", protected(s.handleDeleteUnknownS3Files))
+	mux.Handle("/maintenance/delete-search-leftovers", protected(s.handleDeleteSearchLeftovers))
 	return mux
 }
 

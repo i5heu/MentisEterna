@@ -753,6 +753,13 @@ export async function deleteUnknownS3Files(token) {
     });
 }
 
+export async function deleteSearchLeftovers(token) {
+    return request("/maintenance/delete-search-leftovers", {
+        method: "POST",
+        headers: authHeaders(token),
+    });
+}
+
 /**
  * Begin passkey login (discoverable / usernameless).
  */
