@@ -912,6 +912,7 @@
                             :attachments="selected.attachments"
                             :editing="isEditing"
                             :token="token"
+                            :note-id="selected.id"
                             @remove="removeAttachment"
                         />
                     </div>
@@ -1293,6 +1294,7 @@
                         :attachments="threadNote.attachments"
                         :editing="false"
                         :token="token"
+                        :note-id="threadNote.id"
                     />
                 </div>
 
