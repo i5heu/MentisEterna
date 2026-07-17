@@ -37,7 +37,13 @@ func applyFileResponseHeaders(w http.ResponseWriter, mimeType, filename string, 
 	h.Set("Content-Disposition", fileDisposition(mimeType, filename))
 	h.Set("Accept-Ranges", "bytes")
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Content-Security-Policy", fileContentSecurityPolicy)
+	// Restrictive CSP prevents uploaded HTML/SVG/etc. from executing scripts
+	// if served directly. Skip it for inline media (images, video, audio) —
+	// those types load as <img>/<video>/<audio> subresources and Firefox
+	// enforces CSP on subresource responses, which would block playback.
+	if !media.AllowsInline(mimeType) {
+		h.Set("Content-Security-Policy", fileContentSecurityPolicy)
+	}
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	if sizeBytes >= 0 {
 		h.Set("Content-Length", strconv.FormatInt(sizeBytes, 10))

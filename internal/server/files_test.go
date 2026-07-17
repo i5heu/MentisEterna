@@ -534,7 +534,7 @@ func TestServeFileUnsafeHTMLIsForcedToDownload(t *testing.T) {
 		t.Fatalf("expected nosniff, got %q", got)
 	}
 	if got := serveW.Header().Get("Content-Security-Policy"); got != fileContentSecurityPolicy {
-		t.Fatalf("expected restrictive file CSP, got %q", got)
+		t.Fatalf("expected restrictive file CSP for non-inline HTML, got %q", got)
 	}
 	if body := serveW.Body.String(); body != string(html) {
 		t.Fatalf("unexpected served body: %q", body)
@@ -574,6 +574,9 @@ func TestServeFileSVGIsForcedToDownload(t *testing.T) {
 	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
 		t.Fatalf("expected attachment disposition, got %q", got)
 	}
+	if got := serveW.Header().Get("Content-Security-Policy"); got != fileContentSecurityPolicy {
+		t.Fatalf("expected restrictive CSP for non-inline SVG, got %q", got)
+	}
 }
 
 func TestServeFileSafePNGStaysInline(t *testing.T) {
@@ -608,6 +611,9 @@ func TestServeFileSafePNGStaysInline(t *testing.T) {
 	if got := serveW.Header().Get("Content-Type"); got != "image/png" {
 		t.Fatalf("expected image/png, got %q", got)
 	}
+	if got := serveW.Header().Get("Content-Security-Policy"); got != "" {
+		t.Fatalf("expected no CSP on inline image (used as subresource), got %q", got)
+	}
 }
 
 func TestServeFilePDFIsForcedToDownload(t *testing.T) {
@@ -638,6 +644,9 @@ func TestServeFilePDFIsForcedToDownload(t *testing.T) {
 	}
 	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
 		t.Fatalf("expected attachment disposition, got %q", got)
+	}
+	if got := serveW.Header().Get("Content-Security-Policy"); got != fileContentSecurityPolicy {
+		t.Fatalf("expected restrictive CSP for non-inline PDF, got %q", got)
 	}
 }
 
@@ -673,6 +682,9 @@ func TestServeFileAudioRemainsInline(t *testing.T) {
 	}
 	if got := serveW.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "inline") {
 		t.Fatalf("expected inline disposition, got %q", got)
+	}
+	if got := serveW.Header().Get("Content-Security-Policy"); got != "" {
+		t.Fatalf("expected no CSP on inline audio (used as subresource), got %q", got)
 	}
 }
 
