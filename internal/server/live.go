@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	liveTypeReady       = "live.ready"
-	liveTypeNotesChange = "notes.changed"
-	liveTypeJobsChange  = "jobs.changed"
+	liveTypeReady                  = "live.ready"
+	liveTypeNotesChange            = "notes.changed"
+	liveTypeJobsChange             = "jobs.changed"
+	liveReasonInlineUploadResolved = "inline_upload_resolved"
 
 	wsWriteWait      = 10 * time.Second
 	wsPongWait       = 60 * time.Second
@@ -24,15 +25,23 @@ const (
 	wsMaxMessageSize = 1024
 )
 
+type liveUploadResolution struct {
+	NoteID           int64     `json:"note_id"`
+	PlaceholderToken string    `json:"placeholder_token,omitempty"`
+	Markdown         string    `json:"markdown,omitempty"`
+	File             *NoteFile `json:"file,omitempty"`
+}
+
 type liveMessage struct {
-	Type               string         `json:"type"`
-	Timestamp          string         `json:"timestamp,omitempty"`
-	Reason             string         `json:"reason,omitempty"`
-	NoteIDs            []int64        `json:"note_ids,omitempty"`
-	Job                *jobs.RunEvent `json:"job,omitempty"`
-	ClientSentAtMS     *float64       `json:"client_sent_at_ms,omitempty"`
-	ServerReceivedAtUS int64          `json:"server_received_at_us,omitempty"`
-	ServerSentAtUS     int64          `json:"server_sent_at_us,omitempty"`
+	Type               string                `json:"type"`
+	Timestamp          string                `json:"timestamp,omitempty"`
+	Reason             string                `json:"reason,omitempty"`
+	NoteIDs            []int64               `json:"note_ids,omitempty"`
+	UploadResolution   *liveUploadResolution `json:"upload_resolution,omitempty"`
+	Job                *jobs.RunEvent        `json:"job,omitempty"`
+	ClientSentAtMS     *float64              `json:"client_sent_at_ms,omitempty"`
+	ServerReceivedAtUS int64                 `json:"server_received_at_us,omitempty"`
+	ServerSentAtUS     int64                 `json:"server_sent_at_us,omitempty"`
 }
 
 type liveHub struct {
@@ -123,6 +132,31 @@ func (s *Server) notifyJobEvent(evt jobs.RunEvent) {
 		Type:      liveTypeJobsChange,
 		Timestamp: liveTimestamp(),
 		Job:       &copied,
+	})
+}
+
+func (s *Server) notifyInlineUploadResolved(noteID int64, placeholderToken, markdown string, file *NoteFile) {
+	if s == nil || s.liveHub == nil || noteID <= 0 {
+		return
+	}
+
+	var fileCopy *NoteFile
+	if file != nil {
+		copied := *file
+		fileCopy = &copied
+	}
+
+	s.liveHub.broadcast(liveMessage{
+		Type:      liveTypeNotesChange,
+		Timestamp: liveTimestamp(),
+		Reason:    liveReasonInlineUploadResolved,
+		NoteIDs:   []int64{noteID},
+		UploadResolution: &liveUploadResolution{
+			NoteID:           noteID,
+			PlaceholderToken: placeholderToken,
+			Markdown:         markdown,
+			File:             fileCopy,
+		},
 	})
 }
 

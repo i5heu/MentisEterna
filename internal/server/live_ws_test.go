@@ -192,6 +192,21 @@ func TestLiveMessageJSONRoundtrip(t *testing.T) {
 		"notes changed with note_ids": {
 			msg: liveMessage{Type: liveTypeNotesChange, Timestamp: "2026-01-01T00:00:00Z", Reason: "updated", NoteIDs: []int64{1, 2, 3}},
 		},
+		// Guards against upload-resolution payloads being dropped or renamed.
+		"notes changed with upload resolution": {
+			msg: liveMessage{
+				Type:      liveTypeNotesChange,
+				Timestamp: "2026-01-01T00:00:00Z",
+				Reason:    liveReasonInlineUploadResolved,
+				NoteIDs:   []int64{14},
+				UploadResolution: &liveUploadResolution{
+					NoteID:           14,
+					PlaceholderToken: "tok-123",
+					Markdown:         "![clip.webm](/file/14/105)",
+					File:             &NoteFile{ID: 105, Filename: "clip.webm", MimeType: "video/webm", URL: "/file/14/105", IsVideo: true},
+				},
+			},
+		},
 		// Guards against nil Job field causing issues.
 		"jobs changed with nil job": {
 			msg: liveMessage{Type: liveTypeJobsChange, Timestamp: "2026-01-01T00:00:00Z"},
@@ -250,6 +265,23 @@ func TestLiveMessageJSONRoundtrip_PBT(t *testing.T) {
 				Timestamp: rapid.StringMatching(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*Z`).Draw(t, "ts"),
 				Reason:    rapid.String().Draw(t, "reason"),
 				NoteIDs:   rapid.SliceOf(rapid.Int64Min(1)).Draw(t, "noteIDs"),
+			}
+			if rapid.Bool().Draw(t, "hasUploadResolution") {
+				msg.UploadResolution = &liveUploadResolution{
+					NoteID:           rapid.Int64Min(1).Draw(t, "uploadNoteID"),
+					PlaceholderToken: rapid.String().Draw(t, "uploadPlaceholderToken"),
+					Markdown:         rapid.String().Draw(t, "uploadMarkdown"),
+					File: &NoteFile{
+						ID:        rapid.Int64Min(1).Draw(t, "uploadFileID"),
+						Filename:  rapid.String().Draw(t, "uploadFilename"),
+						MimeType:  rapid.String().Draw(t, "uploadMimeType"),
+						SizeBytes: rapid.Int64Min(0).Draw(t, "uploadSizeBytes"),
+						URL:       rapid.String().Draw(t, "uploadURL"),
+						IsImage:   rapid.Bool().Draw(t, "uploadIsImage"),
+						IsAudio:   rapid.Bool().Draw(t, "uploadIsAudio"),
+						IsVideo:   rapid.Bool().Draw(t, "uploadIsVideo"),
+					},
+				}
 			}
 			if rapid.Bool().Draw(t, "hasClientSentAt") {
 				msg.ClientSentAtMS = float64Ptr(float64(rapid.Int64().Draw(t, "clientSentAtMsRaw")) / 1000)

@@ -3,14 +3,17 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/llm"
@@ -1361,6 +1364,19 @@ func newTestServerWithMediaForNotes(t *testing.T) *Server {
 	return s
 }
 
+func waitForChunkedUploadDone(t *testing.T, s *Server, uploadID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var status string
+		if err := s.db.QueryRow(`SELECT status FROM upload_sessions WHERE upload_id = ?`, uploadID).Scan(&status); err == nil && status == "done" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for upload %s to reach done status", uploadID)
+}
+
 func TestUpdateNoteConvertsPendingInlineToInlineRef(t *testing.T) {
 	s := newTestServerWithMediaForNotes(t)
 	_, token := createTestNoteWithSession(t, s)
@@ -1560,5 +1576,408 @@ func TestDeleteNoteDeletesFileWhenLastRefDisappears(t *testing.T) {
 	s.db.QueryRow(`SELECT deleted_at FROM files WHERE id = ?`, fileID).Scan(&deletedAt)
 	if deletedAt == nil {
 		t.Error("file should be soft-deleted when last ref disappears")
+	}
+}
+
+func TestResolveUploadPlaceholders(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Create a note with a placeholder in the body.
+	createReq := httptest.NewRequest(http.MethodPost, "/notes",
+		bytes.NewReader([]byte(`{"title":"test","body":"before ![video.webm](__upload__:tok123) after"}`)))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Content-Type", "application/json")
+	cw := httptest.NewRecorder()
+	s.createNote(cw, createReq)
+	if cw.Code != http.StatusCreated {
+		t.Fatalf("create note: %d: %s", cw.Code, cw.Body.String())
+	}
+
+	var noteID int64
+	if err := s.db.QueryRow(`SELECT id FROM notes WHERE title = 'test'`).Scan(&noteID); err != nil {
+		t.Fatalf("find note: %v", err)
+	}
+
+	// Simulate a completed upload session with matching placeholder_token.
+	// The finish_result is the same JSON that handleChunkedFinish stores.
+	finishResult := `{"file":{"id":42,"filename":"video.webm","url":"/file/14/105","mime_type":"video/webm","size_bytes":12345,"is_image":false,"is_audio":false,"is_video":true},"markdown":"![video.webm](/file/14/105)","results":[]}`
+	_, err := s.db.Exec(`
+		INSERT INTO upload_sessions (upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, inline, placeholder_token, status, finish_result, expires_at)
+		VALUES ('test-upload-id', ?, 'video.webm', 'video/webm', 12345, 1048576, 1, 1, 'tok123', 'done', ?, datetime('now', '+1 day'))`,
+		noteID, finishResult)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	// Fetch the note — the server should resolve the placeholder.
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/notes/%d", noteID), nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	gw := httptest.NewRecorder()
+	s.getNote(gw, getReq)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("get note: %d: %s", gw.Code, gw.Body.String())
+	}
+
+	var detail NoteDetail
+	if err := json.NewDecoder(gw.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// The placeholder should be replaced.
+	if strings.Contains(detail.Body, "__upload__:tok123") {
+		t.Errorf("placeholder was NOT replaced, body still has __upload__:tok123: %s", detail.Body)
+	}
+	expectedBody := "before ![video.webm](/file/14/105) after"
+	if detail.Body != expectedBody {
+		t.Errorf("expected body %q, got %q", expectedBody, detail.Body)
+	}
+
+	// Test that an unresolved placeholder (no matching session) is left alone.
+	createReq2 := httptest.NewRequest(http.MethodPost, "/notes",
+		bytes.NewReader([]byte(`{"title":"unresolved","body":"![img](__upload__:no_match)"}`)))
+	createReq2.Header.Set("Authorization", "Bearer "+token)
+	createReq2.Header.Set("Content-Type", "application/json")
+	cw2 := httptest.NewRecorder()
+	s.createNote(cw2, createReq2)
+
+	var unresolvedID int64
+	s.db.QueryRow(`SELECT id FROM notes WHERE title = 'unresolved'`).Scan(&unresolvedID)
+
+	getReq2 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/notes/%d", unresolvedID), nil)
+	getReq2.Header.Set("Authorization", "Bearer "+token)
+	gw2 := httptest.NewRecorder()
+	s.getNote(gw2, getReq2)
+
+	var detail2 NoteDetail
+	json.NewDecoder(gw2.Body).Decode(&detail2)
+	if !strings.Contains(detail2.Body, "__upload__:no_match") {
+		t.Errorf("placeholder should be preserved for unresolved uploads, got: %s", detail2.Body)
+	}
+}
+
+// TestResolvePlaceholderViaChunkedFinish verifies the full end-to-end flow:
+// chunked upload with placeholder_token → finish → fetch note → placeholder resolved.
+func TestResolvePlaceholderViaChunkedFinish(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	// Create a note.
+	createReq := httptest.NewRequest(http.MethodPost, "/notes",
+		bytes.NewReader([]byte(`{"title":"chunked-test","body":"before ![video.webm](__upload__:tok456) after"}`)))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Content-Type", "application/json")
+	cw := httptest.NewRecorder()
+	s.createNote(cw, createReq)
+	if cw.Code != http.StatusCreated {
+		t.Fatalf("create note: %d: %s", cw.Code, cw.Body.String())
+	}
+
+	var noteID int64
+	if err := s.db.QueryRow(`SELECT id FROM notes WHERE title = 'chunked-test'`).Scan(&noteID); err != nil {
+		t.Fatalf("find note: %v", err)
+	}
+
+	// Step 1: Start chunked upload session with placeholder_token.
+	startBody := `{"filename":"video.webm","mime_type":"video/webm","total_size":12,"chunk_size":1048576,"total_chunks":1,"inline":true,"placeholder_token":"tok456"}`
+	startReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/notes/%d/chunked/start", noteID),
+		bytes.NewReader([]byte(startBody)))
+	startReq.Header.Set("Authorization", "Bearer "+token)
+	startReq.Header.Set("Content-Type", "application/json")
+	sw := httptest.NewRecorder()
+	s.handleChunkedStart(sw, startReq, noteID)
+	if sw.Code != http.StatusOK {
+		t.Fatalf("start session: %d: %s", sw.Code, sw.Body.String())
+	}
+
+	var startResp struct {
+		UploadID   string `json:"upload_id"`
+		ChunksDone []int  `json:"chunks_done"`
+	}
+	if err := json.Unmarshal(sw.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("parse start response: %v", err)
+	}
+
+	// Verify placeholder_token was stored.
+	var storedToken sql.NullString
+	if err := s.db.QueryRow(`SELECT placeholder_token FROM upload_sessions WHERE upload_id = ?`, startResp.UploadID).Scan(&storedToken); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if !storedToken.Valid || storedToken.String != "tok456" {
+		t.Fatalf("expected placeholder_token 'tok456', got %q", storedToken.String)
+	}
+
+	// Step 2: Upload the single chunk.
+	chunkData := []byte("test content!")
+	var chunkBuf bytes.Buffer
+	mw := multipart.NewWriter(&chunkBuf)
+	part, _ := mw.CreateFormFile("chunk", "chunk")
+	part.Write(chunkData)
+	mw.Close()
+
+	chunkReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/notes/%d/chunked/%s/chunk?index=0", noteID, startResp.UploadID),
+		&chunkBuf)
+	chunkReq.Header.Set("Authorization", "Bearer "+token)
+	chunkReq.Header.Set("Content-Type", mw.FormDataContentType())
+	cw2 := httptest.NewRecorder()
+	s.handleChunkedChunk(cw2, chunkReq, noteID, startResp.UploadID)
+	if cw2.Code != http.StatusOK {
+		t.Fatalf("upload chunk: %d: %s", cw2.Code, cw2.Body.String())
+	}
+
+	// Step 3: Finish the upload.
+	finishReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/notes/%d/chunked/%s/finish", noteID, startResp.UploadID), nil)
+	finishReq.Header.Set("Authorization", "Bearer "+token)
+	fw := httptest.NewRecorder()
+	s.handleChunkedFinish(fw, finishReq, noteID, startResp.UploadID)
+	if fw.Code != http.StatusCreated {
+		t.Fatalf("finish: %d: %s", fw.Code, fw.Body.String())
+	}
+
+	// Step 4: The server must persist the replacement into the stored note body
+	// so reloads, other tabs, and later saves all see the real file URL.
+	var storedBody string
+	if err := s.db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&storedBody); err != nil {
+		t.Fatalf("load stored body: %v", err)
+	}
+	if strings.Contains(storedBody, "__upload__:tok456") {
+		t.Fatalf("stored body still has placeholder after finish: %s", storedBody)
+	}
+	if !strings.Contains(storedBody, "/file/") {
+		t.Fatalf("stored body should contain a real /file/ URL, got: %s", storedBody)
+	}
+
+	var storedFileID int64
+	if err := s.db.QueryRow(`SELECT id FROM files WHERE filename = 'video.webm' ORDER BY id DESC LIMIT 1`).Scan(&storedFileID); err != nil {
+		t.Fatalf("find stored file: %v", err)
+	}
+
+	var refCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM files_refs WHERE note_id = ? AND file_id = ? AND ref_kind = 'inline'`, noteID, storedFileID).Scan(&refCount)
+	if refCount != 1 {
+		t.Fatalf("expected 1 inline ref after finish, got %d", refCount)
+	}
+
+	var pendingOwner *int64
+	if err := s.db.QueryRow(`SELECT pending_inline_note_id FROM files WHERE id = ?`, storedFileID).Scan(&pendingOwner); err != nil {
+		t.Fatalf("load pending owner: %v", err)
+	}
+	if pendingOwner != nil {
+		t.Fatalf("pending_inline_note_id should be cleared after persistence, got %v", *pendingOwner)
+	}
+
+	// Step 5: Fetch the note and verify the placeholder is resolved for reads too.
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/notes/%d", noteID), nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	gw := httptest.NewRecorder()
+	s.getNote(gw, getReq)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("get note: %d: %s", gw.Code, gw.Body.String())
+	}
+
+	var detail NoteDetail
+	if err := json.NewDecoder(gw.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	t.Logf("Body after resolve: %q", detail.Body)
+
+	if strings.Contains(detail.Body, "__upload__:tok456") {
+		t.Errorf("placeholder was NOT replaced in body: %s", detail.Body)
+	}
+	if !strings.Contains(detail.Body, "/file/") {
+		t.Errorf("body should contain a real /file/ URL: %s", detail.Body)
+	}
+	if len(detail.Attachments) != 1 || detail.Attachments[0].ID != storedFileID {
+		t.Fatalf("attachments = %#v, want inline attachment %d", detail.Attachments, storedFileID)
+	}
+}
+
+func TestUpdateNoteResolvesCompletedUploadPlaceholderBeforePersisting(t *testing.T) {
+	s := newTestServerWithMediaForNotes(t)
+	_, token := createTestNoteWithSession(t, s)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/notes",
+		bytes.NewReader([]byte(`{"title":"stale-editor","body":"initial"}`)))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Content-Type", "application/json")
+	cw := httptest.NewRecorder()
+	s.createNote(cw, createReq)
+	if cw.Code != http.StatusCreated {
+		t.Fatalf("create note: %d: %s", cw.Code, cw.Body.String())
+	}
+
+	var noteID int64
+	if err := s.db.QueryRow(`SELECT id FROM notes WHERE title = 'stale-editor'`).Scan(&noteID); err != nil {
+		t.Fatalf("find note: %v", err)
+	}
+
+	rec, _, err := s.mediaService.CreatePendingInline(context.Background(), noteID, "movie.webm", "video/webm", bytes.NewReader([]byte("movie bytes")))
+	if err != nil {
+		t.Fatalf("CreatePendingInline: %v", err)
+	}
+	finishResult := fmt.Sprintf(`{"file":{"id":%d,"filename":"movie.webm","url":"/file/%d/%d","mime_type":"video/webm","size_bytes":%d,"is_image":false,"is_audio":false,"is_video":true},"markdown":"![movie.webm](/file/%d/%d)","results":[]}`,
+		rec.ID, noteID, rec.ID, rec.SizeBytes, noteID, rec.ID)
+	if _, err := s.db.Exec(`
+		INSERT INTO upload_sessions (upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, inline, placeholder_token, status, finish_result, expires_at)
+		VALUES ('stale-upload', ?, 'movie.webm', 'video/webm', ?, 1048576, 1, 1, 'stale-token', 'done', ?, datetime('now', '+1 day'))`,
+		noteID, rec.SizeBytes, finishResult); err != nil {
+		t.Fatalf("insert upload session: %v", err)
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/notes/%d", noteID),
+		bytes.NewReader([]byte(`{"title":"stale-editor","body":"before ![movie.webm](__upload__:stale-token) after"}`)))
+	updateReq.Header.Set("Authorization", "Bearer "+token)
+	updateReq.Header.Set("Content-Type", "application/json")
+	uw := httptest.NewRecorder()
+	s.updateNote(uw, updateReq)
+	if uw.Code != http.StatusOK {
+		t.Fatalf("update note: %d: %s", uw.Code, uw.Body.String())
+	}
+
+	var storedBody string
+	if err := s.db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&storedBody); err != nil {
+		t.Fatalf("load stored body: %v", err)
+	}
+	if strings.Contains(storedBody, "__upload__:stale-token") {
+		t.Fatalf("stored body should have been resolved before persistence, got: %s", storedBody)
+	}
+	wantBody := fmt.Sprintf("before ![movie.webm](/file/%d/%d) after", noteID, rec.ID)
+	if storedBody != wantBody {
+		t.Fatalf("stored body = %q, want %q", storedBody, wantBody)
+	}
+
+	var refCount int
+	s.db.QueryRow(`SELECT COUNT(*) FROM files_refs WHERE note_id = ? AND file_id = ? AND ref_kind = 'inline'`, noteID, rec.ID).Scan(&refCount)
+	if refCount != 1 {
+		t.Fatalf("expected inline ref for resolved stale placeholder, got %d", refCount)
+	}
+
+	var pendingOwner *int64
+	if err := s.db.QueryRow(`SELECT pending_inline_note_id FROM files WHERE id = ?`, rec.ID).Scan(&pendingOwner); err != nil {
+		t.Fatalf("load pending owner: %v", err)
+	}
+	if pendingOwner != nil {
+		t.Fatalf("pending_inline_note_id should be cleared after resolved save, got %v", *pendingOwner)
+	}
+}
+
+func TestChunkedUploadAutoFinishResolvesPlaceholderAfterReload(t *testing.T) {
+	tests := map[string]struct {
+		filename        string
+		placeholderBody string
+		wantBody        string
+	}{
+		"simple filename": {
+			filename:        "video.webm",
+			placeholderBody: "before ![video.webm](__upload__:auto-token) after",
+			wantBody:        "before [video.webm](/file/%d/%d) after",
+		},
+		"filename with brackets": {
+			filename:        "What To Do When You Need To Start, But Can’t [Q99DnvRY614].webm",
+			placeholderBody: "before ![What To Do When You Need To Start, But Can’t [Q99DnvRY614].webm](__upload__:auto-token) after",
+			wantBody:        "before [What To Do When You Need To Start, But Can’t \\[Q99DnvRY614\\].webm](/file/%d/%d) after",
+		},
+	}
+
+	for name, tc := range tests {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			s := newTestServerWithMediaForNotes(t)
+			_, token := createTestNoteWithSession(t, s)
+
+			createReq := httptest.NewRequest(http.MethodPost, "/notes",
+				bytes.NewReader([]byte(fmt.Sprintf(`{"title":"auto-finish","body":%q}`, tc.placeholderBody))))
+			createReq.Header.Set("Authorization", "Bearer "+token)
+			createReq.Header.Set("Content-Type", "application/json")
+			cw := httptest.NewRecorder()
+			s.createNote(cw, createReq)
+			if cw.Code != http.StatusCreated {
+				t.Fatalf("create note: %d: %s", cw.Code, cw.Body.String())
+			}
+
+			var noteID int64
+			if err := s.db.QueryRow(`SELECT id FROM notes WHERE title = 'auto-finish'`).Scan(&noteID); err != nil {
+				t.Fatalf("find note: %v", err)
+			}
+
+			startBody := fmt.Sprintf(`{"filename":%q,"mime_type":"video/webm","total_size":12,"chunk_size":1048576,"total_chunks":1,"inline":true,"placeholder_token":"auto-token"}`,
+				tc.filename)
+			startReq := httptest.NewRequest(http.MethodPost,
+				fmt.Sprintf("/notes/%d/chunked/start", noteID),
+				bytes.NewReader([]byte(startBody)))
+			startReq.Header.Set("Authorization", "Bearer "+token)
+			startReq.Header.Set("Content-Type", "application/json")
+			sw := httptest.NewRecorder()
+			s.handleChunkedStart(sw, startReq, noteID)
+			if sw.Code != http.StatusOK {
+				t.Fatalf("start session: %d: %s", sw.Code, sw.Body.String())
+			}
+
+			var startResp struct {
+				UploadID string `json:"upload_id"`
+			}
+			if err := json.Unmarshal(sw.Body.Bytes(), &startResp); err != nil {
+				t.Fatalf("parse start response: %v", err)
+			}
+
+			chunkData := []byte("test content!")
+			var chunkBuf bytes.Buffer
+			mw := multipart.NewWriter(&chunkBuf)
+			part, _ := mw.CreateFormFile("chunk", "chunk")
+			part.Write(chunkData)
+			mw.Close()
+
+			chunkReq := httptest.NewRequest(http.MethodPost,
+				fmt.Sprintf("/notes/%d/chunked/%s/chunk?index=0", noteID, startResp.UploadID),
+				&chunkBuf)
+			chunkReq.Header.Set("Authorization", "Bearer "+token)
+			chunkReq.Header.Set("Content-Type", mw.FormDataContentType())
+			chunkW := httptest.NewRecorder()
+			s.handleChunkedChunk(chunkW, chunkReq, noteID, startResp.UploadID)
+			if chunkW.Code != http.StatusOK {
+				t.Fatalf("upload chunk: %d: %s", chunkW.Code, chunkW.Body.String())
+			}
+
+			waitForChunkedUploadDone(t, s, startResp.UploadID)
+
+			var storedBody string
+			if err := s.db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&storedBody); err != nil {
+				t.Fatalf("load stored body: %v", err)
+			}
+			if strings.Contains(storedBody, "__upload__:auto-token") {
+				t.Fatalf("stored body still has placeholder after auto-finish: %s", storedBody)
+			}
+			var storedFileID int64
+			if err := s.db.QueryRow(`SELECT id FROM files ORDER BY id DESC LIMIT 1`).Scan(&storedFileID); err != nil {
+				t.Fatalf("load stored file id: %v", err)
+			}
+			wantBody := fmt.Sprintf(tc.wantBody, noteID, storedFileID)
+			if storedBody != wantBody {
+				t.Fatalf("stored body = %q, want %q", storedBody, wantBody)
+			}
+
+			getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/notes/%d", noteID), nil)
+			getReq.Header.Set("Authorization", "Bearer "+token)
+			gw := httptest.NewRecorder()
+			s.getNote(gw, getReq)
+			if gw.Code != http.StatusOK {
+				t.Fatalf("get note: %d: %s", gw.Code, gw.Body.String())
+			}
+
+			var detail NoteDetail
+			if err := json.NewDecoder(gw.Body).Decode(&detail); err != nil {
+				t.Fatalf("decode note: %v", err)
+			}
+			if strings.Contains(detail.Body, "__upload__:auto-token") {
+				t.Fatalf("detail body still has placeholder after reload: %s", detail.Body)
+			}
+			if len(detail.Attachments) != 1 {
+				t.Fatalf("attachments = %#v, want exactly one inline attachment", detail.Attachments)
+			}
+		})
 	}
 }

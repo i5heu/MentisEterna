@@ -3190,6 +3190,69 @@ function scheduleLiveRefresh({ full = false, selected: refreshSelected = false, 
     }, 100);
 }
 
+function escapeMarkdownLabel(text) {
+    return String(text || "")
+        .replace(/\\/g, "\\\\")
+        .replace(/\[/g, "\\[")
+        .replace(/\]/g, "\\]");
+}
+
+function replaceUploadPlaceholderInText(body, placeholderToken, markdown) {
+    if (
+        typeof body !== "string" ||
+        !placeholderToken ||
+        !markdown ||
+        !body.includes(`__upload__:${placeholderToken}`)
+    ) {
+        return body;
+    }
+    const escaped = placeholderToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`!\\[.*?\\]\\(__upload__:${escaped}\\)`, "g");
+    return body.replace(re, markdown);
+}
+
+function addAttachmentIfNewToNote(note, file) {
+    if (!note || !file) return;
+    if (!Array.isArray(note.attachments)) {
+        note.attachments = [];
+    }
+    if (!note.attachments.some((attachment) => attachment.id === file.id)) {
+        note.attachments.push(file);
+    }
+}
+
+function applyInlineUploadResolution(resolution) {
+    const noteID = Number(resolution?.note_id || 0);
+    const placeholderToken = resolution?.placeholder_token || "";
+    const markdown = resolution?.markdown || "";
+    if (!noteID || !placeholderToken || !markdown) {
+        return;
+    }
+
+    if (selected.value?.id === noteID) {
+        selected.value.body = replaceUploadPlaceholderInText(
+            selected.value.body || "",
+            placeholderToken,
+            markdown,
+        );
+        editBody.value = replaceUploadPlaceholderInText(
+            editBody.value || "",
+            placeholderToken,
+            markdown,
+        );
+        addAttachmentIfNewToNote(selected.value, resolution.file);
+    }
+
+    if (threadNote.value?.id === noteID) {
+        threadNote.value.body = replaceUploadPlaceholderInText(
+            threadNote.value.body || "",
+            placeholderToken,
+            markdown,
+        );
+        addAttachmentIfNewToNote(threadNote.value, resolution.file);
+    }
+}
+
 function onLiveMessage(event) {
     const detail = event?.detail;
     if (!detail?.type) return;
@@ -3204,6 +3267,15 @@ function onLiveMessage(event) {
     }
 
     if (detail.type !== "notes.changed") return;
+
+    if (
+        detail.reason === "inline_upload_resolved" &&
+        detail.upload_resolution?.note_id
+    ) {
+        applyInlineUploadResolution(detail.upload_resolution);
+        scheduleLiveRefresh({ full: true, selected: false, thread: false });
+        return;
+    }
 
     const changedIDs = new Set(
         Array.isArray(detail.note_ids)
@@ -3905,12 +3977,36 @@ async function save() {
         pushURL();
     } catch (e) {
         saveError.value = e.message;
-    } finally {
-        saving.value = false;
+    	} finally {
+    		saving.value = false;
+    	}
     }
-}
 
-async function importRecipes(importJSON) {
+    // saveReplacedPlaceholder silently persists the body when a placeholder
+    // markdown link has been replaced with a real file URL. Unlike save(),
+    // this doesn't exit edit mode or reload history. It's lightweight —
+    // only the body is sent to the server.
+    async function saveReplacedPlaceholder() {
+    	if (!selected.value?.id || saving.value) return;
+    	try {
+    		await updateNote(
+    			props.token,
+    			selected.value.id,
+    			editTitle.value,
+    			editBody.value,
+    			selected.value.parent_id,
+    			noteType.value,
+    			customData.value,
+    			editTags.value,
+    		);
+    		dirty.value = false;
+    	} catch {
+    		// Silently ignore — the placeholder will be replaced on next
+    		// explicit save or the user can save manually.
+    	}
+    }
+
+    async function importRecipes(importJSON) {
     if (!selected.value || typeof importJSON !== "string") {
         return;
     }
@@ -3981,6 +4077,12 @@ function onChunkedUploadComplete(result) {
 						const re = new RegExp(`!\\[.*?\\]\\(__upload__:${escaped}\\)`, 'g');
 						if (re.test(editBody.value)) {
 							editBody.value = editBody.value.replace(re, result.markdown);
+							// Auto-save to persist the real URL on the server.
+							// Only if this note is still selected and not being
+							// edited by the user for other changes.
+							if (selected.value?.id === noteID && !saving.value) {
+								saveReplacedPlaceholder();
+							}
 							return;
 						}
 					}
@@ -3992,7 +4094,7 @@ function onChunkedUploadComplete(result) {
 		});
 		// Insert placeholder markdown links immediately.
 		for (let i = 0; i < fileArray.length && i < uploadIDs.length; i++) {
-			const placeholderMd = `![${fileArray[i].name}](__upload__:${uploadIDs[i]})`;
+			const placeholderMd = `![${escapeMarkdownLabel(fileArray[i].name)}](__upload__:${uploadIDs[i]})`;
 			insertAtCursor((i > 0 ? "\n" : "") + placeholderMd);
 		}
 	}
@@ -4035,6 +4137,10 @@ async function onBodyPaste(e) {
 					const re = new RegExp(`!\\[.*?\\]\\(__upload__:${escaped}\\)`, 'g');
 					if (re.test(editBody.value)) {
 						editBody.value = editBody.value.replace(re, result.markdown);
+						// Auto-save to persist the real URL on the server.
+						if (selected.value?.id === noteID && !saving.value) {
+							saveReplacedPlaceholder();
+						}
 						return;
 					}
 				}
@@ -4046,19 +4152,15 @@ async function onBodyPaste(e) {
 	});
 	// Insert placeholder markdown links immediately.
 	for (let i = 0; i < files.length && i < uploadIDs.length; i++) {
-		const placeholderMd = `![${files[i].name}](__upload__:${uploadIDs[i]})`;
+		const placeholderMd = `![${escapeMarkdownLabel(files[i].name)}](__upload__:${uploadIDs[i]})`;
 		insertAtCursor((i > 0 ? "\n" : "") + placeholderMd);
 	}
 }
 
 function addAttachmentIfNew(file) {
-    if (!file) return;
-    if (!selected.value.attachments) selected.value.attachments = [];
     // Avoid duplicates — a save between upload completion and this callback
     // may have already populated attachments from the server.
-    if (!selected.value.attachments.some(a => a.id === file.id)) {
-        selected.value.attachments.push(file);
-    }
+    addAttachmentIfNewToNote(selected.value, file);
 }
 
 async function removeAttachment(file) {

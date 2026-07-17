@@ -47,16 +47,17 @@ function readChunk(file, start, end) {
 /**
  * Start a chunked upload session on the server.
  */
-async function startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256) {
-    const body = JSON.stringify({
-        inline,
-        filename,
-        mime_type: mimeType,
-        total_size: totalSize,
-        chunk_size: chunkSize,
-        total_chunks: totalChunks,
-        file_sha256: fileSha256 || "",
-    });
+async function startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256, placeholderToken) {
+	const body = JSON.stringify({
+		inline,
+		filename,
+		mime_type: mimeType,
+		total_size: totalSize,
+		chunk_size: chunkSize,
+		total_chunks: totalChunks,
+		file_sha256: fileSha256 || "",
+		placeholder_token: placeholderToken || "",
+	});
 
     const res = await fetch(`/notes/${noteId}/chunked/start`, {
         method: "POST",
@@ -282,7 +283,7 @@ async function doUpload(data) {
 
         // --- PHASE 3: Start or resume session ---
         if (VERBOSE) console.log("[start] Creating/resuming upload session...");
-        const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256);
+        	const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileSha256, uploadId);
         const serverUploadId = session.upload_id || uploadId;
         const alreadyDone = session.chunks_done || [];
         if (VERBOSE) {
@@ -464,7 +465,7 @@ async function doResume(fileHash, entry, uploadId) {
 
         // Start (idempotent) or resume session.
         if (VERBOSE) console.log("[resume] Starting upload session (idempotent)...");
-        const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileHash);
+        	const session = await startUploadSession(token, noteId, inline, filename, mimeType, totalSize, chunkSize, totalChunks, fileHash, uploadId);
         serverUploadId = session.upload_id || uploadId;
         alreadyDone = session.chunks_done || [];
 

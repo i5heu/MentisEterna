@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -93,6 +94,13 @@ func (s *Server) enrichDetail(n *NoteDetail) {
 		return
 	}
 
+	// Resolve any __upload__:TOKEN placeholder URLs in the body to real
+	// file URLs. This handles the case where inline uploads completed
+	// after the note was saved (or while the tab was closed).
+	if s.db != nil {
+		n.Body = s.resolveUploadPlaceholders(n.ID, n.Body)
+	}
+
 	// Load manual tags for all note types (including standard).
 	tags, err := loadTags(s.db.DB, n.ID)
 	if err != nil {
@@ -143,6 +151,109 @@ func (s *Server) enrichDetail(n *NoteDetail) {
 	}
 
 	n.Plugin = pd
+}
+
+// uploadPlaceholderRe matches ![any alt text](__upload__:TOKEN).
+// It uses a non-greedy alt-text capture so filenames containing `]` still
+// match as long as the closing sequence is ](__upload__:TOKEN).
+var uploadPlaceholderRe = regexp.MustCompile(`!\[(.*?)\]\(__upload__:([^)]+)\)`)
+
+func escapeMarkdownLabel(text string) string {
+	text = strings.ReplaceAll(text, `\`, `\\`)
+	text = strings.ReplaceAll(text, `[`, `\[`)
+	text = strings.ReplaceAll(text, `]`, `\]`)
+	return text
+}
+
+func renderResolvedUploadMarkdown(altText, fallbackAlt, url string, imageSyntax bool) string {
+	alt := strings.TrimSpace(altText)
+	if alt == "" {
+		alt = fallbackAlt
+	}
+	alt = escapeMarkdownLabel(alt)
+	if imageSyntax {
+		return fmt.Sprintf("![%s](%s)", alt, url)
+	}
+	return fmt.Sprintf("[%s](%s)", alt, url)
+}
+
+// resolveUploadPlaceholders replaces __upload__:TOKEN placeholder URLs
+// in the note body with real /file/NOTEID/FILEID URLs when the matching
+// upload session has completed. This ensures inline uploads resolve
+// correctly even if the user saved and reloaded before upload completion.
+func (s *Server) resolveUploadPlaceholders(noteID int64, body string) string {
+	if !strings.Contains(body, "__upload__:") {
+		return body
+	}
+
+	return uploadPlaceholderRe.ReplaceAllStringFunc(body, func(match string) string {
+		parts := uploadPlaceholderRe.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		altText := parts[1]
+		token := parts[2]
+
+		var finishResult sql.NullString
+		err := s.db.QueryRow(
+			`SELECT finish_result FROM upload_sessions
+			 WHERE placeholder_token = ? AND note_id = ?
+			   AND status = 'done' AND finish_result IS NOT NULL
+			 ORDER BY created_at DESC LIMIT 1`,
+			token, noteID,
+		).Scan(&finishResult)
+		if err != nil || !finishResult.Valid {
+			return match // upload not done yet, keep placeholder
+		}
+
+		var result struct {
+			File struct {
+				URL      string `json:"url"`
+				Filename string `json:"filename"`
+			} `json:"file"`
+			Markdown string `json:"markdown"`
+		}
+		if err := json.Unmarshal([]byte(finishResult.String), &result); err != nil {
+			return match
+		}
+		if result.File.URL == "" {
+			return match
+		}
+
+		return renderResolvedUploadMarkdown(altText, result.File.Filename, result.File.URL, strings.HasPrefix(result.Markdown, "!["))
+	})
+}
+
+func (s *Server) persistResolvedUploadPlaceholders(noteID int64) (string, bool, error) {
+	if s == nil || s.db == nil || noteID <= 0 {
+		return "", false, nil
+	}
+
+	var currentBody string
+	err := s.db.QueryRow(`SELECT body FROM updates WHERE note_id = ? ORDER BY id DESC LIMIT 1`, noteID).Scan(&currentBody)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+
+	resolvedBody := s.resolveUploadPlaceholders(noteID, currentBody)
+	if resolvedBody == currentBody {
+		return currentBody, false, nil
+	}
+
+	if _, err := s.db.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, noteID, resolvedBody); err != nil {
+		return "", false, err
+	}
+
+	if s.mediaService != nil {
+		if _, err := s.mediaService.ReconcileInlineRefs(context.Background(), noteID, resolvedBody); err != nil {
+			return resolvedBody, true, err
+		}
+	}
+
+	return resolvedBody, true, nil
 }
 
 func loadNoteTagNames(d *sql.DB, refTable string, noteID int64) ([]string, error) {
@@ -352,8 +463,9 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	resolvedBody := in.Body
 
-	if _, err = tx.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, id, in.Body); err != nil {
+	if _, err = tx.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, id, resolvedBody); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -383,8 +495,8 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reconcile inline file refs from markdown body (after commit).
-	if s.mediaService != nil && in.Body != "" {
-		orphaned, err := s.mediaService.ReconcileInlineRefs(context.Background(), id, in.Body)
+	if s.mediaService != nil && resolvedBody != "" {
+		orphaned, err := s.mediaService.ReconcileInlineRefs(context.Background(), id, resolvedBody)
 		if err != nil {
 			log.Printf("media: reconcile inline refs for note %d: %v", id, err)
 		} else if len(orphaned) > 0 {
@@ -409,7 +521,7 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	s.enqueueVSSIndex(id)
 	// Async title generation (only if the user didn't provide one)
 	if !userProvidedTitle {
-		s.enqueueTitleGeneration(id, in.Body)
+		s.enqueueTitleGeneration(id, resolvedBody)
 	}
 	s.enqueueAutoTagGeneration(id)
 	notifyIDs := []int64{id}
@@ -487,6 +599,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	resolvedBody := s.resolveUploadPlaceholders(id, in.Body)
 	tx, err := s.db.Begin()
 	if err != nil {
 		writeErr(w, err)
@@ -504,7 +617,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err = tx.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, id, in.Body); err != nil {
+	if _, err = tx.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, id, resolvedBody); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -534,8 +647,8 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reconcile inline file refs from markdown body (after commit).
-	if s.mediaService != nil && in.Body != "" {
-		orphaned, err := s.mediaService.ReconcileInlineRefs(context.Background(), id, in.Body)
+	if s.mediaService != nil && resolvedBody != "" {
+		orphaned, err := s.mediaService.ReconcileInlineRefs(context.Background(), id, resolvedBody)
 		if err != nil {
 			log.Printf("media: reconcile inline refs for note %d: %v", id, err)
 		} else if len(orphaned) > 0 {
@@ -560,7 +673,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	s.enqueueVSSIndex(id)
 	// Async title generation (only if the user didn't provide one)
 	if !userProvidedTitle {
-		s.enqueueTitleGeneration(id, in.Body)
+		s.enqueueTitleGeneration(id, resolvedBody)
 	}
 	s.enqueueAutoTagGeneration(id)
 	notifyIDs := []int64{id}
@@ -780,6 +893,8 @@ func (s *Server) getNoteChildren(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cn := ChildNote{NoteSummary: n}
+		// Resolve upload placeholders in the body for inline display.
+		cn.Body = s.resolveUploadPlaceholders(n.ID, n.Body)
 		// get child count (number of notes whose parent_id is this child's id)
 		_ = s.db.QueryRow(`SELECT COUNT(*) FROM notes WHERE parent_id = ?`, n.ID).Scan(&cn.ChildCount)
 		// load attachments (skip on error)
