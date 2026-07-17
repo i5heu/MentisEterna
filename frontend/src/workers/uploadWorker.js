@@ -170,9 +170,36 @@ async function doUpload(data) {
             });
         }
 
-        // Finish the upload
-        post({ type: "progress", uploadId, filename, loaded: totalSize, total: totalSize, percent: 100, speed: 0, status: "finalizing" });
+        // Finish the upload — poll for detailed status while server does the work
+        let stopPolling = false;
+        const poller = (async () => {
+            while (!stopPolling) {
+                await new Promise(r => setTimeout(r, 300));
+                try {
+                    const statusRes = await fetch(`/notes/${noteId}/chunked/${serverUploadId}`, {
+                        credentials: "include",
+                    });
+                    if (statusRes.ok) {
+                        const statusData = await statusRes.json();
+                        const status = statusData.status || "";
+                        let statusText = "Finalizing...";
+                        if (status === "assembling") statusText = "Assembling chunks...";
+                        else if (status === "verifying") statusText = "Verifying integrity...";
+                        else if (status === "processing") statusText = "Encrypting and uploading...";
+                        else if (status === "done") statusText = "Done";
+                        else if (status === "failed") statusText = "Failed";
+                        post({
+                            type: "progress", uploadId, filename,
+                            loaded: totalSize, total: totalSize, percent: 100, speed: 0,
+                            status: statusText,
+                        });
+                    }
+                } catch (_) { /* ignore poll errors */ }
+            }
+        })();
+
         const result = await finishUpload(token, noteId, serverUploadId);
+        stopPolling = true;
 
         post({ type: "complete", uploadId, filename, result });
         activeUpload = null;

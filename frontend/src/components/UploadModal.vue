@@ -40,20 +40,20 @@
                         </span>
                     </div>
                     <div class="upload-stats">
-                        <span>{{ active.status === 'hashing' ? 'Hashing…' : active.status === 'finalizing' ? 'Finalizing…' : `${active.percent}%` }}</span>
-                        <span v-if="active.speed > 0">{{ formatSpeed(active.speed) }}</span>
+                        <span>{{ statusLabel }}</span>
+                        <span v-if="active.speed > 0 && active.percent < 100">{{ formatSpeed(active.speed) }}</span>
                         <span v-if="active.percent > 0 && active.percent < 100 && active.speed > 0">{{ formatETA() }}</span>
                     </div>
                     <div class="progress-bar">
                         <div
                             class="progress-fill"
-                            :class="{ finalizing: active.status === 'finalizing' }"
-                            :style="{ width: active.percent + '%' }"
+                            :class="{ indeterminate: isProcessing }"
+                            :style="isProcessing ? {} : { width: active.percent + '%' }"
                         />
                     </div>
                     <div class="upload-actions">
                         <button
-                            v-if="active.status !== 'finalizing'"
+                            v-if="isCancellable"
                             class="btn-ghost btn-sm"
                             @click="onCancel"
                         >
@@ -93,7 +93,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from "vue";
+import { ref, watch, computed } from "vue";
 import { useUploadQueue } from "../composables/useUploadQueue.js";
 
 const props = defineProps({
@@ -107,6 +107,25 @@ const { active, completed, queueCount, enqueueAttachment, cancel } = useUploadQu
 
 const fileInput = ref(null);
 const isDragging = ref(false);
+
+const statusLabel = computed(() => {
+    if (!active.value) return "";
+    const s = active.value.status;
+    if (!s || s === "uploading") return `${active.value.percent}%`;
+    return s.charAt(0).toUpperCase() + s.slice(1);
+});
+
+const isProcessing = computed(() => {
+    if (!active.value) return false;
+    const s = active.value.status;
+    return s !== "uploading" && s !== "hashing" && s !== "";
+});
+
+const isCancellable = computed(() => {
+    if (!active.value) return false;
+    const s = active.value.status;
+    return s === "uploading" || s === "hashing" || !s;
+});
 
 // Watch for completion
 watch(
@@ -129,7 +148,6 @@ function onFileSelected(event) {
     const file = event.target.files[0];
     if (!file) return;
     enqueueAttachment(file, props.noteId, props.token);
-    // Reset so the same file can be re-selected
     event.target.value = "";
 }
 
@@ -198,152 +216,137 @@ function formatETA() {
     margin: 0;
 }
 .modal-close-btn {
-    padding: 2px 8px !important;
-    font-size: 1rem !important;
+    font-size: 1.1rem;
+    padding: 4px 8px;
 }
 
 .modal-body {
     padding: 16px 20px;
-    flex: 1;
     overflow-y: auto;
 }
 
-.modal-footer {
-    padding: 0 20px 16px;
-    display: flex;
-    justify-content: flex-end;
-}
-
-/* Drop zone */
 .drop-zone {
     border: 2px dashed var(--border-color, #7e7567);
     border-radius: 10px;
-    padding: 40px 20px;
+    padding: 32px 20px;
     text-align: center;
     transition: border-color 0.2s, background 0.2s;
     cursor: pointer;
 }
 .drop-zone.dragging {
-    border-color: var(--accent-teal, #6d9484);
-    background: var(--raised-bg, #0a1d2d);
+    border-color: var(--accent-teal, #60a5fa);
+    background: rgba(96, 165, 250, 0.05);
 }
 .drop-zone-text {
     margin: 0;
-    color: var(--font-color-secondary, #a5b0ad);
     font-size: 0.9rem;
+    color: var(--font-color-secondary, #999);
 }
 .drop-zone-icon {
+    font-size: 1.5rem;
     display: block;
-    font-size: 2rem;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 .drop-zone-link {
     background: none;
     border: none;
-    color: var(--accent-teal, #6d9484);
+    color: var(--accent-teal, #60a5fa);
     cursor: pointer;
     text-decoration: underline;
-    padding: 0;
     font-size: inherit;
-}
-.drop-zone-link:hover {
-    color: var(--font-color, #e0e8e4);
 }
 .file-input-hidden {
     display: none;
 }
 
-/* Upload active */
 .upload-active-block {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
 }
-.upload-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
+
 .upload-filename {
     font-weight: 600;
+    font-size: 0.85rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
 .upload-stats {
     display: flex;
     gap: 12px;
-    font-size: 0.8rem;
-    color: var(--font-color-secondary, #a5b0ad);
+    font-size: 0.75rem;
+    color: var(--font-color-secondary, #999);
 }
 
 .progress-bar {
     width: 100%;
-    height: 8px;
-    background: var(--raised-bg, #0a1d2d);
-    border-radius: 4px;
+    height: 4px;
+    background: var(--border-color, #444);
+    border-radius: 2px;
     overflow: hidden;
-    margin: 4px 0;
 }
 .progress-fill {
     height: 100%;
-    background: var(--accent-teal, #6d9484);
-    border-radius: 4px;
+    background: var(--accent-teal, #60a5fa);
+    border-radius: 2px;
     transition: width 0.2s ease;
 }
-.progress-fill.finalizing {
-    animation: pulse 1s ease-in-out infinite;
+.progress-fill.indeterminate {
+    width: 100%;
+    animation: indeterminate-bar 1.5s ease-in-out infinite;
 }
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+@keyframes indeterminate-bar {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
 }
 
 .upload-actions {
     display: flex;
     gap: 8px;
-    margin-top: 4px;
 }
 
-/* Completed */
 .completed-section {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin-top: 8px;
 }
 .completed-entry {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 0;
-    font-size: 0.85rem;
+    gap: 8px;
+    font-size: 0.82rem;
 }
 .completed-entry.error {
     color: var(--heading-color, #bf0604);
-    flex-wrap: wrap;
 }
 .completed-icon {
     font-weight: 700;
     flex-shrink: 0;
 }
 .completed-icon.success {
-    color: var(--accent-teal, #6d9484);
+    color: var(--accent-teal, #60a5fa);
 }
 .completed-error-detail {
-    font-size: 0.75rem;
-    width: 100%;
-    padding-left: 22px;
+    font-size: 0.7rem;
+    margin-left: auto;
+    opacity: 0.8;
 }
 
-/* Queue */
 .queue-section {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-color, #7e7567);
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color, #444);
 }
 .queue-badge {
-    font-size: 0.8rem;
-    color: var(--font-color-secondary, #a5b0ad);
+    font-size: 0.7rem;
+    color: var(--font-color-secondary, #999);
+}
+
+.modal-footer {
+    padding: 12px 20px 16px;
+    display: flex;
+    justify-content: flex-end;
 }
 </style>

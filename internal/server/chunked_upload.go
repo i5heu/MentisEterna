@@ -34,6 +34,7 @@ type uploadSessionRow struct {
 	FileSHA256  *string
 	Inline      bool
 	ChunksDone  string // JSON array of ints
+	Status      string
 	CreatedAt   string
 	ExpiresAt   string
 }
@@ -291,6 +292,7 @@ func (s *Server) handleChunkedStatus(w http.ResponseWriter, r *http.Request, not
 		"chunks_done":  chunksDone,
 		"inline":       row.Inline,
 		"mime_type":    row.MimeType,
+		"status":       row.Status,
 	})
 }
 
@@ -322,15 +324,19 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 	var chunksDone []int
 	_ = json.Unmarshal([]byte(row.ChunksDone), &chunksDone)
 	if len(chunksDone) != row.TotalChunks {
+		s.updateUploadStatus(uploadID, "failed")
 		http.Error(w, fmt.Sprintf("not all chunks received: %d/%d", len(chunksDone), row.TotalChunks), http.StatusConflict)
 		return
 	}
+
+	s.updateUploadStatus(uploadID, "assembling")
 
 	// Assemble file from chunks.
 	dir := chunksDir(uploadID)
 	assembledPath := filepath.Join(dir, "assembled")
 	out, err := os.Create(assembledPath)
 	if err != nil {
+		s.updateUploadStatus(uploadID, "failed")
 		writeErr(w, fmt.Errorf("create assembled file: %w", err))
 		return
 	}
@@ -342,29 +348,37 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		chunkData, err := os.ReadFile(chunkPath)
 		if err != nil {
 			out.Close()
+			s.updateUploadStatus(uploadID, "failed")
 			http.Error(w, fmt.Sprintf("missing chunk %d", i), http.StatusConflict)
 			return
 		}
 		if _, err := multiWriter.Write(chunkData); err != nil {
 			out.Close()
+			s.updateUploadStatus(uploadID, "failed")
 			writeErr(w, fmt.Errorf("assemble chunk %d: %w", i, err))
 			return
 		}
 	}
 	out.Close()
 
+	s.updateUploadStatus(uploadID, "verifying")
+
 	// Verify whole-file SHA-256 if provided.
 	if row.FileSHA256 != nil && *row.FileSHA256 != "" {
 		actual := hex.EncodeToString(hasher.Sum(nil))
 		if !strings.EqualFold(actual, *row.FileSHA256) {
+			s.updateUploadStatus(uploadID, "failed")
 			http.Error(w, fmt.Sprintf("file sha256 mismatch: got %s, expected %s", actual, *row.FileSHA256), http.StatusBadRequest)
 			return
 		}
 	}
 
+	s.updateUploadStatus(uploadID, "processing")
+
 	// Pass assembled file to the existing media service.
 	f, err := os.Open(assembledPath)
 	if err != nil {
+		s.updateUploadStatus(uploadID, "failed")
 		writeErr(w, fmt.Errorf("open assembled file: %w", err))
 		return
 	}
@@ -380,9 +394,12 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		rec, results, err = s.mediaService.CreateAttachment(r.Context(), noteID, row.Filename, row.MimeType, f)
 	}
 	if err != nil {
+		s.updateUploadStatus(uploadID, "failed")
 		writeErr(w, err)
 		return
 	}
+
+	s.updateUploadStatus(uploadID, "done")
 
 	// Enqueue OCR/STT.
 	s.enqueueOCR(rec.ID)
@@ -451,12 +468,12 @@ func (s *Server) loadUploadSession(uploadID string, noteID int64) (*uploadSessio
 	var inlineVal int
 	var fileSHA256 sql.NullString
 	err := s.db.QueryRow(
-		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, created_at, expires_at
+		`SELECT upload_id, note_id, filename, mime_type, total_size, chunk_size, total_chunks, file_sha256, inline, chunks_done, status, created_at, expires_at
 		 FROM upload_sessions WHERE upload_id = ? AND note_id = ?`,
 		uploadID, noteID,
 	).Scan(&row.UploadID, &row.NoteID, &row.Filename, &row.MimeType, &row.TotalSize,
 		&row.ChunkSize, &row.TotalChunks, &fileSHA256, &inlineVal,
-		&row.ChunksDone, &row.CreatedAt, &row.ExpiresAt,
+		&row.ChunksDone, &row.Status, &row.CreatedAt, &row.ExpiresAt,
 	)
 	if err != nil {
 		return nil, err
@@ -501,6 +518,11 @@ func (s *Server) addChunkDone(uploadID string, chunkIndex int, totalChunks int) 
 
 	_, err = s.db.Exec(`UPDATE upload_sessions SET chunks_done = ? WHERE upload_id = ?`, string(newJSON), uploadID)
 	return done, err
+}
+
+// updateUploadStatus updates the status column of an upload session.
+func (s *Server) updateUploadStatus(uploadID, status string) {
+	_, _ = s.db.Exec(`UPDATE upload_sessions SET status = ? WHERE upload_id = ?`, status, uploadID)
 }
 
 // cleanupUploadSession removes the upload session row and all its chunk files.
