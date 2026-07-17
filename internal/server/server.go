@@ -385,7 +385,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// Maintenance reindex endpoints
 	mux.Handle("/maintenance/reindex", protected(s.handleReindexNotes))
 	mux.Handle("/maintenance/reindex-ocr", protected(s.handleReindexOCR))
+	mux.Handle("/maintenance/reindex-ocr-all", protected(s.handleReindexAllOCR))
 	mux.Handle("/maintenance/reindex-stt", protected(s.handleReindexSTT))
+	mux.Handle("/maintenance/reindex-stt-all", protected(s.handleReindexAllSTT))
 	mux.Handle("/maintenance/refresh-auto-tags", protected(s.handleRefreshAllAutoTags))
 	mux.Handle("/maintenance/recalculate-recipe-categories", protected(s.handleRecalculateRecipeIngredientCategories))
 	mux.Handle("/maintenance/delete-unknown-s3-files", protected(s.handleDeleteUnknownS3Files))
@@ -641,27 +643,34 @@ func (s *Server) handleReindexNotes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleReindexOCR enqueues sync_ocr_embedding jobs for all files that have OCR
-// text but are missing embeddings in vss_files_ocr.
+// handleReindexOCR enqueues ocr_file jobs for image files that are missing OCR
+// text OR have OCR text but are missing embeddings in vss_files_ocr.
 func (s *Server) handleReindexOCR(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.db.VSSAvailable() || s.llm == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VSS or embedding client not available"})
+	if s.mediaService == nil || s.ocrClient == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OCR service not configured"})
 		return
 	}
 
 	rows, err := s.db.Query(`
-		SELECT focr.file_id, focr.ocr_text
-		FROM files_ocr focr
-		WHERE focr.ocr_text != ''
-		  AND focr.file_id NOT IN (SELECT rowid FROM vss_files_ocr)
-		ORDER BY focr.file_id ASC
+		SELECT f.id, COALESCE(focr.ocr_text, '')
+		FROM files f
+		LEFT JOIN files_ocr focr ON focr.file_id = f.id
+		LEFT JOIN vss_files_ocr v ON v.rowid = f.id
+		WHERE f.deleted_at IS NULL
+		  AND f.mime_type IN ('image/jpeg','image/png','image/gif','image/webp','image/bmp','image/tiff','image/svg+xml')
+		  AND (
+		    focr.file_id IS NULL
+		    OR focr.error IS NOT NULL
+		    OR (focr.ocr_text != '' AND v.rowid IS NULL)
+		  )
+		ORDER BY f.id ASC
 	`)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files_ocr: %v", err)})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files: %v", err)})
 		return
 	}
 	defer rows.Close()
@@ -674,13 +683,19 @@ func (s *Server) handleReindexOCR(w http.ResponseWriter, r *http.Request) {
 			log.Printf("reindex-ocr: scan file: %v", err)
 			continue
 		}
-		payload, _ := json.Marshal(map[string]interface{}{
-			"file_id":  fileID,
-			"ocr_text": ocrText,
-		})
-		if _, err := s.jobManager.Enqueue("_system", "sync_ocr_embedding", payload); err != nil {
-			log.Printf("reindex-ocr: enqueue sync_ocr_embedding for file %d: %v", fileID, err)
-			continue
+		// If we already have OCR text but no embedding, just enqueue the embedding.
+		// Otherwise, enqueue a full ocr_file job (which chains embedding on success).
+		if ocrText != "" {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"file_id":  fileID,
+				"ocr_text": ocrText,
+			})
+			if _, err := s.jobManager.Enqueue("_system", "sync_ocr_embedding", payload); err != nil {
+				log.Printf("reindex-ocr: enqueue sync_ocr_embedding for file %d: %v", fileID, err)
+				continue
+			}
+		} else {
+			s.enqueueOCR(fileID)
 		}
 		count++
 	}
@@ -692,27 +707,34 @@ func (s *Server) handleReindexOCR(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleReindexSTT enqueues sync_stt_embedding jobs for all files that have STT
-// text but are missing embeddings in vss_files_stt.
+// handleReindexSTT enqueues stt_file jobs for audio files that are missing STT
+// text OR have STT text but are missing embeddings in vss_files_stt.
 func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.db.VSSAvailable() || s.llm == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VSS or embedding client not available"})
+	if s.mediaService == nil || s.sttClient == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "STT service not configured"})
 		return
 	}
 
 	rows, err := s.db.Query(`
-		SELECT fstt.file_id, fstt.stt_text
-		FROM files_stt fstt
-		WHERE fstt.stt_text != ''
-		  AND fstt.file_id NOT IN (SELECT rowid FROM vss_files_stt)
-		ORDER BY fstt.file_id ASC
+		SELECT f.id, COALESCE(fstt.stt_text, '')
+		FROM files f
+		LEFT JOIN files_stt fstt ON fstt.file_id = f.id
+		LEFT JOIN vss_files_stt v ON v.rowid = f.id
+		WHERE f.deleted_at IS NULL
+		  AND f.mime_type IN ('audio/mpeg','audio/mp3','audio/wav','audio/ogg','audio/flac','audio/aac','audio/wma','audio/m4a')
+		  AND (
+		    fstt.file_id IS NULL
+		    OR fstt.error IS NOT NULL
+		    OR (fstt.stt_text != '' AND v.rowid IS NULL)
+		  )
+		ORDER BY f.id ASC
 	`)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files_stt: %v", err)})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files: %v", err)})
 		return
 	}
 	defer rows.Close()
@@ -725,13 +747,19 @@ func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
 			log.Printf("reindex-stt: scan file: %v", err)
 			continue
 		}
-		payload, _ := json.Marshal(map[string]interface{}{
-			"file_id":  fileID,
-			"stt_text": sttText,
-		})
-		if _, err := s.jobManager.Enqueue("_system", "sync_stt_embedding", payload); err != nil {
-			log.Printf("reindex-stt: enqueue sync_stt_embedding for file %d: %v", fileID, err)
-			continue
+		// If we already have STT text but no embedding, just enqueue the embedding.
+		// Otherwise, enqueue a full stt_file job (which chains embedding on success).
+		if sttText != "" {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"file_id":  fileID,
+				"stt_text": sttText,
+			})
+			if _, err := s.jobManager.Enqueue("_system", "sync_stt_embedding", payload); err != nil {
+				log.Printf("reindex-stt: enqueue sync_stt_embedding for file %d: %v", fileID, err)
+				continue
+			}
+		} else {
+			s.enqueueSTT(fileID)
 		}
 		count++
 	}
@@ -740,6 +768,92 @@ func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
 		"status":  "queued",
 		"count":   count,
 		"message": fmt.Sprintf("Enqueued %d STT reindex jobs. Check /jobs for progress.", count),
+	})
+}
+
+// handleReindexAllOCR enqueues ocr_file jobs for ALL image files, regardless of
+// whether they have already been OCR'd or have embeddings.
+func (s *Server) handleReindexAllOCR(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mediaService == nil || s.ocrClient == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OCR service not configured"})
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT f.id
+		FROM files f
+		WHERE f.deleted_at IS NULL
+		  AND f.mime_type IN ('image/jpeg','image/png','image/gif','image/webp','image/bmp','image/tiff','image/svg+xml')
+		ORDER BY f.id ASC
+	`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files: %v", err)})
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var fileID int64
+		if err := rows.Scan(&fileID); err != nil {
+			log.Printf("reindex-all-ocr: scan file: %v", err)
+			continue
+		}
+		s.enqueueOCR(fileID)
+		count++
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"count":   count,
+		"message": fmt.Sprintf("Enqueued %d OCR reindex-all jobs. Check /jobs for progress.", count),
+	})
+}
+
+// handleReindexAllSTT enqueues stt_file jobs for ALL audio files, regardless of
+// whether they have already been STT'd or have embeddings.
+func (s *Server) handleReindexAllSTT(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mediaService == nil || s.sttClient == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "STT service not configured"})
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT f.id
+		FROM files f
+		WHERE f.deleted_at IS NULL
+		  AND f.mime_type IN ('audio/mpeg','audio/mp3','audio/wav','audio/ogg','audio/flac','audio/aac','audio/wma','audio/m4a')
+		ORDER BY f.id ASC
+	`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files: %v", err)})
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var fileID int64
+		if err := rows.Scan(&fileID); err != nil {
+			log.Printf("reindex-all-stt: scan file: %v", err)
+			continue
+		}
+		s.enqueueSTT(fileID)
+		count++
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "queued",
+		"count":   count,
+		"message": fmt.Sprintf("Enqueued %d STT reindex-all jobs. Check /jobs for progress.", count),
 	})
 }
 

@@ -153,13 +153,16 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 - [x] The Pantry ingredients should not be added to the grocery list as default, they must be added manually via the "Add Pantry Staples" button in the recipe overview.
 - [x] Get rid of the auth proxy, rather harden code
 - [x] Video inline upload and playback
-- [ ] Media with OCR and STT jobs, will not be retried if "Re-Index STT Files" or "Re-Index OCR Files" is pressed in the settings. We need aditional buttongs with "Re-Index missing X" and "Re-Index all X" should re-index all files regardless if they have been indexed before or not ("re-index all X" with warning) 
+- [x] Media with OCR and STT jobs, will not be retried if "Re-Index STT Files" or "Re-Index OCR Files" is pressed in the settings. We need aditional buttongs with "Re-Index missing X" and "Re-Index all X" should re-index all files regardless if they have been indexed before or not ("re-index all X" with warning) 
 - [ ] The .note-attachments audio "Transcribe" button should trigger a new stt job if the file has a failed transciption (not that it should like now just show that it is running if a job is already running), if there is a transcription, it should change to "transcription" button.
+- [ ] .note-attachments Pictures need like .note-attachments audio has a "Transcribe" button, a "OCR" button that triggers a new ocr job if the file has a failed ocr (not that it should like now just show that it is running if a job is already running), if there is a ocr, it should change to "ocr" button. 
 
 ## TODO Future
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
-- [ ] Uploads in chunks, verify checksum and resume if connection is lost.
+- [ ] User uploads in chunks, verify checksum and resume if connection is lost.
+- [ ] Upload spinner and overview
 - [ ] Setup building pipeline
+- [ ] audio inline playback does not work
 - [x] In note edit add "//" to search and add a page link to the note
 - [x] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
 - [x] Add automatic tags in a new "Auto Tags" to the NoteType. 
@@ -177,8 +180,8 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
   - [x] Re Index, OCR and STT failed once, button in UI with counter.
   - [x] Re Index ingridients category
   - [x] Parallelize re-indexing jobs.
-- [ ] Server stats in header above ".editor-header > .editor-actions"
-- [ ] Upload spinner and overview
+- [x] Server stats in header above ".editor-header > .editor-actions"
+
 - [x] better search (by title, path and tags)
   - [x] Include Flieds in search:
     - [x] embedding should be limited to paragraphs instead of the whole note to make it more accurate. The Avrage match is then calculated which is then used for the search ranking.
@@ -200,6 +203,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
       - [x] Any UI function gets mapped to a keyboard shortcut
       - [x] Keyboard shortcuts can be viewed with pressing and holding 'strg', they apread over relevant buttons and locations 
   - [ ] Note Editor
+    - [ ] Note Types in note create and edit mode should be searchable.
     - [ ] Inline note editing (From Child or thread or thread child)
     - [ ] Autocomplete and predictive text
     - [ ] Brainstorm and Research mode
@@ -213,7 +217,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 
 - [ ] support AsciiDoc and Markdown (with live preview)
 - [ ] SQLite AES-256 in OFB mode
-- [ ] Search for Note Types and Path should be shown instead of just title when selecting a note type.
+
 
 ## TODO Note Types
 - [x] Recipe (with ingredient table)
@@ -238,15 +242,13 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
  
 - [x] Task Sytem
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
-    - [ ] SubTasks (Child Task Notes)
-      - [ ] Create SubTasks (Child Task Notes) Quick add
-      - [ ] SubTasks List for said Task
-      - [ ] LLM Create "SubTasks" (Child Task Notes) From Task
+    - [ ] SubTasks (Items in a Task Note Type)
+      - [ ] Add SubTasks
+      - [ ] LLM Create "SubTasks" from Task Description
   - [x] Task overview dashboard - list all tasks, filter by status, due date, etc. 
     - [ ] Quick add ToDo
   - [x] Daily task list - give 3 random tasks per day
   - [ ] Todays 3 Todos should be printed via the recipe printer. 
-  - [ ] Task Category Note Type 
 - [x] Home Note Type - Shows latest notes, stats, has "Mind Dump" section for quick note creation.
 - [ ] Jornal Note Type - daily journal with mood tracking, done todo items.
 - [ ] Skill Note Type - for tracking skills, subskills, resources, progress, etc.

@@ -489,29 +489,42 @@
                                     <h3>Re-Index OCR</h3>
                                     <p class="reindex-card-desc">
                                         Re-generate embeddings for OCR-scanned
-                                        file contents missing them.
+                                        file contents.
                                     </p>
                                 </div>
                             </div>
-                            <button
-                                class="btn-amber btn-sm shortcut-anchor"
-                                :title="getShortcutLabel('reindex-ocr')"
-                                :disabled="reindexingOCR"
-                                @click="reindexOCR"
-                            >
-                                {{
-                                    reindexingOCR
-                                        ? "Enqueuing…"
-                                        : "Re-Index OCR Files"
-                                }}
-                                <ShortcutHint
-                                    v-if="
-                                        shortcutHintsVisible &&
-                                        isShortcutEnabled('reindex-ocr')
-                                    "
-                                    :label="getHintLabel('reindex-ocr')"
-                                />
-                            </button>
+                            <div class="reindex-card-actions">
+                                <button
+                                    class="btn-amber btn-sm shortcut-anchor"
+                                    :title="getShortcutLabel('reindex-ocr')"
+                                    :disabled="reindexingOCR || reindexingAllOCR"
+                                    @click="reindexOCR"
+                                >
+                                    {{
+                                        reindexingOCR
+                                            ? "Enqueuing…"
+                                            : "Re-Index Missing"
+                                    }}
+                                    <ShortcutHint
+                                        v-if="
+                                            shortcutHintsVisible &&
+                                            isShortcutEnabled('reindex-ocr')
+                                        "
+                                        :label="getHintLabel('reindex-ocr')"
+                                    />
+                                </button>
+                                <button
+                                    class="btn-danger btn-sm"
+                                    :disabled="reindexingOCR || reindexingAllOCR"
+                                    @click="reindexAllOCR"
+                                >
+                                    {{
+                                        reindexingAllOCR
+                                            ? "Enqueuing…"
+                                            : "Re-Index All"
+                                    }}
+                                </button>
+                            </div>
                         </div>
                         <div
                             v-if="reindexOCRErr || reindexOCROk"
@@ -522,6 +535,17 @@
                             </p>
                             <p v-if="reindexOCROk" class="msg-ok">
                                 {{ reindexOCROk }}
+                            </p>
+                        </div>
+                        <div
+                            v-if="reindexAllOCRErr || reindexAllOCROk"
+                            class="reindex-card-status"
+                        >
+                            <p v-if="reindexAllOCRErr" class="msg-error">
+                                {{ reindexAllOCRErr }}
+                            </p>
+                            <p v-if="reindexAllOCROk" class="msg-ok">
+                                {{ reindexAllOCROk }}
                             </p>
                         </div>
                     </div>
@@ -535,30 +559,42 @@
                                     <h3>Re-Index STT</h3>
                                     <p class="reindex-card-desc">
                                         Re-generate embeddings for
-                                        speech-to-text transcriptions missing
-                                        them.
+                                        speech-to-text transcriptions.
                                     </p>
                                 </div>
                             </div>
-                            <button
-                                class="btn-amber btn-sm shortcut-anchor"
-                                :title="getShortcutLabel('reindex-stt')"
-                                :disabled="reindexingSTT"
-                                @click="reindexSTT"
-                            >
-                                {{
-                                    reindexingSTT
-                                        ? "Enqueuing…"
-                                        : "Re-Index STT Files"
-                                }}
-                                <ShortcutHint
-                                    v-if="
-                                        shortcutHintsVisible &&
-                                        isShortcutEnabled('reindex-stt')
-                                    "
-                                    :label="getHintLabel('reindex-stt')"
-                                />
-                            </button>
+                            <div class="reindex-card-actions">
+                                <button
+                                    class="btn-amber btn-sm shortcut-anchor"
+                                    :title="getShortcutLabel('reindex-stt')"
+                                    :disabled="reindexingSTT || reindexingAllSTT"
+                                    @click="reindexSTT"
+                                >
+                                    {{
+                                        reindexingSTT
+                                            ? "Enqueuing…"
+                                            : "Re-Index Missing"
+                                    }}
+                                    <ShortcutHint
+                                        v-if="
+                                            shortcutHintsVisible &&
+                                            isShortcutEnabled('reindex-stt')
+                                        "
+                                        :label="getHintLabel('reindex-stt')"
+                                    />
+                                </button>
+                                <button
+                                    class="btn-danger btn-sm"
+                                    :disabled="reindexingSTT || reindexingAllSTT"
+                                    @click="reindexAllSTT"
+                                >
+                                    {{
+                                        reindexingAllSTT
+                                            ? "Enqueuing…"
+                                            : "Re-Index All"
+                                    }}
+                                </button>
+                            </div>
                         </div>
                         <div
                             v-if="reindexSTTErr || reindexSTTOk"
@@ -569,6 +605,17 @@
                             </p>
                             <p v-if="reindexSTTOk" class="msg-ok">
                                 {{ reindexSTTOk }}
+                            </p>
+                        </div>
+                        <div
+                            v-if="reindexAllSTTErr || reindexAllSTTOk"
+                            class="reindex-card-status"
+                        >
+                            <p v-if="reindexAllSTTErr" class="msg-error">
+                                {{ reindexAllSTTErr }}
+                            </p>
+                            <p v-if="reindexAllSTTOk" class="msg-ok">
+                                {{ reindexAllSTTOk }}
                             </p>
                         </div>
                     </div>
@@ -800,7 +847,9 @@ import {
     triggerBackup as apiTriggerBackup,
     reindexNotes as apiReindexNotes,
     reindexOCR as apiReindexOCR,
+    reindexAllOCR as apiReindexAllOCR,
     reindexSTT as apiReindexSTT,
+    reindexAllSTT as apiReindexAllSTT,
     refreshAllAutoTags as apiRefreshAllAutoTags,
     recalculateRecipeCategories as apiRecalculateRecipeCategories,
     deleteUnknownS3Files as apiDeleteUnknownS3,
@@ -857,9 +906,17 @@ const reindexingOCR = ref(false);
 const reindexOCRErr = ref("");
 const reindexOCROk = ref("");
 
+const reindexingAllOCR = ref(false);
+const reindexAllOCRErr = ref("");
+const reindexAllOCROk = ref("");
+
 const reindexingSTT = ref(false);
 const reindexSTTErr = ref("");
 const reindexSTTOk = ref("");
+
+const reindexingAllSTT = ref(false);
+const reindexAllSTTErr = ref("");
+const reindexAllSTTOk = ref("");
 
 const refreshingAllAutoTags = ref(false);
 const refreshAllAutoTagsErr = ref("");
@@ -1115,6 +1172,46 @@ async function reindexSTT() {
         reindexSTTErr.value = e.message || "Re-index STT failed";
     } finally {
         reindexingSTT.value = false;
+    }
+}
+
+async function reindexAllOCR() {
+    reindexAllOCRErr.value = "";
+    reindexAllOCROk.value = "";
+    if (!confirm("⚠️ This will re-index ALL OCR files, even those already indexed. This may take a long time and consume API resources. Continue?")) {
+        return;
+    }
+    reindexingAllOCR.value = true;
+    try {
+        const res = await apiReindexAllOCR(props.token);
+        reindexAllOCROk.value = res.message;
+        setTimeout(() => {
+            reindexAllOCROk.value = "";
+        }, 10000);
+    } catch (e) {
+        reindexAllOCRErr.value = e.message || "Re-index all OCR failed";
+    } finally {
+        reindexingAllOCR.value = false;
+    }
+}
+
+async function reindexAllSTT() {
+    reindexAllSTTErr.value = "";
+    reindexAllSTTOk.value = "";
+    if (!confirm("⚠️ This will re-index ALL STT files, even those already indexed. This may take a long time and consume API resources. Continue?")) {
+        return;
+    }
+    reindexingAllSTT.value = true;
+    try {
+        const res = await apiReindexAllSTT(props.token);
+        reindexAllSTTOk.value = res.message;
+        setTimeout(() => {
+            reindexAllSTTOk.value = "";
+        }, 10000);
+    } catch (e) {
+        reindexAllSTTErr.value = e.message || "Re-index all STT failed";
+    } finally {
+        reindexingAllSTT.value = false;
     }
 }
 
@@ -1411,6 +1508,13 @@ onMounted(() => {
     justify-content: space-between;
     gap: 1rem;
     width: 100%;
+}
+
+.reindex-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
 }
 
 .reindex-card-header {
