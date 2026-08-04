@@ -4,10 +4,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 func TestWebAuthnRegisterBeginAcceptsAuthCookieAndSetsSecureSessionCookie(t *testing.T) {
-	t.Setenv("PUBLIC_BASE_URL", "https://notes.example.com")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Server.PublicBaseURL = "https://notes.example.com"
 	s := newTestServer(t)
 	token := createTestSession(t, s)
 

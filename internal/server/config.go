@@ -4,16 +4,14 @@ import (
 	"log"
 	"net"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 const (
 	defaultPublicHTTPBaseURL  = "http://localhost:8080"
 	defaultPublicHTTPSBaseURL = "https://localhost:8080"
-	defaultMaxUploadBytes     = 64 << 20
-	defaultMaxInlineUploads   = 64 << 20
 	defaultMaxJSONBodyBytes   = 1 << 20
 )
 
@@ -33,9 +31,18 @@ type serverConfig struct {
 }
 
 func loadServerConfig(addr string) serverConfig {
-	certFile, keyFile, tlsEnabled := loadTLSConfigFromEnv()
+	cfg := config.Get()
+	certFile := strings.TrimSpace(cfg.Server.TLSCertFile)
+	keyFile := strings.TrimSpace(cfg.Server.TLSKeyFile)
+	switch {
+	case certFile == "" && keyFile == "":
+		// TLS disabled
+	case certFile == "" || keyFile == "":
+		log.Fatalf("server: TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable HTTPS")
+	}
+	tlsEnabled := certFile != "" && keyFile != ""
 
-	baseURL := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL"))
+	baseURL := strings.TrimSpace(cfg.Server.PublicBaseURL)
 	if baseURL == "" {
 		baseURL = defaultPublicBaseURL(addr, tlsEnabled)
 	}
@@ -58,7 +65,7 @@ func loadServerConfig(addr string) serverConfig {
 		log.Fatalf("server: PUBLIC_BASE_URL=%q must use https:// for non-localhost deployments", baseURL)
 	}
 
-	rpID := strings.TrimSpace(os.Getenv("WEBAUTHN_RPID"))
+	rpID := strings.TrimSpace(cfg.Auth.WebAuthnRPID)
 	if rpID == "" {
 		rpID = parsed.Hostname()
 	}
@@ -66,19 +73,18 @@ func loadServerConfig(addr string) serverConfig {
 		rpID = "localhost"
 	}
 
-	originsRaw := strings.TrimSpace(os.Getenv("WEBAUTHN_RP_ORIGINS"))
-	origins := splitCommaList(originsRaw)
+	origins := cfg.Auth.WebAuthnRPOrigins
 	if len(origins) == 0 {
 		origins = []string{baseURL}
 	}
 
-	maxUploadBytes := envOrInt64("MAX_UPLOAD_BYTES", defaultMaxUploadBytes)
-	maxInlineUploadBytes := envOrInt64("MAX_INLINE_UPLOAD_BYTES", defaultMaxInlineUploads)
+	maxUploadBytes := cfg.Server.MaxUploadBytes
+	maxInlineUploadBytes := cfg.Server.MaxInlineUploadBytes
 	if maxInlineUploadBytes > maxUploadBytes {
 		maxInlineUploadBytes = maxUploadBytes
 	}
 
-	maxJSONBodyBytes := envOrInt64("MAX_JSON_BODY_BYTES", defaultMaxJSONBodyBytes)
+	maxJSONBodyBytes := cfg.Server.MaxJSONBodyBytes
 
 	return serverConfig{
 		PublicBaseURL:        baseURL,
@@ -94,20 +100,6 @@ func loadServerConfig(addr string) serverConfig {
 		TLSCertFile:          certFile,
 		TLSKeyFile:           keyFile,
 	}
-}
-
-func loadTLSConfigFromEnv() (certFile, keyFile string, tlsEnabled bool) {
-	certFile = strings.TrimSpace(os.Getenv("TLS_CERT_FILE"))
-	keyFile = strings.TrimSpace(os.Getenv("TLS_KEY_FILE"))
-	switch {
-	case certFile == "" && keyFile == "":
-		return "", "", false
-	case certFile == "" || keyFile == "":
-		log.Fatalf("server: TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable HTTPS")
-	default:
-		return certFile, keyFile, true
-	}
-	return "", "", false
 }
 
 func defaultPublicBaseURL(addr string, tlsEnabled bool) string {
@@ -160,34 +152,6 @@ func isUnspecifiedHost(host string) bool {
 
 func (c serverConfig) TLSEnabled() bool {
 	return c.TLSCertFile != "" && c.TLSKeyFile != ""
-}
-
-func envOrInt64(key string, def int64) int64 {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n < 1 {
-		log.Printf("server: invalid %s=%q; using default %d", key, v, def)
-		return def
-	}
-	return n
-}
-
-func splitCommaList(v string) []string {
-	if v == "" {
-		return nil
-	}
-	parts := strings.Split(v, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }
 
 func isLocalhostHost(host string) bool {

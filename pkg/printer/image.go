@@ -5,9 +5,8 @@ import (
 	"image"
 	"log"
 	"math"
-	"os"
-	"strconv"
-	"strings"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 const (
@@ -19,26 +18,24 @@ const (
 )
 
 func configuredImageThreshold() float64 {
-	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_IMAGE_THRESHOLD"))
-	if raw == "" {
+	v := config.Get().Printer.ImageThreshold
+	if v < 0 || v > 255 {
+		log.Printf("printer: invalid image_threshold=%.2f, using default %.2f", v, defaultImageThreshold)
 		return defaultImageThreshold
 	}
-	v, err := strconv.ParseFloat(raw, 64)
-	if err != nil || v < 0 || v > 255 {
-		log.Printf("printer: invalid THERMAL_PRINTER_IMAGE_THRESHOLD=%q, using default %.2f", raw, defaultImageThreshold)
+	if v == 0 {
 		return defaultImageThreshold
 	}
 	return v
 }
 
 func configuredImageDarknessScale() float64 {
-	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_IMAGE_DARKNESS_SCALE"))
-	if raw == "" {
+	v := config.Get().Printer.ImageDarknessScale
+	if v <= 0 {
+		log.Printf("printer: invalid image_darkness_scale=%.2f, using default %.2f", v, defaultImageDarknessScale)
 		return defaultImageDarknessScale
 	}
-	v, err := strconv.ParseFloat(raw, 64)
-	if err != nil || v <= 0 {
-		log.Printf("printer: invalid THERMAL_PRINTER_IMAGE_DARKNESS_SCALE=%q, using default %.2f", raw, defaultImageDarknessScale)
+	if v == 0 {
 		return defaultImageDarknessScale
 	}
 	return v

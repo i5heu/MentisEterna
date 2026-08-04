@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/searchindex"
@@ -17,9 +19,20 @@ import (
 // Usage: go run ./cmd/backfill/ [--db mentis.db] [--batch 5] [--sleep 500ms]
 func main() {
 	dbPath := flag.String("db", "mentis.db", "path to the SQLite database")
+	configPath := flag.String("config", "config.toml", "path to TOML config file; if absent, defaults are used")
 	batchSize := flag.Int("batch", 5, "how many notes to index before sleeping")
 	sleepDur := flag.Duration("sleep", 500*time.Millisecond, "sleep duration between batches")
 	flag.Parse()
+
+	if fi, err := os.Stat(*configPath); err == nil && fi != nil {
+		if err := config.Load(*configPath); err != nil {
+			log.Fatalf("config: %v", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		log.Fatalf("config: stat %s: %v", *configPath, err)
+	} else {
+		log.Printf("config: %s not found; using defaults (copy config.default.toml to customize)", *configPath)
+	}
 
 	database, err := db.Open(*dbPath)
 	if err != nil {

@@ -182,8 +182,8 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 ## TODO
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] socratic Questionnaire Mode
-- [ ] Change "Chat AI Models" to tiered models like "Smart Model" and "Small Model"
-- [ ] Move from Env vars to a toml config file except for secrets like S3 and LocalAI API keys.
+- [x] Change "Chat AI Models" to tiered models like "Smart Model" and "Small Model"
+- [x] Move from Env vars to a toml config file except for secrets like S3 and LocalAI API keys.
 - [x] User uploads (including inline uploads) in chunks, verify checksum and resume if connection is lost. Chunking in webworker if possible to keep the UI responsive.
 - [x] Upload spinner and stats in the left bottom corner for inline uploads and for attachment uploads a modal with upload progress and stats.
 - [ ] delte stall upload chunks after a timeout (12h)

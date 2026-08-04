@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	recipeplugin "github.com/i5heu/MentisEterna/pkg/notetype/recipe"
 )
@@ -17,7 +18,7 @@ type recipeImportActionResult struct {
 }
 
 func (s *Server) recipeCategoryWorkerCount() int {
-	return envOrInt("RECIPE_CATEGORY_WORKERS", 10)
+	return config.Get().Recipe.CategoryWorkers
 }
 
 func (s *Server) classifyRecipeIngredientsForNotes(noteIDs ...int64) {

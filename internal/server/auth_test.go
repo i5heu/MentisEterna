@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/db"
 )
 
@@ -320,7 +321,9 @@ func TestHandleLoginAppliesThrottleAfterRepeatedFailures(t *testing.T) {
 }
 
 func TestHandleLoginSetsSecureCookieWhenConfiguredForHTTPS(t *testing.T) {
-	t.Setenv("PUBLIC_BASE_URL", "https://notes.example.com")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Server.PublicBaseURL = "https://notes.example.com"
 	s := newTestServer(t)
 	if err := s.db.SetAdminPassword("pass123"); err != nil {
 		t.Fatalf("set password: %v", err)

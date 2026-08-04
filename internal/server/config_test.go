@@ -1,11 +1,14 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/i5heu/MentisEterna/internal/config"
+)
 
 func TestLoadServerConfigDefaultsToHTTPWithoutTLS(t *testing.T) {
-	t.Setenv("PUBLIC_BASE_URL", "")
-	t.Setenv("TLS_CERT_FILE", "")
-	t.Setenv("TLS_KEY_FILE", "")
+	config.Reset()
+	t.Cleanup(config.Reset)
 
 	cfg := loadServerConfig(":8080")
 	if got := cfg.PublicBaseURL; got != "http://localhost:8080" {
@@ -20,9 +23,10 @@ func TestLoadServerConfigDefaultsToHTTPWithoutTLS(t *testing.T) {
 }
 
 func TestLoadServerConfigDefaultsToHTTPSWhenTLSConfigured(t *testing.T) {
-	t.Setenv("PUBLIC_BASE_URL", "")
-	t.Setenv("TLS_CERT_FILE", "/tls/server.crt")
-	t.Setenv("TLS_KEY_FILE", "/tls/server.key")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Server.TLSCertFile = "/tls/server.crt"
+	config.Get().Server.TLSKeyFile = "/tls/server.key"
 
 	cfg := loadServerConfig(":8443")
 	if got := cfg.PublicBaseURL; got != "https://localhost:8443" {

@@ -16,6 +16,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/i5heu/MentisEterna/internal/backup"
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
@@ -73,7 +74,7 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 		log.Fatalf("webauthn: %v", err)
 	}
 
-	jobMgr := jobs.NewManager(d.DB, envOrInt("JOB_WORKERS", 10))
+	jobMgr := jobs.NewManager(d.DB, config.Get().Jobs.Workers)
 	liveHub := newLiveHub()
 	jobMgr.SetObserver(func(evt jobs.RunEvent) {
 		liveHub.broadcast(liveMessage{
@@ -86,14 +87,18 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 	// Media subsystem: set up cache, S3 store, and the service orchestrator.
 	var mediaSvc *media.Service
 	var mediaEndpoints []media.EndpointConfig
-	mediaCfg, cfgErr := media.LoadConfigFromEnv()
-	if cfgErr != nil {
-		log.Printf("media: not enabled (%v)", cfgErr)
+	cacheDir := config.Get().Media.CacheDir
+	endpoints, epErr := media.LoadEndpointsFromEnv() // secrets, stays env
+	if cacheDir == "" {
+		log.Printf("media: not enabled (media.cache_dir not set)")
+	} else if epErr != nil {
+		log.Printf("media: not enabled (S3 endpoints missing: %v)", epErr)
 	} else {
+		mediaCfg := media.Config{CacheDir: cacheDir, Endpoints: endpoints}
 		mediaSvc = media.NewService(d, mediaCfg)
-		mediaEndpoints = mediaCfg.Endpoints
+		mediaEndpoints = endpoints
 		// EnqueueFunc will be wired after jobMgr is started.
-		log.Printf("media: enabled with %d endpoint(s), cache=%s", len(mediaCfg.Endpoints), mediaCfg.CacheDir)
+		log.Printf("media: enabled with %d endpoint(s), cache=%s", len(endpoints), cacheDir)
 	}
 
 	// Backup subsystem: AES-256-GCM encrypted SQLite backups to S3.
@@ -130,19 +135,6 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 		backupService: backupSvc,
 		liveHub:       liveHub,
 	}
-}
-
-func envOrInt(key string, def int) int {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 {
-		log.Printf("server: invalid %s=%q; using default %d", key, v, def)
-		return def
-	}
-	return n
 }
 
 func (s *Server) Start(ctx context.Context) error {
@@ -1019,10 +1011,7 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		baseURL = "http://localhost:8080"
 	}
 
-	embeddingModel := os.Getenv("LOCALAI_EMBEDDING_MODEL")
-	if embeddingModel == "" {
-		embeddingModel = "text-embedding-ada-002"
-	}
+	embeddingModel := config.Get().LLM.EmbeddingModel
 
 	chatModel := llm.FeatureModel("title")
 
@@ -1230,10 +1219,7 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Database file size.
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "mentis.db"
-	}
+	dbPath := config.Get().Database.Path
 	dbSize := int64(-1)
 	if fi, err := os.Stat(dbPath); err == nil {
 		dbSize = fi.Size()

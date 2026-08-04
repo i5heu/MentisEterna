@@ -18,4 +18,6 @@ connect_printer.sh
 .env.test
 .env.production
 .env.prod
+config.toml
 mentis-data/
+chronos.py

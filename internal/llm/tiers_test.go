@@ -1,18 +1,29 @@
 package llm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/i5heu/MentisEterna/internal/config"
+)
+
+// setTierModel sets a tier's model in the global config, working around maps
+// being non-addressable.
+func setTierModel(name, model string) {
+	c := config.Get()
+	if c.LLM.Tiers == nil {
+		c.LLM.Tiers = map[string]config.TierConfig{}
+	}
+	tiers := c.LLM.Tiers
+	t := tiers[name]
+	t.Model = model
+	tiers[name] = t
+	c.LLM.Tiers = tiers
+}
 
 func TestTiers(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
-		t.Setenv("LLM_TIER_SMART_MODEL", "")
-		t.Setenv("LLM_TIER_MEDIUM_MODEL", "")
-		t.Setenv("LLM_TIER_SMALL_MODEL", "")
-		t.Setenv("LLM_TIER_TINY_MODEL", "")
-		t.Setenv("LLM_TIER_TINY_BASE_URL", "")
-		t.Setenv("LLM_TIER_MEDIUM_BASE_URL", "")
-		t.Setenv("LOCALAI_CHAT_MODEL", "")
-		t.Setenv("LOCALAI_OCR_MODEL", "")
-		t.Setenv("LOCALAI_STT_MODEL", "")
+		config.Reset()
+		t.Cleanup(config.Reset)
 		t.Setenv("LOCALAI_BASE_URL", "")
 
 		if got := FeatureTier("title"); got != TierTiny {
@@ -30,7 +41,9 @@ func TestTiers(t *testing.T) {
 	})
 
 	t.Run("TierModelOverride", func(t *testing.T) {
-		t.Setenv("LLM_TIER_SMART_MODEL", "qwen-smart")
+		config.Reset()
+		t.Cleanup(config.Reset)
+		setTierModel(TierSmart, "qwen-smart")
 		if got := FeatureTier("subtasks"); got != TierSmart {
 			t.Errorf("FeatureTier(subtasks) = %q, want %q", got, TierSmart)
 		}
@@ -40,6 +53,8 @@ func TestTiers(t *testing.T) {
 	})
 
 	t.Run("TierBaseURLOverride", func(t *testing.T) {
+		config.Reset()
+		t.Cleanup(config.Reset)
 		t.Setenv("LLM_TIER_TINY_BASE_URL", "http://tiny:9000")
 		if got := FeatureBaseURL("title"); got != "http://tiny:9000" {
 			t.Errorf("FeatureBaseURL(title) = %q, want http://tiny:9000", got)
@@ -47,42 +62,45 @@ func TestTiers(t *testing.T) {
 	})
 
 	t.Run("LegacyFallback", func(t *testing.T) {
-		t.Setenv("LLM_TIER_MEDIUM_MODEL", "")
-		t.Setenv("LOCALAI_OCR_MODEL", "legacy-ocr")
+		config.Reset()
+		t.Cleanup(config.Reset)
+		config.Get().LLM.OCRModel = "legacy-ocr"
 		if got := FeatureModel("ocr"); got != "legacy-ocr" {
 			t.Errorf("FeatureModel(ocr) = %q, want legacy-ocr", got)
 		}
 
-		t.Setenv("LLM_TIER_MEDIUM_MODEL", "med")
+		setTierModel(TierMedium, "med")
 		if got := FeatureModel("ocr"); got != "med" {
 			t.Errorf("FeatureModel(ocr) = %q, want med (tier precedence)", got)
 		}
 	})
 
 	t.Run("DedicatedOCRSTTModel", func(t *testing.T) {
-		t.Setenv("LLM_TIER_MEDIUM_MODEL", "med")
-		t.Setenv("LLM_TIER_SMALL_MODEL", "small")
-		t.Setenv("LOCALAI_OCR_MODEL", "legacy-ocr")
-		t.Setenv("LOCALAI_STT_MODEL", "legacy-stt")
+		config.Reset()
+		t.Cleanup(config.Reset)
+		setTierModel(TierMedium, "med")
+		setTierModel(TierSmall, "small")
+		config.Get().LLM.OCRModel = "legacy-ocr"
+		config.Get().LLM.STTModel = "legacy-stt"
 
 		// Dedicated model wins over tier and legacy.
-		t.Setenv("LLM_OCR_MODEL", "dedicated-ocr")
+		config.Get().LLM.OCRDedicatedModel = "dedicated-ocr"
 		if got := FeatureModel("ocr"); got != "dedicated-ocr" {
 			t.Errorf("FeatureModel(ocr) = %q, want dedicated-ocr", got)
 		}
 
 		// Unset dedicated -> tier model.
-		t.Setenv("LLM_OCR_MODEL", "")
+		config.Get().LLM.OCRDedicatedModel = ""
 		if got := FeatureModel("ocr"); got != "med" {
 			t.Errorf("FeatureModel(ocr) = %q, want med (tier)", got)
 		}
 
 		// STT same pattern.
-		t.Setenv("LLM_STT_MODEL", "dedicated-stt")
+		config.Get().LLM.STTDedicatedModel = "dedicated-stt"
 		if got := FeatureModel("stt"); got != "dedicated-stt" {
 			t.Errorf("FeatureModel(stt) = %q, want dedicated-stt", got)
 		}
-		t.Setenv("LLM_STT_MODEL", "")
+		config.Get().LLM.STTDedicatedModel = ""
 		if got := FeatureModel("stt"); got != "small" {
 			t.Errorf("FeatureModel(stt) = %q, want small (tier)", got)
 		}

@@ -3,6 +3,8 @@ package llm
 import (
 	"os"
 	"strings"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 const (
@@ -12,62 +14,82 @@ const (
 	TierTiny   = "tiny"
 )
 
-// featureSpec: tier assignment env var name, default tier, dedicated model env
-// var ("" if none), legacy model env var, default model.
+// featureSpec: default tier, dedicated model ("ocr"/"stt" if the feature has a
+// dedicated model override, else ""), legacy model ("chat"/"ocr"/"stt" — which
+// llm legacy model is the fallback), default model.
 //
 // OCR and STT are single-purpose models (they only perform one task), so they
-// have dedicated model env vars that take precedence over the shared tier
-// model vars.
+// have dedicated model overrides that take precedence over the shared tier
+// models.
 type featureSpec struct {
-	tierEnv        string
-	defaultTier    string
-	dedicatedModel string
-	legacyModel    string
-	defaultModel   string
+	defaultTier  string
+	dedicated    string // "ocr"/"stt" if the feature has a dedicated model override, else ""
+	legacy       string // "chat"/"ocr"/"stt" — which llm legacy model is the fallback
+	defaultModel string
 }
 
 var featureSpecs = map[string]featureSpec{
-	"title":    {"LLM_FEATURE_TITLE_TIER", TierTiny, "", "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
-	"tags":     {"LLM_FEATURE_TAGS_TIER", TierMedium, "", "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
-	"subtasks": {"LLM_FEATURE_SUBTASKS_TIER", TierSmart, "", "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
-	"ocr":      {"LLM_FEATURE_OCR_TIER", TierMedium, "LLM_OCR_MODEL", "LOCALAI_OCR_MODEL", "gpt-4o-mini"},
-	"stt":      {"LLM_FEATURE_STT_TIER", TierSmall, "LLM_STT_MODEL", "LOCALAI_STT_MODEL", "nemo-parakeet-tdt-0.6b"},
+	"title":    {TierTiny, "", "chat", "gpt-3.5-turbo"},
+	"tags":     {TierMedium, "", "chat", "gpt-3.5-turbo"},
+	"subtasks": {TierSmart, "", "chat", "gpt-3.5-turbo"},
+	"ocr":      {TierMedium, "ocr", "ocr", "gpt-4o-mini"},
+	"stt":      {TierSmall, "stt", "stt", "nemo-parakeet-tdt-0.6b"},
 }
 
 // TierNames returns the four tier names in capability order.
 func TierNames() []string { return []string{TierSmart, TierMedium, TierSmall, TierTiny} }
 
-// FeatureTier returns the tier a feature is bound to (LLM_FEATURE_<UPPER(feature)>_TIER, else default).
+// FeatureTier returns the tier a feature is bound to (config override, else default).
 func FeatureTier(feature string) string {
 	spec := featureSpecs[feature]
-	if v := os.Getenv(spec.tierEnv); v != "" {
-		return strings.ToLower(v)
+	if t := config.Get().LLM.Features[feature].Tier; t != "" {
+		return strings.ToLower(t)
 	}
 	return spec.defaultTier
 }
 
-// TierModel returns LLM_TIER_<NAME>_MODEL ("" if unset).
-func TierModel(name string) string { return os.Getenv("LLM_TIER_" + strings.ToUpper(name) + "_MODEL") }
+// TierModel returns the model for a tier from config ("" if unset).
+func TierModel(name string) string { return config.Get().LLM.Tiers[name].Model }
 
-// TierBaseURL returns LLM_TIER_<NAME>_BASE_URL ("" if unset).
+// TierBaseURL returns the per-tier base URL from env (secret, stays env; "" if unset).
 func TierBaseURL(name string) string {
 	return os.Getenv("LLM_TIER_" + strings.ToUpper(name) + "_BASE_URL")
 }
 
+func dedicatedModel(spec featureSpec) string {
+	switch spec.dedicated {
+	case "ocr":
+		return config.Get().LLM.OCRDedicatedModel
+	case "stt":
+		return config.Get().LLM.STTDedicatedModel
+	}
+	return ""
+}
+
+func legacyModel(spec featureSpec) string {
+	switch spec.legacy {
+	case "chat":
+		return config.Get().LLM.ChatModel
+	case "ocr":
+		return config.Get().LLM.OCRModel
+	case "stt":
+		return config.Get().LLM.STTModel
+	}
+	return ""
+}
+
 // FeatureModel: dedicated feature model (OCR/STT only), else tier model, else
-// legacy feature env, else default.
+// legacy model, else default.
 func FeatureModel(feature string) string {
 	spec := featureSpecs[feature]
-	if spec.dedicatedModel != "" {
-		if v := os.Getenv(spec.dedicatedModel); v != "" {
-			return v
-		}
+	if d := dedicatedModel(spec); d != "" {
+		return d
 	}
 	if m := TierModel(FeatureTier(feature)); m != "" {
 		return m
 	}
-	if v := os.Getenv(spec.legacyModel); v != "" {
-		return v
+	if l := legacyModel(spec); l != "" {
+		return l
 	}
 	return spec.defaultModel
 }

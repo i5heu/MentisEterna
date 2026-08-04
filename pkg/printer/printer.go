@@ -12,10 +12,11 @@ import (
 	"io"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -201,9 +202,9 @@ var windows1252Specials = map[rune]byte{
 }
 
 func configuredCodePage() escposCodePage {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("THERMAL_PRINTER_CODEPAGE"))) {
+	switch strings.ToLower(strings.TrimSpace(config.Get().Printer.CodePage)) {
 	case "", "auto":
-		usbID := strings.ToLower(strings.TrimSpace(os.Getenv("THERMAL_PRINTER_USB_ID")))
+		usbID := strings.ToLower(strings.TrimSpace(config.Get().Printer.USBID))
 		if usbID == "08a6:003d" {
 			return escposCodePage{name: "pc437", table: escposCodeTablePC437, encode: encodePC437}
 		}
@@ -213,7 +214,7 @@ func configuredCodePage() escposCodePage {
 	case "16", "wpc1252", "cp1252", "windows1252", "windows-1252":
 		return escposCodePage{name: "wpc1252", table: escposCodeTableWPC1252, encode: encodeWindows1252}
 	default:
-		log.Printf("printer: unknown THERMAL_PRINTER_CODEPAGE=%q, falling back to pc437", os.Getenv("THERMAL_PRINTER_CODEPAGE"))
+		log.Printf("printer: unknown THERMAL_PRINTER_CODEPAGE=%q, falling back to pc437", config.Get().Printer.CodePage)
 		return escposCodePage{name: "pc437", table: escposCodeTablePC437, encode: encodePC437}
 	}
 }
@@ -583,26 +584,20 @@ var (
 )
 
 func configuredWriteChunkBytes() int {
-	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_WRITE_CHUNK_BYTES"))
-	if raw == "" {
-		return defaultWriteChunkBytes
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		log.Printf("printer: invalid THERMAL_PRINTER_WRITE_CHUNK_BYTES=%q, using default %d", raw, defaultWriteChunkBytes)
+	n := config.Get().Printer.WriteChunkBytes
+	if n <= 0 {
 		return defaultWriteChunkBytes
 	}
 	return n
 }
 
 func configuredWriteDelay() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_WRITE_DELAY_MS"))
-	if raw == "" {
+	n := config.Get().Printer.WriteDelayMS
+	if n < 0 {
+		log.Printf("printer: invalid write_delay_ms=%d, using default %dms", n, defaultWriteDelayMS)
 		return time.Duration(defaultWriteDelayMS) * time.Millisecond
 	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		log.Printf("printer: invalid THERMAL_PRINTER_WRITE_DELAY_MS=%q, using default %dms", raw, defaultWriteDelayMS)
+	if n == 0 {
 		return time.Duration(defaultWriteDelayMS) * time.Millisecond
 	}
 	return time.Duration(n) * time.Millisecond

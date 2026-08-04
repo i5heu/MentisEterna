@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/server"
@@ -21,9 +22,20 @@ import (
 
 func main() {
 	createDB := flag.Bool("create-db", false, "create the SQLite database if it does not exist")
+	configPath := flag.String("config", "config.toml", "path to TOML config file; if absent, defaults are used")
 	flag.Parse()
 
-	dbPath := envOr("DB_PATH", "mentis.db")
+	if fi, err := os.Stat(*configPath); err == nil && fi != nil {
+		if err := config.Load(*configPath); err != nil {
+			log.Fatalf("config: %v", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		log.Fatalf("config: stat %s: %v", *configPath, err)
+	} else {
+		log.Printf("config: %s not found; using defaults (copy config.default.toml to customize)", *configPath)
+	}
+
+	dbPath := config.Get().Database.Path
 	if err := requireExistingDBUnlessCreate(dbPath, *createDB); err != nil {
 		log.Fatal(err)
 	}
@@ -43,7 +55,7 @@ func main() {
 	subtaskClient := llm.NewSubTaskClient()
 	ocrClient := llm.NewTieredOCRClient()
 	sttClient := llm.NewTieredSTTClient()
-	if err := server.New(database, envOr("ADDR", ":8080"), embeddingClient, titleClient, autoTaggerClient, subtaskClient, ocrClient, sttClient).Start(ctx); err != nil {
+	if err := server.New(database, config.Get().Server.Addr, embeddingClient, titleClient, autoTaggerClient, subtaskClient, ocrClient, sttClient).Start(ctx); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 	log.Println("server stopped, database closed")
@@ -73,11 +85,4 @@ func isInMemoryDBPath(dbPath string) bool {
 		return true
 	}
 	return strings.HasPrefix(trimmed, "file:") && strings.Contains(trimmed, "mode=memory")
-}
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }

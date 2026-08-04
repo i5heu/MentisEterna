@@ -1,0 +1,110 @@
+# MentisEterna configuration.
+#
+# Copy this file to `config.toml` and edit it. If `config.toml` is absent the
+# server runs with the built-in defaults shown here, so an unset option is
+# always safe. Secrets are NOT configured here — see "Secrets (environment
+# variables)" at the end.
+
+[database]
+# Path to the SQLite database file. Use ":memory:" or a "file:...?mode=memory"
+# URI for an in-memory database. Created on first run when starting with
+# `--create-db`.
+path = "mentis.db"
+
+# [Advanced] Directory containing the prebuilt sqlite-vec extension (vec0.so).
+# Normally auto-detected relative to the repo root; only set this to override.
+vec_ext_path = ""
+# Legacy alias for vec_ext_path; deprecated, prefer vec_ext_path.
+vss_ext_path = ""
+
+[server]
+# TCP listen address and port.
+addr = ":8080"
+
+# Public origin used for cookie/CSRF/WebAuthn decisions. Leave empty to derive
+# from addr (http://localhost:8080 by default). MUST be https:// for any
+# non-localhost host.
+public_base_url = ""
+
+# Request/upload size limits in bytes. Defaults: 64 MiB upload, 64 MiB inline,
+# 1 MiB JSON body. For ~5 GiB uploads use 5368709120.
+max_upload_bytes = 67108864
+max_inline_upload_bytes = 67108864
+max_json_body_bytes = 1048576
+
+# TLS certificate + key to enable HTTPS. Both must be set (or both empty).
+tls_cert_file = ""
+tls_key_file = ""
+
+[auth]
+# WebAuthn relying-party ID. Empty = derived from public_base_url host.
+webauthn_rpid = ""
+# Extra allowed WebAuthn origins beyond public_base_url (a list).
+webauthn_rp_origins = []
+
+[llm]
+# Embedding model used for vector search.
+embedding_model = "text-embedding-ada-002"
+# Max runes per embedding request, to avoid context overflow.
+embedding_max_chars = 16384
+# Set true to skip TLS verification for the LLM backend (self-signed certs).
+tls_insecure = false
+
+# Legacy chat/OCR/STT model fallbacks. A tier's model (below) takes precedence;
+# these are used when the relevant tier model is empty.
+chat_model = "gpt-3.5-turbo"
+ocr_model = "gpt-4o-mini"
+stt_model = "nemo-parakeet-tdt-0.6b"
+# Single-purpose OCR/STT models, taking precedence over both the tier model and
+# the legacy *_model above. Leave empty to disable the dedicated override.
+ocr_dedicated_model = ""
+stt_dedicated_model = ""
+
+# Four named model tiers. A tier's model is used by every feature bound to that
+# tier; empty = fall back to the legacy *_model. The tier's Base URL is a
+# secret and is NOT set here — use the LLM_TIER_<NAME>_BASE_URL env var.
+[llm.tiers]
+smart  = { model = "" }
+medium = { model = "" }
+small  = { model = "" }
+tiny   = { model = "" }
+
+# Feature -> tier binding. Values are one of smart/medium/small/tiny.
+# Defaults: title=tiny, tags=medium, subtasks=smart, ocr=medium, stt=small.
+[llm.features]
+title    = { tier = "tiny" }
+tags     = { tier = "medium" }
+subtasks = { tier = "smart" }
+ocr      = { tier = "medium" }
+stt      = { tier = "small" }
+
+[media]
+# Local cache directory for media files. Leave blank to disable media (and
+# backups, which need S3). S3 endpoints are secrets — see below.
+cache_dir = ""
+
+[jobs]
+# Number of concurrent background job workers.
+workers = 10
+
+[recipe]
+# Number of concurrent workers for recipe-category classification.
+category_workers = 10
+
+[printer]
+# USB-serial thermal printer settings.
+device = ""          # Explicit device path (e.g. /dev/usb/lp0); empty = auto-detect
+usb_id = ""          # Optional VID:PID override (e.g. "08a6:003d")
+codepage = "auto"    # auto | pc437 | wpc1252 | ...
+image_threshold = 120.0      # 0-255, dithering threshold
+image_darkness_scale = 0.96  # relative darkness multiplier
+write_chunk_bytes = 0        # 0 = default chunk size
+write_delay_ms = 0           # 0 = default inter-chunk delay
+
+# ---------------------------------------------------------------------------
+# Secrets (stay in the ENVIRONMENT, never here):
+#   LOCALAI_BASE_URL            — LLM/embedding backend base URL (or per-tier
+#                                 LLM_TIER_SMART_BASE_URL / _MEDIUM_ / _SMALL_ / _TINY_)
+#   MEDIA_S3_ENDPOINTS          — JSON array of S3 endpoint configs incl. keys
+#   BACKUP_ENCRYPTION_KEY       — hex AES-256 key for encrypted backups
+# ---------------------------------------------------------------------------

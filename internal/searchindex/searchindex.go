@@ -295,15 +295,15 @@ func splitLongTextForEmbedding(text string) []string {
 	if text == "" {
 		return nil
 	}
-	if utf8.RuneCountInString(text) <= llm.MaxEmbeddingChars {
+	if utf8.RuneCountInString(text) <= llm.MaxEmbeddingChars() {
 		return []string{text}
 	}
 
 	runes := []rune(text)
-	chunks := make([]string, 0, len(runes)/llm.MaxEmbeddingChars+1)
+	chunks := make([]string, 0, len(runes)/llm.MaxEmbeddingChars()+1)
 	start := 0
 	for start < len(runes) {
-		end := start + llm.MaxEmbeddingChars
+		end := start + llm.MaxEmbeddingChars()
 		if end >= len(runes) {
 			chunk := strings.TrimSpace(string(runes[start:]))
 			if chunk != "" {
@@ -313,7 +313,7 @@ func splitLongTextForEmbedding(text string) []string {
 		}
 
 		split := end
-		for i := end; i > start+llm.MaxEmbeddingChars/2; i-- {
+		for i := end; i > start+llm.MaxEmbeddingChars()/2; i-- {
 			if unicode.IsSpace(runes[i-1]) {
 				split = i
 				break

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 // USB device I/O control codes (from <linux/usbdevice_fs.h>).
@@ -289,14 +291,14 @@ func findUSBByID(vendorID, productID uint16) (Printer, error) {
 //
 // Returns the first successful connection.
 func FindPrinter() (Printer, error) {
-	// Strategy 1: explicit device path from env var.
-	if dev := os.Getenv("THERMAL_PRINTER_DEVICE"); dev != "" {
-		log.Printf("printer: trying THERMAL_PRINTER_DEVICE=%s", dev)
+	// Strategy 1: explicit device path from config.
+	if dev := config.Get().Printer.Device; dev != "" {
+		log.Printf("printer: trying configured device=%s", dev)
 		if pr, err := newFilePrinter(dev); err == nil {
-			log.Printf("printer: connected via THERMAL_PRINTER_DEVICE=%s", dev)
+			log.Printf("printer: connected via configured device=%s", dev)
 			return pr, nil
 		} else {
-			log.Printf("printer: THERMAL_PRINTER_DEVICE=%s failed: %v", dev, err)
+			log.Printf("printer: configured device=%s failed: %v", dev, err)
 		}
 	}
 
@@ -343,10 +345,10 @@ func parseUSBID(s string) (vid, pid uint16, ok bool) {
 }
 
 // PrinterUSBID returns the USB vendor and product IDs from the
-// THERMAL_PRINTER_USB_ID environment variable (format: "vid:pid", e.g. "08a6:003d").
-// Returns (0, 0, false) if the variable is not set or invalid.
+// printer.usb_id config (format: "vid:pid", e.g. "08a6:003d").
+// Returns (0, 0, false) if not set or invalid.
 func PrinterUSBID() (vid, pid uint16, ok bool) {
-	s := strings.TrimSpace(os.Getenv("THERMAL_PRINTER_USB_ID"))
+	s := strings.TrimSpace(config.Get().Printer.USBID)
 	if s == "" {
 		return 0, 0, false
 	}

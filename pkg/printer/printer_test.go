@@ -7,11 +7,13 @@ import (
 	"image/color"
 	"os"
 	"testing"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 func TestBufInit(t *testing.T) {
-	t.Setenv("THERMAL_PRINTER_CODEPAGE", "")
-	t.Setenv("THERMAL_PRINTER_USB_ID", "")
+	config.Reset()
+	t.Cleanup(config.Reset)
 
 	b := new(Buf)
 	b.Init()
@@ -23,7 +25,9 @@ func TestBufInit(t *testing.T) {
 }
 
 func TestBufInitWindows1252(t *testing.T) {
-	t.Setenv("THERMAL_PRINTER_CODEPAGE", "wpc1252")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Printer.CodePage = "wpc1252"
 
 	b := new(Buf)
 	b.Init()
@@ -108,8 +112,9 @@ func TestBufText(t *testing.T) {
 }
 
 func TestBufTextEncodesPC437(t *testing.T) {
-	t.Setenv("THERMAL_PRINTER_CODEPAGE", "")
-	t.Setenv("THERMAL_PRINTER_USB_ID", "08a6:003d")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Printer.USBID = "08a6:003d"
 
 	b := new(Buf)
 	b.Text("Ää Öö Üü ß")
@@ -120,7 +125,9 @@ func TestBufTextEncodesPC437(t *testing.T) {
 }
 
 func TestBufTextEncodesWindows1252(t *testing.T) {
-	t.Setenv("THERMAL_PRINTER_CODEPAGE", "wpc1252")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Printer.CodePage = "wpc1252"
 
 	b := new(Buf)
 	b.Text("Ää Öö Üü — …")
@@ -214,8 +221,10 @@ func TestSend(t *testing.T) {
 }
 
 func TestSendUsesThrottledChunks(t *testing.T) {
-	t.Setenv("THERMAL_PRINTER_WRITE_CHUNK_BYTES", "4")
-	t.Setenv("THERMAL_PRINTER_WRITE_DELAY_MS", "0")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Printer.WriteChunkBytes = 4
+	config.Get().Printer.WriteDelayMS = 0
 
 	pr := &mockPrinter{}
 	buf := new(Buf)
@@ -424,8 +433,10 @@ func TestFindPrinterPrefersExplicitDevice(t *testing.T) {
 		findUSBByIDStrategy = origFindUSBByIDStrategy
 	})
 
-	t.Setenv("THERMAL_PRINTER_DEVICE", "/tmp/mock-printer")
-	t.Setenv("THERMAL_PRINTER_USB_ID", "08a6:003d")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Printer.Device = "/tmp/mock-printer"
+	config.Get().Printer.USBID = "08a6:003d"
 
 	wantPrinter := &mockPrinter{}
 	newFilePrinter = func(devicePath string) (Printer, error) {
@@ -462,8 +473,9 @@ func TestFindPrinterFallsBackToUSBID(t *testing.T) {
 		findUSBByIDStrategy = origFindUSBByIDStrategy
 	})
 
-	t.Setenv("THERMAL_PRINTER_DEVICE", "")
-	t.Setenv("THERMAL_PRINTER_USB_ID", "08a6:003d")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Printer.USBID = "08a6:003d"
 
 	wantPrinter := &mockPrinter{}
 	newFilePrinter = func(devicePath string) (Printer, error) {

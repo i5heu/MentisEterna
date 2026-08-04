@@ -33,29 +33,34 @@ import (
 	"sync"
 
 	internaltags "github.com/i5heu/MentisEterna/internal/tags"
+	"github.com/i5heu/MentisEterna/internal/config"
 	gosqlite3 "github.com/mattn/go-sqlite3"
 )
 
-func init() {
-	extPath := os.Getenv("VEC_EXT_PATH")
-	if extPath == "" {
-		extPath = os.Getenv("VSS_EXT_PATH")
-	}
-	if extPath == "" {
-		extPath = findExtPath()
-	}
-	vecLib := filepath.Join(extPath, "vec0")
+var vecDriverOnce sync.Once
 
-	sql.Register("sqlite3-vec", &gosqlite3.SQLiteDriver{
-		ConnectHook: func(conn *gosqlite3.SQLiteConn) error {
-			if err := ensureVecRuntimeDeps(); err != nil {
-				return err
-			}
-			if err := conn.LoadExtension(vecLib, "sqlite3_vec_init"); err != nil {
-				return fmt.Errorf("load vec0: %w", err)
-			}
-			return nil
-		},
+func ensureVecDriver() {
+	vecDriverOnce.Do(func() {
+		extPath := config.Get().Database.VecExtPath
+		if extPath == "" {
+			extPath = config.Get().Database.LegacyVSSExtPath
+		}
+		if extPath == "" {
+			extPath = findExtPath()
+		}
+		vecLib := filepath.Join(extPath, "vec0")
+
+		sql.Register("sqlite3-vec", &gosqlite3.SQLiteDriver{
+			ConnectHook: func(conn *gosqlite3.SQLiteConn) error {
+				if err := ensureVecRuntimeDeps(); err != nil {
+					return err
+				}
+				if err := conn.LoadExtension(vecLib, "sqlite3_vec_init"); err != nil {
+					return fmt.Errorf("load vec0: %w", err)
+				}
+				return nil
+			},
+		})
 	})
 }
 
@@ -111,6 +116,7 @@ type DB struct {
 func (d *DB) VSSAvailable() bool { return d.vssAvailable }
 
 func Open(path string) (*DB, error) {
+	ensureVecDriver()
 	d, err := openWithDriver("sqlite3-vec", path+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000", true)
 	if err != nil {
 		log.Printf("sqlite-vec extension not available, falling back to standard SQLite: %v", err)
@@ -126,6 +132,7 @@ func Open(path string) (*DB, error) {
 // This is significantly faster than opening on-disk databases.
 // The connection pool is pinned to 1 so all operations share the same in-memory database.
 func OpenInMemory() (*DB, error) {
+	ensureVecDriver()
 	d, err := openWithDriver("sqlite3-vec", ":memory:?_foreign_keys=on", true)
 	if err != nil {
 		d, err = openWithDriver("sqlite3", ":memory:?_foreign_keys=on", false)

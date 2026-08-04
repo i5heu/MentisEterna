@@ -8,9 +8,10 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 // Embedder defines the interface for generating text embeddings.
@@ -83,7 +84,7 @@ type SubTaskItem struct {
 // TLS certificate verification is skipped — useful for self-signed certificates
 // on internal LAN addresses.
 func newLLMHTTPClient() *http.Client {
-	if isTruthy("LOCALAI_TLS_INSECURE") {
+	if config.Get().LLM.TLSInsecure {
 		return &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -91,11 +92,6 @@ func newLLMHTTPClient() *http.Client {
 		}
 	}
 	return &http.Client{}
-}
-
-func isTruthy(key string) bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
 // llmBaseURL returns the LocalAI base URL, configurable via the
@@ -121,7 +117,7 @@ type EmbeddingClient struct {
 func NewEmbeddingClient() *EmbeddingClient {
 	return &EmbeddingClient{
 		BaseURL: llmBaseURL(),
-		Model:   envOr("LOCALAI_EMBEDDING_MODEL", "text-embedding-ada-002"),
+		Model:   config.Get().LLM.EmbeddingModel,
 		http:    newLLMHTTPClient(),
 	}
 }
@@ -449,42 +445,24 @@ func CombineTitleBody(title, body string) string {
 	return title + "\n" + body
 }
 
-// maxEmbeddingChars is the fallback limit when LOCALAI_EMBEDDING_MAX_CHARS is not set.
-// Defaults to a conservative 16K runes (≈ 4K tokens) to avoid context overflow.
-const maxEmbeddingChars = 16 * 1024 // 16K runes
-
-// MaxEmbeddingChars returns the rune limit for embedding input. Read from the
-// LOCALAI_EMBEDDING_MAX_CHARS env var at init time; defaults to 16K if unset.
-var MaxEmbeddingChars = func() int {
-	if v := os.Getenv("LOCALAI_EMBEDDING_MAX_CHARS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return maxEmbeddingChars
-}()
+// MaxEmbeddingChars returns the rune limit for embedding input, read from
+// config (llm.embedding_max_chars); defaults to 16K.
+var MaxEmbeddingChars = func() int { return config.Get().LLM.EmbeddingMaxChars }
 
 // TruncateForEmbedding ensures text does not exceed the embedding model's
 // context window. It trims to MaxEmbeddingChars runes, preserving valid UTF-8
 // and trying to break on a whitespace boundary.
 func TruncateForEmbedding(text string) string {
-	if utf8.RuneCountInString(text) <= MaxEmbeddingChars {
+	if utf8.RuneCountInString(text) <= MaxEmbeddingChars() {
 		return text
 	}
 	runes := []rune(text)
-	if len(runes) <= MaxEmbeddingChars {
+	if len(runes) <= MaxEmbeddingChars() {
 		return text
 	}
-	truncated := string(runes[:MaxEmbeddingChars])
-	if idx := strings.LastIndexAny(truncated, " \t\n\r"); idx > MaxEmbeddingChars/2 {
+	truncated := string(runes[:MaxEmbeddingChars()])
+	if idx := strings.LastIndexAny(truncated, " \t\n\r"); idx > MaxEmbeddingChars()/2 {
 		return strings.TrimRight(truncated[:idx], " \t\n\r")
 	}
 	return strings.TrimRight(truncated, " \t\n\r")
-}
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }

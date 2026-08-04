@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/db"
 )
 
@@ -30,7 +31,8 @@ func createTestSession(t *testing.T, s *Server) string {
 }
 
 func TestNewServerJobWorkersDefault(t *testing.T) {
-	t.Setenv("JOB_WORKERS", "")
+	config.Reset()
+	t.Cleanup(config.Reset)
 	s := newTestServer(t)
 	if got := s.jobManager.WorkerCount(); got != 10 {
 		t.Fatalf("WorkerCount() = %d, want 10", got)
@@ -38,7 +40,9 @@ func TestNewServerJobWorkersDefault(t *testing.T) {
 }
 
 func TestNewServerJobWorkersFromEnv(t *testing.T) {
-	t.Setenv("JOB_WORKERS", "6")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Jobs.Workers = 6
 	s := newTestServer(t)
 	if got := s.jobManager.WorkerCount(); got != 6 {
 		t.Fatalf("WorkerCount() = %d, want 6", got)
@@ -46,7 +50,8 @@ func TestNewServerJobWorkersFromEnv(t *testing.T) {
 }
 
 func TestRecipeCategoryWorkerCountDefault(t *testing.T) {
-	t.Setenv("RECIPE_CATEGORY_WORKERS", "")
+	config.Reset()
+	t.Cleanup(config.Reset)
 	s := newTestServer(t)
 	if got := s.recipeCategoryWorkerCount(); got != 10 {
 		t.Fatalf("recipeCategoryWorkerCount() = %d, want 10", got)
@@ -54,7 +59,9 @@ func TestRecipeCategoryWorkerCountDefault(t *testing.T) {
 }
 
 func TestRecipeCategoryWorkerCountFromEnv(t *testing.T) {
-	t.Setenv("RECIPE_CATEGORY_WORKERS", "4")
+	config.Reset()
+	t.Cleanup(config.Reset)
+	config.Get().Recipe.CategoryWorkers = 4
 	s := newTestServer(t)
 	if got := s.recipeCategoryWorkerCount(); got != 4 {
 		t.Fatalf("recipeCategoryWorkerCount() = %d, want 4", got)
