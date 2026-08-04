@@ -1,6 +1,8 @@
 package taskoverview
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -113,4 +115,57 @@ func TestTaskOverviewPlugin_InitSchemaMigratesLegacyDailyTable(t *testing.T) {
 	if !seenGenerationIndex {
 		t.Fatal("generation index missing after legacy migration")
 	}
+}
+
+// TestBuildView_IncludesSubtaskProgress verifies that the overview view
+// carries per-task subtask progress (checked/total) into the daily tasks and
+// the full task list, so the dashboard can render a progress bar.
+func TestBuildView_IncludesSubtaskProgress(t *testing.T) {
+	d, overviewPlugin, taskPlugin := newDailyRegressionDB(t)
+	overviewNoteID := plugintest.CreateNote(t, d, "Overview", overviewPlugin)
+	taskID := plugintest.CreateNote(t, d, "Task with subtasks", taskPlugin)
+
+	// Save a task config with 3 subtasks, 1 checked.
+	cfgJSON := `{"status":"todo","subtasks":[{"label":"a","checked":true,"description":"first"},{"label":"b","checked":false},{"label":"c","checked":false}]}`
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := taskPlugin.SaveConfig(context.Background(), tx, 0, taskID, json.RawMessage(cfgJSON)); err != nil {
+		tx.Rollback()
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	view, err := overviewPlugin.BuildView(context.Background(), d.DB, 0, overviewNoteID)
+	if err != nil {
+		t.Fatalf("BuildView: %v", err)
+	}
+	data, ok := view.(*OverviewData)
+	if !ok {
+		t.Fatalf("BuildView returned %T, want *OverviewData", view)
+	}
+
+	assertCounts := func(label string, tasks []TaskSummary) {
+		t.Helper()
+		for _, task := range tasks {
+			if task.NoteID != taskID {
+				continue
+			}
+			if task.SubtasksTotal != 3 {
+				t.Errorf("%s: subtasks_total = %d, want 3", label, task.SubtasksTotal)
+			}
+			if task.SubtasksDone != 1 {
+				t.Errorf("%s: subtasks_done = %d, want 1", label, task.SubtasksDone)
+			}
+			return
+		}
+		t.Errorf("%s: task %d not present in view", label, taskID)
+	}
+
+	assertCounts("all tasks", data.Tasks)
+	assertCounts("scored open tasks", data.ScoredOpenTasks)
+	assertCounts("daily tasks", data.DailyTasks)
 }

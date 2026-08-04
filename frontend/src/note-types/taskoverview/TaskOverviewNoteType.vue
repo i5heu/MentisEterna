@@ -237,6 +237,21 @@
                         </span>
                     </div>
                     <div
+                        v-if="t.subtasks_total > 0"
+                        class="subtask-progress"
+                    >
+                        <div class="subtask-progress-bar">
+                            <div
+                                class="subtask-progress-fill"
+                                :style="{ width: subtaskPercent(t) }"
+                            ></div>
+                        </div>
+                        <span class="subtask-progress-label"
+                            >{{ t.subtasks_done || 0 }} /
+                            {{ t.subtasks_total }}</span
+                        >
+                    </div>
+                    <div
                         v-if="
                             t.generation_forced_reasons &&
                             t.generation_forced_reasons.length > 0
@@ -796,6 +811,14 @@ function formatScore(value) {
     return numeric.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
+function subtaskPercent(task) {
+    if (!task.subtasks_total) return "0%";
+    return (
+        Math.round(((task.subtasks_done || 0) / task.subtasks_total) * 100) +
+        "%"
+    );
+}
+
 async function generateDailyTasks() {
     try {
         const result = await execDailyTasks(props.note.id, "daily_tasks", {});
@@ -1080,6 +1103,34 @@ onBeforeUnmount(unsubOverview);
     font-weight: 600;
     color: var(--font-color);
     margin-bottom: 0.3rem;
+}
+
+.subtask-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.4rem;
+}
+
+.subtask-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.subtask-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent-teal);
+    transition: width 0.2s ease;
+}
+
+.subtask-progress-label {
+    font-size: 0.7rem;
+    color: var(--font-color-secondary);
+    white-space: nowrap;
 }
 
 .daily-task-flags,

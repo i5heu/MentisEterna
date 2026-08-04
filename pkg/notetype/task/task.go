@@ -48,11 +48,21 @@ func (p *TaskPlugin) InitSchema(db *sql.DB) error {
 			ON ct_task_config(due_date);
 		CREATE INDEX IF NOT EXISTS idx_ct_task_config_priority
 			ON ct_task_config(priority);
+		CREATE TABLE IF NOT EXISTS ct_task_subtasks (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			note_id     INTEGER NOT NULL,
+			label       TEXT    NOT NULL DEFAULT '',
+			description TEXT    NOT NULL DEFAULT '',
+			checked     INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_ct_task_subtasks_note ON ct_task_subtasks(note_id);
 	`)
 	if err != nil {
 		return err
 	}
 	db.Exec(`ALTER TABLE ct_task_config ADD COLUMN pending_does_not_force_daily_inclusion INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE ct_task_subtasks ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -68,8 +78,17 @@ type TaskConfig struct {
 	TimeUsed                          string `json:"time_used"`       // e.g. "1h30m"
 	Recurring                         string `json:"recurring"`       // "none", "daily", "weekly", "monthly", "custom"
 	RecurringDays                     int    `json:"recurring_days"`  // custom interval in days
-	CompletedAt                       string `json:"completed_at"`    // ISO 8601 timestamp
-	PendingDoesNotForceDailyInclusion bool   `json:"pending_does_not_force_daily_inclusion"`
+	CompletedAt                       string    `json:"completed_at"`    // ISO 8601 timestamp
+	PendingDoesNotForceDailyInclusion bool      `json:"pending_does_not_force_daily_inclusion"`
+	SubTasks                          []SubTask `json:"subtasks"`        // checklist items
+}
+
+// SubTask is a single checklist item within a task.
+type SubTask struct {
+	ID          int64  `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Checked     bool   `json:"checked"`
 }
 
 // SetStatusParams is the JSON body for the set_status action.
@@ -102,7 +121,7 @@ func (p *TaskPlugin) Manifest() notetype.Manifest {
 		Description:   "A task with priority, difficulty, fun, due date, time tracking, and recurrence",
 		Category:      "Productivity",
 		SortOrder:     400,
-		DefaultConfig: json.RawMessage(`{"status":"todo","difficulty":0,"fun":0,"priority":0,"description":"","due_date":"","time_estimation":"","time_used":"","recurring":"none","recurring_days":0,"completed_at":"","pending_does_not_force_daily_inclusion":false}`),
+		DefaultConfig: json.RawMessage(`{"status":"todo","difficulty":0,"fun":0,"priority":0,"description":"","due_date":"","time_estimation":"","time_used":"","recurring":"none","recurring_days":0,"completed_at":"","pending_does_not_force_daily_inclusion":false,"subtasks":[]}`),
 		Editor: notetype.EditorMeta{
 			Mode: "custom",
 			Schema: json.RawMessage(`[
@@ -282,6 +301,27 @@ func (p *TaskPlugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, not
 		return fmt.Errorf("task: insert config: %w", err)
 	}
 
+	// DELETE old subtasks first (upsert pattern).
+	if _, err := tx.Exec(`DELETE FROM ct_task_subtasks WHERE note_id = ?`, noteID); err != nil {
+		return fmt.Errorf("task: delete old subtasks: %w", err)
+	}
+	for _, st := range cfg.SubTasks {
+		label := strings.TrimSpace(st.Label)
+		if label == "" {
+			continue
+		}
+		checked := 0
+		if st.Checked {
+			checked = 1
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO ct_task_subtasks (note_id, label, checked, description) VALUES (?, ?, ?, ?)`,
+			noteID, label, checked, strings.TrimSpace(st.Description),
+		); err != nil {
+			return fmt.Errorf("task: insert subtask: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -295,11 +335,31 @@ func (p *TaskPlugin) LoadConfig(ctx context.Context, db *sql.DB, userID int, not
 		&cfg.Description, &cfg.DueDate, &cfg.TimeEstimation, &cfg.TimeUsed,
 		&cfg.Recurring, &cfg.RecurringDays, &cfg.CompletedAt, &cfg.PendingDoesNotForceDailyInclusion)
 	if err == sql.ErrNoRows {
-		defaultCfg := TaskConfig{Status: "todo"}
+		defaultCfg := TaskConfig{Status: "todo", SubTasks: []SubTask{}}
 		return json.Marshal(defaultCfg)
 	} else if err != nil {
 		return nil, fmt.Errorf("task: load config: %w", err)
 	}
+
+	rows, err := db.Query(`SELECT id, label, checked, description FROM ct_task_subtasks WHERE note_id = ? ORDER BY id`, noteID)
+	if err != nil {
+		return nil, fmt.Errorf("task: load subtasks: %w", err)
+	}
+	defer rows.Close()
+	subtasks := []SubTask{}
+	for rows.Next() {
+		var st SubTask
+		var checked int
+		if err := rows.Scan(&st.ID, &st.Label, &checked, &st.Description); err != nil {
+			return nil, fmt.Errorf("task: scan subtask: %w", err)
+		}
+		st.Checked = checked != 0
+		subtasks = append(subtasks, st)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("task: subtask rows: %w", err)
+	}
+	cfg.SubTasks = subtasks
 	return json.Marshal(cfg)
 }
 

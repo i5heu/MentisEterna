@@ -155,6 +155,66 @@
             </p>
         </div>
 
+        <!-- Subtasks -->
+        <div class="task-field">
+            <label class="task-label">Subtasks</label>
+            <ul class="subtask-list">
+                <li
+                    v-for="(st, idx) in localSubtasks"
+                    :key="idx"
+                    class="subtask-row"
+                >
+                    <input
+                        v-model="st.checked"
+                        type="checkbox"
+                        class="subtask-check"
+                    />
+                    <div class="subtask-body">
+                        <input
+                            v-if="editing"
+                            v-model="st.label"
+                            class="subtask-text"
+                            placeholder="Subtask..."
+                            @keydown.enter="addSubtask"
+                        />
+                        <span
+                            v-else
+                            class="subtask-label"
+                            :class="{ done: st.checked }"
+                            >{{ st.label || "—" }}</span
+                        >
+                        <input
+                            v-if="editing"
+                            v-model="st.description"
+                            class="subtask-desc"
+                            placeholder="Description (optional)..."
+                        />
+                        <span
+                            v-else-if="st.description"
+                            class="subtask-desc-label"
+                            :class="{ done: st.checked }"
+                            >{{ st.description }}</span
+                        >
+                    </div>
+                    <button
+                        v-if="editing"
+                        class="btn-ghost btn-sm subtask-remove"
+                        @click="removeSubtask(idx)"
+                    >
+                        ✕
+                    </button>
+                </li>
+            </ul>
+            <button
+                v-if="editing"
+                class="btn-ghost btn-sm"
+                @click="addSubtask"
+            >
+                + Add Subtask
+            </button>
+            <p v-else-if="localSubtasks.length === 0" class="task-value">—</p>
+        </div>
+
         <!-- Due Date -->
         <div class="task-field">
             <label class="task-label">Due Date</label>
@@ -276,8 +336,10 @@ const localRecurring = ref("none");
 const localRecurringDays = ref(0);
 const localCompletedAt = ref("");
 const localPendingDoesNotForceDailyInclusion = ref(false);
+const localSubtasks = ref([]);
 
 let hydrating = false;
+let lastEmitted = null;
 
 function hydrateFromProp() {
     hydrating = true;
@@ -295,18 +357,28 @@ function hydrateFromProp() {
     localCompletedAt.value = cd.completed_at || "";
     localPendingDoesNotForceDailyInclusion.value =
         cd.pending_does_not_force_daily_inclusion ?? false;
+    localSubtasks.value = Array.isArray(cd.subtasks)
+        ? cd.subtasks.map((s) => ({
+              id: s.id || 0,
+              label: s.label || "",
+              description: s.description || "",
+              checked: !!s.checked,
+          }))
+        : [];
     hydrating = false;
 }
 
 // Hydrate on note identity change.
 watch(() => props.note?.id, hydrateFromProp, { immediate: true });
 
-// Also hydrate if customData arrives after the note.
+// Also hydrate if customData arrives after the note. Skip our own echo:
+// the parent stores the exact object we emit, so an identical reference means
+// this change originated from this component (breaking the deep-watcher loop).
 watch(
     () => props.customData,
     (cd) => {
         if (hydrating) return;
-        if (cd && (cd.status || cd.description)) {
+        if (cd && cd !== lastEmitted && (cd.status || cd.description)) {
             hydrateFromProp();
         }
     },
@@ -314,7 +386,7 @@ watch(
 
 // Emit custom data on change.
 function emitCustomData() {
-    emit("update:customData", {
+    const payload = {
         status: localStatus.value,
         difficulty: localDifficulty.value,
         fun: localFun.value,
@@ -328,7 +400,14 @@ function emitCustomData() {
         completed_at: localCompletedAt.value,
         pending_does_not_force_daily_inclusion:
             localPendingDoesNotForceDailyInclusion.value,
-    });
+        subtasks: localSubtasks.value.map((s) => ({
+            label: s.label,
+            description: s.description,
+            checked: s.checked,
+        })),
+    };
+    lastEmitted = payload;
+    emit("update:customData", payload);
 }
 
 watch(
@@ -348,6 +427,27 @@ watch(
     emitCustomData,
     { deep: false },
 );
+
+// Subtask list changes (including in-place checkbox toggles) persist through
+// the parent's normal save path. flush:"sync" lets the hydrating flag (set
+// while hydrateFromProp replaces the array) suppress the echo emit that would
+// otherwise re-trigger hydration — a feedback loop.
+watch(
+    localSubtasks,
+    () => {
+        if (hydrating) return;
+        emitCustomData();
+    },
+    { deep: true, flush: "sync" },
+);
+
+function addSubtask() {
+    localSubtasks.value.push({ label: "", description: "", checked: false });
+}
+
+function removeSubtask(idx) {
+    localSubtasks.value.splice(idx, 1);
+}
 
 // Computed styles
 const funClass = computed(() => {
@@ -616,6 +716,82 @@ onBeforeUnmount(unsubStatus);
     font-size: 0.8rem;
     color: var(--font-color-secondary);
     font-style: italic;
+}
+
+.subtask-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.subtask-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.subtask-check {
+    accent-color: var(--accent-teal);
+    margin-top: 0.3rem;
+}
+
+.subtask-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.subtask-text {
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.9rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
+.subtask-text:focus,
+.subtask-desc:focus {
+    border-color: var(--accent-teal);
+    outline: none;
+}
+
+.subtask-desc {
+    width: 100%;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.8rem;
+    color: var(--font-color-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
+.subtask-label {
+    font-size: 0.9rem;
+    color: var(--font-color);
+}
+
+.subtask-label.done {
+    text-decoration: line-through;
+    color: var(--font-color-secondary);
+}
+
+.subtask-desc-label {
+    font-size: 0.8rem;
+    color: var(--font-color-secondary);
+    line-height: 1.4;
+}
+
+.subtask-desc-label.done {
+    text-decoration: line-through;
+}
+
+.subtask-remove {
+    color: var(--font-color-secondary);
+    margin-top: 0.15rem;
 }
 </style>
 

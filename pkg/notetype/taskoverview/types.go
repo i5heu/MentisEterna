@@ -41,6 +41,8 @@ type TaskSummary struct {
 	UpdatedAt                         string             `json:"updated_at"`
 	Body                              string             `json:"body"`
 	PendingDoesNotForceDailyInclusion bool               `json:"pending_does_not_force_daily_inclusion"`
+	SubtasksDone                      int                `json:"subtasks_done"`
+	SubtasksTotal                     int                `json:"subtasks_total"`
 	DueInDays                         *int               `json:"due_in_days,omitempty"`
 	GenerationScore                   float64            `json:"generation_score"`
 	GenerationForcedReasons           []string           `json:"generation_forced_reasons,omitempty"`

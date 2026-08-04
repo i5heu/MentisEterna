@@ -130,6 +130,9 @@ func loadDailyTasks(db *sql.DB, overviewNoteID int64) ([]TaskSummary, error) {
 	if tasks == nil {
 		return []TaskSummary{}, nil
 	}
+	if err := attachSubtaskCounts(db, tasks); err != nil {
+		return nil, err
+	}
 	return tasks, nil
 }
 
@@ -255,6 +258,16 @@ func loadDailyHistory(db *sql.DB, overviewNoteID int64) ([]DailyHistoryEntry, er
 
 	if len(all) == 0 {
 		return []DailyHistoryEntry{}, nil
+	}
+	histTasks := make([]TaskSummary, 0, len(all))
+	for _, r := range all {
+		histTasks = append(histTasks, r.task)
+	}
+	if err := attachSubtaskCounts(db, histTasks); err != nil {
+		return nil, err
+	}
+	for i := range all {
+		all[i].task = histTasks[i]
 	}
 
 	var result []DailyHistoryEntry

@@ -53,7 +53,53 @@ func loadAllTasks(db *sql.DB) ([]TaskSummary, error) {
 	if tasks == nil {
 		tasks = []TaskSummary{}
 	}
+	if err := attachSubtaskCounts(db, tasks); err != nil {
+		return nil, err
+	}
 	return tasks, nil
+}
+
+// loadSubtaskCounts returns, per task note, the number of checked subtasks
+// and the total number of subtasks.
+func loadSubtaskCounts(db *sql.DB) (map[int64][2]int, error) {
+	rows, err := db.Query(`
+		SELECT note_id, COUNT(*) AS total, COALESCE(SUM(checked), 0) AS done
+		FROM ct_task_subtasks
+		GROUP BY note_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("task_overview: load subtask counts: %w", err)
+	}
+	defer rows.Close()
+
+	counts := map[int64][2]int{}
+	for rows.Next() {
+		var noteID int64
+		var done, total int
+		if err := rows.Scan(&noteID, &total, &done); err != nil {
+			return nil, fmt.Errorf("task_overview: scan subtask counts: %w", err)
+		}
+		counts[noteID] = [2]int{done, total}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
+
+// attachSubtaskCounts fills SubtasksDone/SubtasksTotal for each task.
+func attachSubtaskCounts(db *sql.DB, tasks []TaskSummary) error {
+	counts, err := loadSubtaskCounts(db)
+	if err != nil {
+		return err
+	}
+	for i := range tasks {
+		if c, ok := counts[tasks[i].NoteID]; ok {
+			tasks[i].SubtasksDone = c[0]
+			tasks[i].SubtasksTotal = c[1]
+		}
+	}
+	return nil
 }
 
 // --- Statistics ---

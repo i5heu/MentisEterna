@@ -223,6 +223,7 @@ const registry = [
             recurring_days: 0,
             completed_at: "",
             pending_does_not_force_daily_inclusion: false,
+            subtasks: [],
         }),
         normalizeCustomData(raw, _note) {
             if (!raw || typeof raw !== "object") {
@@ -239,6 +240,7 @@ const registry = [
                     recurring_days: 0,
                     completed_at: "",
                     pending_does_not_force_daily_inclusion: false,
+                    subtasks: [],
                 };
             }
             return {
@@ -255,6 +257,13 @@ const registry = [
                 completed_at: raw.completed_at || "",
                 pending_does_not_force_daily_inclusion:
                     raw.pending_does_not_force_daily_inclusion ?? false,
+                subtasks: Array.isArray(raw.subtasks)
+                    ? raw.subtasks.map((s) => ({
+                          label: s.label || "",
+                          description: s.description || "",
+                          checked: !!s.checked,
+                      }))
+                    : [],
             };
         },
         supportsSchemaFallback: false,
