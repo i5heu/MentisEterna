@@ -459,7 +459,8 @@ const { loading: loadingDaily, execute: execDailyTasks } = usePluginAction(
 const { execute: execQuickStatus } = usePluginAction(() => props.token);
 const statusLoading = ref({});
 
-const { emitStatusChange, onStatusChange } = useTaskEventBus();
+const { emitStatusChange, onStatusChange, onSubtaskChange } =
+    useTaskEventBus();
 
 const viewData = ref({
     tasks: [],
@@ -866,11 +867,35 @@ function updateLocalTaskStatus(taskNoteId, status) {
     };
 }
 
+// Keep progress bars in sync when a subtask is toggled from the main view or
+// the thread sidebar (the toggle action persists server-side; this patch
+// mirrors the new counts locally without a reload).
+function updateLocalSubtaskCounts(taskNoteId, done, total) {
+    const patch = (tasks) =>
+        (tasks || []).map((task) =>
+            task.note_id === taskNoteId
+                ? { ...task, subtasks_done: done, subtasks_total: total }
+                : task,
+        );
+    viewData.value = {
+        ...viewData.value,
+        tasks: patch(viewData.value.tasks),
+        scored_open_tasks: patch(viewData.value.scored_open_tasks),
+        daily_tasks: patch(viewData.value.daily_tasks),
+    };
+}
+
 const unsubOverview = onStatusChange((noteId, status) => {
     updateLocalTaskStatus(noteId, status);
 });
+const unsubSubtask = onSubtaskChange((noteId, done, total) => {
+    updateLocalSubtaskCounts(noteId, done, total);
+});
 
-onBeforeUnmount(unsubOverview);
+onBeforeUnmount(() => {
+    unsubOverview();
+    unsubSubtask();
+});
 </script>
 
 <style scoped>

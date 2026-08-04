@@ -169,7 +169,7 @@
                         class="subtask-check"
                         :checked="st.checked"
                         :disabled="subtaskToggling[st.id]"
-                        @change="onSubtaskChange(st, $event)"
+                        @change="handleSubtaskChange(st, $event)"
                     />
                     <div class="subtask-body">
                         <input
@@ -332,7 +332,8 @@ const {
 } = usePluginAction(() => props.token);
 const subtaskToggling = ref({});
 
-const { emitStatusChange, onStatusChange } = useTaskEventBus();
+const { emitStatusChange, onStatusChange, emitSubtaskChange } =
+    useTaskEventBus();
 
 // Local copies
 const localStatus = ref("todo");
@@ -455,7 +456,7 @@ watch(
     { deep: true, flush: "sync" },
 );
 
-function onSubtaskChange(st, event) {
+function handleSubtaskChange(st, event) {
     st.checked = event.target.checked;
     if (props.editing) return; // edit mode: watcher emits, parent saves
     if (!props.note?.id) return;
@@ -476,6 +477,12 @@ async function toggleSubtask(st) {
         });
         // Keep the parent's customData in sync (edit-mode hydration reads it).
         emitCustomData();
+        // Notify task overviews so their progress bars update without reload.
+        emitSubtaskChange(
+            props.note.id,
+            localSubtasks.value.filter((s) => s.checked).length,
+            localSubtasks.value.length,
+        );
     } catch {
         // Revert the optimistic flip so the UI matches the server.
         st.checked = !st.checked;
