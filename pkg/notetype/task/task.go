@@ -96,6 +96,12 @@ type SetStatusParams struct {
 	Status string `json:"status"` // "todo", "in_progress", "done"
 }
 
+// ToggleSubtaskParams is the JSON body for the toggle_subtask action.
+type ToggleSubtaskParams struct {
+	SubtaskID int64 `json:"subtask_id"`
+	Checked   bool  `json:"checked"`
+}
+
 var validStatuses = map[string]bool{
 	"todo":        true,
 	"in_progress": true,
@@ -221,6 +227,15 @@ func (p *TaskPlugin) Manifest() notetype.Manifest {
 				Dangerous:       false,
 				RefreshStrategy: "reload",
 				SuccessMessage:  "Status updated",
+			},
+			{
+				ID:              "toggle_subtask",
+				Label:           "Toggle Subtask",
+				Description:     "Check or uncheck a subtask from the task view",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{"subtask_id":{"type":"integer"},"checked":{"type":"boolean"}},"required":["subtask_id","checked"]}`),
+				Dangerous:       false,
+				RefreshStrategy: "none",
+				SuccessMessage:  "Subtask updated",
 			},
 		},
 		HasConfig:  true,
@@ -371,9 +386,49 @@ func (p *TaskPlugin) HandleAction(ctx context.Context, db *sql.DB, userID int, n
 			return nil, fmt.Errorf("no database available")
 		}
 		return setTaskStatus(db, noteID, params)
+	case "toggle_subtask":
+		if db == nil {
+			return nil, fmt.Errorf("no database available")
+		}
+		return toggleSubtask(db, noteID, params)
 	default:
 		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
 	}
+}
+
+// toggleSubtask flips the checked state of a single subtask in place,
+// without touching the rest of the task config. Used by the view-mode
+// checkbox so clicks persist immediately.
+func toggleSubtask(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
+	var p ToggleSubtaskParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("task: invalid params: %w", err)
+	}
+	if p.SubtaskID <= 0 {
+		return nil, fmt.Errorf("task: subtask_id is required")
+	}
+	checked := 0
+	if p.Checked {
+		checked = 1
+	}
+	res, err := db.Exec(
+		`UPDATE ct_task_subtasks SET checked = ? WHERE id = ? AND note_id = ?`,
+		checked, p.SubtaskID, noteID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("task: update subtask: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("task: subtask rows affected: %w", err)
+	}
+	if affected == 0 {
+		return nil, fmt.Errorf("task: subtask %d not found for note %d", p.SubtaskID, noteID)
+	}
+	return map[string]any{
+		"subtask_id": p.SubtaskID,
+		"checked":    p.Checked,
+	}, nil
 }
 
 // setTaskStatus updates only the status field (and completed_at if done)

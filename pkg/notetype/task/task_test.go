@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype/plugintest"
@@ -85,6 +86,100 @@ func TestSubTaskPersistence(t *testing.T) {
 		}
 		if cfg.SubTasks[0].Label != "Kept" {
 			t.Errorf("subtask[0].Label = %q, want %q", cfg.SubTasks[0].Label, "Kept")
+		}
+	})
+}
+
+// TestToggleSubtaskAction verifies the view-mode checkbox persistence path:
+// toggling a subtask via the action updates only that row in the table.
+func TestToggleSubtaskAction(t *testing.T) {
+	d := plugintest.DB(t, &TaskPlugin{})
+	noteID := plugintest.CreateNote(t, d, "Task with subtasks", &TaskPlugin{})
+	p := &TaskPlugin{}
+
+	saveCfg := `{"status":"todo","subtasks":[{"label":"One","checked":false},{"label":"Two","checked":true}]}`
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := p.SaveConfig(context.Background(), tx, 0, noteID, json.RawMessage(saveCfg)); err != nil {
+		tx.Rollback()
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// Grab the server-assigned subtask ids.
+	raw, err := p.LoadConfig(context.Background(), d.DB, 0, noteID)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	var cfg TaskConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if len(cfg.SubTasks) != 2 {
+		t.Fatalf("expected 2 subtasks, got %d", len(cfg.SubTasks))
+	}
+	firstID := cfg.SubTasks[0].ID
+
+	t.Run("ChecksUnchecked", func(t *testing.T) {
+		res, err := p.HandleAction(context.Background(), d.DB, 0, noteID, "toggle_subtask", json.RawMessage(`{"subtask_id":`+strconv.FormatInt(firstID, 10)+`,"checked":true}`))
+		if err != nil {
+			t.Fatalf("HandleAction toggle on: %v", err)
+		}
+		if res.(map[string]any)["checked"] != true {
+			t.Errorf("action response checked = %v, want true", res)
+		}
+		raw, err := p.LoadConfig(context.Background(), d.DB, 0, noteID)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		var after TaskConfig
+		if err := json.Unmarshal(raw, &after); err != nil {
+			t.Fatalf("unmarshal after: %v", err)
+		}
+		if !after.SubTasks[0].Checked {
+			t.Error("subtask[0] should be checked after toggle")
+		}
+		if !after.SubTasks[1].Checked {
+			t.Error("subtask[1] must be untouched by the toggle")
+		}
+	})
+
+	t.Run("UnchecksChecked", func(t *testing.T) {
+		secondID := func() int64 {
+			raw, err := p.LoadConfig(context.Background(), d.DB, 0, noteID)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			var cfg TaskConfig
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			return cfg.SubTasks[1].ID
+		}()
+		if _, err := p.HandleAction(context.Background(), d.DB, 0, noteID, "toggle_subtask", json.RawMessage(`{"subtask_id":`+strconv.FormatInt(secondID, 10)+`,"checked":false}`)); err != nil {
+			t.Fatalf("HandleAction toggle off: %v", err)
+		}
+		raw, err := p.LoadConfig(context.Background(), d.DB, 0, noteID)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		var after TaskConfig
+		if err := json.Unmarshal(raw, &after); err != nil {
+			t.Fatalf("unmarshal after: %v", err)
+		}
+		if after.SubTasks[1].Checked {
+			t.Error("subtask[1] should be unchecked after toggle")
+		}
+	})
+
+	t.Run("UnknownSubtaskErrors", func(t *testing.T) {
+		_, err := p.HandleAction(context.Background(), d.DB, 0, noteID, "toggle_subtask", json.RawMessage(`{"subtask_id":99999,"checked":true}`))
+		if err == nil {
+			t.Fatal("expected error for unknown subtask id")
 		}
 	})
 }

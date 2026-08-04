@@ -165,9 +165,11 @@
                     class="subtask-row"
                 >
                     <input
-                        v-model="st.checked"
                         type="checkbox"
                         class="subtask-check"
+                        :checked="st.checked"
+                        :disabled="subtaskToggling[st.id]"
+                        @change="onSubtaskChange(st, $event)"
                     />
                     <div class="subtask-body">
                         <input
@@ -213,6 +215,9 @@
                 + Add Subtask
             </button>
             <p v-else-if="localSubtasks.length === 0" class="task-value">—</p>
+            <p v-if="!editing && toggleError" class="subtask-toggle-error">
+                {{ toggleError }}
+            </p>
         </div>
 
         <!-- Due Date -->
@@ -320,6 +325,12 @@ const {
     error: setError,
     execute: execSetStatus,
 } = usePluginAction(() => props.token);
+
+const {
+    error: toggleError,
+    execute: execToggleSubtask,
+} = usePluginAction(() => props.token);
+const subtaskToggling = ref({});
 
 const { emitStatusChange, onStatusChange } = useTaskEventBus();
 
@@ -431,15 +442,48 @@ watch(
 // Subtask list changes (including in-place checkbox toggles) persist through
 // the parent's normal save path. flush:"sync" lets the hydrating flag (set
 // while hydrateFromProp replaces the array) suppress the echo emit that would
-// otherwise re-trigger hydration — a feedback loop.
+// otherwise re-trigger hydration — a feedback loop. In view mode the checkbox
+// persists via the toggle_subtask action instead, so the watcher only emits
+// while editing.
 watch(
     localSubtasks,
     () => {
         if (hydrating) return;
+        if (!props.editing) return;
         emitCustomData();
     },
     { deep: true, flush: "sync" },
 );
+
+function onSubtaskChange(st, event) {
+    st.checked = event.target.checked;
+    if (props.editing) return; // edit mode: watcher emits, parent saves
+    if (!props.note?.id) return;
+    if (!st.id) {
+        // No server id yet — fall back to the manual save path.
+        emitCustomData();
+        return;
+    }
+    void toggleSubtask(st);
+}
+
+async function toggleSubtask(st) {
+    subtaskToggling.value = { ...subtaskToggling.value, [st.id]: true };
+    try {
+        await execToggleSubtask(props.note.id, "toggle_subtask", {
+            subtask_id: st.id,
+            checked: st.checked,
+        });
+        // Keep the parent's customData in sync (edit-mode hydration reads it).
+        emitCustomData();
+    } catch {
+        // Revert the optimistic flip so the UI matches the server.
+        st.checked = !st.checked;
+        emitCustomData();
+    } finally {
+        subtaskToggling.value = { ...subtaskToggling.value, [st.id]: false };
+    }
+}
 
 function addSubtask() {
     localSubtasks.value.push({ label: "", description: "", checked: false });
@@ -792,6 +836,12 @@ onBeforeUnmount(unsubStatus);
 .subtask-remove {
     color: var(--font-color-secondary);
     margin-top: 0.15rem;
+}
+
+.subtask-toggle-error {
+    font-size: 0.75rem;
+    color: var(--heading-color);
+    margin: 0.25rem 0 0;
 }
 </style>
 
