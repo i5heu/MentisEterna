@@ -50,6 +50,32 @@ type AutoTagSuggestion struct {
 	NewTags      []string `json:"new_tags"`
 }
 
+// SubTaskGenerator breaks a task description into a checklist of actionable
+// subtasks to append to what is already planned.
+type SubTaskGenerator interface {
+	GenerateSubTasks(input SubTaskGenerationInput) (SubTaskSuggestion, error)
+}
+
+// SubTaskGenerationInput contains the task context used to plan subtasks.
+type SubTaskGenerationInput struct {
+	Title            string
+	Description      string
+	Body             string
+	ExistingSubtasks []string
+	MaxSubtasks      int
+}
+
+// SubTaskSuggestion is the strict JSON shape expected back from the chat model.
+type SubTaskSuggestion struct {
+	Subtasks []SubTaskItem `json:"subtasks"`
+}
+
+// SubTaskItem is a single generated subtask.
+type SubTaskItem struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
 // --- Shared HTTP client & base URL helpers ---
 
 // newLLMHTTPClient returns an *http.Client configured for LLM backend requests.
@@ -310,6 +336,54 @@ Rules:
 	var out AutoTagSuggestion
 	if err := unmarshalLooseJSONObject(raw, &out); err != nil {
 		return AutoTagSuggestion{}, fmt.Errorf("decode auto-tag response: %w", err)
+	}
+	return out, nil
+}
+
+// GenerateSubTasks asks the chat model to plan a checklist of actionable
+// subtasks for a task, based on its title, description, body, and any
+// subtasks that already exist.
+func (c *ChatClient) GenerateSubTasks(input SubTaskGenerationInput) (SubTaskSuggestion, error) {
+	if input.MaxSubtasks <= 0 {
+		input.MaxSubtasks = 10
+	}
+	systemPrompt := fmt.Sprintf(`You are a backend task-planning microservice.
+
+Your task: read a task's title, description, and body, then output exactly one JSON object with this shape:
+{"subtasks":[{"label":"...","description":"..."}]}
+
+Rules:
+- Output JSON only. No markdown, no code fences, no commentary.
+- Each subtask is a single actionable step. The label is a short imperative phrase (e.g. "Write unit tests").
+- The description is optional; if present, keep it to one short sentence.
+- Generate at most %d subtasks.
+- Do not number labels or add prefixes.
+- The task may already have subtasks listed in existing_subtasks — do NOT repeat any of them.
+- If the task context is empty or unclear, return an empty array.
+`, input.MaxSubtasks)
+
+	userPayload := map[string]any{
+		"title":             input.Title,
+		"description":       input.Description,
+		"body":              input.Body,
+		"existing_subtasks": input.ExistingSubtasks,
+	}
+	userJSON, err := json.Marshal(userPayload)
+	if err != nil {
+		return SubTaskSuggestion{}, fmt.Errorf("marshal subtask input: %w", err)
+	}
+
+	raw, err := c.complete([]chatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: string(userJSON)},
+	})
+	if err != nil {
+		return SubTaskSuggestion{}, err
+	}
+
+	var out SubTaskSuggestion
+	if err := unmarshalLooseJSONObject(raw, &out); err != nil {
+		return SubTaskSuggestion{}, fmt.Errorf("decode subtask response: %w", err)
 	}
 	return out, nil
 }

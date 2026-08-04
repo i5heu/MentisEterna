@@ -248,7 +248,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
   - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
     - [x] SubTasks (Items in a Task Note Type)
       - [x] Add SubTasks
-      - [ ] LLM Create "SubTasks" from Task Description
+      - [x] LLM Create "SubTasks" from Task Description
   - [x] Task overview dashboard - list all tasks, filter by status, due date, etc. 
     - [ ] Quick add ToDo
   - [x] Daily task list - give 3 random tasks per day

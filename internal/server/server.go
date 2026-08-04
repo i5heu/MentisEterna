@@ -31,6 +31,7 @@ type Server struct {
 	llm           llm.Embedder
 	chatClient    llm.Generator
 	autoTagger    llm.AutoTagger
+	subtaskGen    llm.SubTaskGenerator
 	ocrClient     llm.OCRer
 	sttClient     llm.STTer
 	webauthn      *webauthn.WebAuthn
@@ -116,6 +117,11 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		autoTagger = at
 	}
 
+	var subtaskGen llm.SubTaskGenerator
+	if sg, ok := chatClient.(llm.SubTaskGenerator); ok {
+		subtaskGen = sg
+	}
+
 	return &Server{
 		db:            d,
 		addr:          addr,
@@ -123,6 +129,7 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		llm:           embeddingClient,
 		chatClient:    chatClient,
 		autoTagger:    autoTagger,
+		subtaskGen:    subtaskGen,
 		ocrClient:     ocrClient,
 		sttClient:     sttClient,
 		webauthn:      w,
@@ -226,6 +233,16 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
+	// Register the ad-hoc LLM subtask generation job (on-demand, not cron).
+	if s.subtaskGen != nil {
+		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{{
+			Name: "generate_subtasks",
+			Task: s.generateSubTasksTask,
+		}}); err != nil {
+			log.Fatalf("Failed to register subtask generation job: %v", err)
+		}
+	}
+
 	// Register media jobs (cron + ad-hoc). Must happen before Start().
 	if s.mediaService != nil {
 		s.mediaService.EnqueueFunc = s.jobManager.Enqueue
@@ -255,6 +272,13 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Fatalf("Failed to register backup job: %v", err)
 		}
 		log.Printf("backup: jobs registered (encrypted_backup: @every 12h, retention_purge: @every 24h)")
+	}
+
+	// Inject the job enqueue function into plugins that asked for it.
+	for _, plugin := range notetype.Registry {
+		if je, ok := plugin.(notetype.JobEnqueuer); ok {
+			je.SetJobEnqueueFunc(s.jobManager.Enqueue)
+		}
 	}
 
 	// Start workers after all task registrations are complete.

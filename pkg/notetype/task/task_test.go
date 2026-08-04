@@ -6,11 +6,14 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/i5heu/MentisEterna/pkg/notetype"
 	"github.com/i5heu/MentisEterna/pkg/notetype/plugintest"
 )
 
 func TestTaskPlugin(t *testing.T) {
-	plugintest.Run(t, &TaskPlugin{}, plugintest.TestData{
+	// Test the registered instance: the harness asserts the plugin under test
+	// is the exact one in the registry (pointer identity).
+	plugintest.Run(t, notetype.Registry["task"], plugintest.TestData{
 		ValidPayload:   `{"status":"in_progress","difficulty":5,"fun":3,"priority":7,"description":"Write unit tests","due_date":"2025-01-15","time_estimation":"2h","time_used":"30m","recurring":"weekly","recurring_days":0,"completed_at":"","pending_does_not_force_daily_inclusion":true,"subtasks":[{"label":"Write unit tests","checked":false,"description":"Cover the happy path"},{"label":"Update docs","checked":true,"description":"Refresh README"}]}`,
 		InvalidPayload: `{"status":"invalid","difficulty":999,"fun":999}`,
 	})
@@ -233,4 +236,54 @@ func TestTaskPlugin_MigratesLegacySubtasksTable(t *testing.T) {
 	if !cols["description"] {
 		t.Fatal("description column missing after legacy migration")
 	}
+}
+
+// TestGenerateSubtasksAction verifies the generate_subtasks action enqueues a
+// background job through the injected enqueue function with the expected
+// plugin/job names and note_id payload.
+func TestGenerateSubtasksAction(t *testing.T) {
+	var gotPluginID, gotJobName string
+	var gotPayload []byte
+	p := &TaskPlugin{}
+	p.SetJobEnqueueFunc(func(pluginID, jobName string, payload []byte) (int64, error) {
+		gotPluginID = pluginID
+		gotJobName = jobName
+		gotPayload = payload
+		return 42, nil
+	})
+
+	res, err := p.HandleAction(context.Background(), nil, 0, 7, "generate_subtasks", nil)
+	if err != nil {
+		t.Fatalf("HandleAction: %v", err)
+	}
+	if gotPluginID != "_system" {
+		t.Errorf("expected pluginID %q, got %q", "_system", gotPluginID)
+	}
+	if gotJobName != "generate_subtasks" {
+		t.Errorf("expected jobName %q, got %q", "generate_subtasks", gotJobName)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(gotPayload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["note_id"] != float64(7) {
+		t.Errorf("expected note_id 7, got %v", payload["note_id"])
+	}
+	result, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", res)
+	}
+	if result["job_run_id"] != int64(42) {
+		t.Errorf("expected job_run_id 42, got %v", result["job_run_id"])
+	}
+	if result["status"] != "planned" {
+		t.Errorf("expected status %q, got %v", "planned", result["status"])
+	}
+
+	t.Run("NotConfigured", func(t *testing.T) {
+		p := &TaskPlugin{}
+		if _, err := p.HandleAction(context.Background(), nil, 0, 7, "generate_subtasks", nil); err == nil {
+			t.Fatal("expected error when enqueue func is not injected, got nil")
+		}
+	})
 }

@@ -20,9 +20,18 @@ func init() {
 	notetype.Register(&TaskPlugin{})
 }
 
-type TaskPlugin struct{}
+type TaskPlugin struct {
+	// enqueue is injected by the server via notetype.JobEnqueuer and used to
+	// schedule background jobs from actions (e.g. generate_subtasks).
+	enqueue func(pluginID, jobName string, payload []byte) (int64, error)
+}
 
 func (p *TaskPlugin) ID() string { return pluginID }
+
+// SetJobEnqueueFunc implements notetype.JobEnqueuer.
+func (p *TaskPlugin) SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []byte) (int64, error)) {
+	p.enqueue = fn
+}
 
 func (p *TaskPlugin) InitSchema(db *sql.DB) error {
 	_, err := db.Exec(`
@@ -237,6 +246,15 @@ func (p *TaskPlugin) Manifest() notetype.Manifest {
 				RefreshStrategy: "none",
 				SuccessMessage:  "Subtask updated",
 			},
+			{
+				ID:              "generate_subtasks",
+				Label:           "Generate Subtasks",
+				Description:     "Ask the LLM to plan additional subtasks from the task description (runs as a background job)",
+				ParamsSchema:    json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+				Dangerous:       false,
+				RefreshStrategy: "none", // the note changes only when the job finishes, which notifies separately
+				SuccessMessage:  "Subtask generation started",
+			},
 		},
 		HasConfig:  true,
 		HasView:    false,
@@ -391,6 +409,19 @@ func (p *TaskPlugin) HandleAction(ctx context.Context, db *sql.DB, userID int, n
 			return nil, fmt.Errorf("no database available")
 		}
 		return toggleSubtask(db, noteID, params)
+	case "generate_subtasks":
+		if p.enqueue == nil {
+			return nil, fmt.Errorf("task: subtask generation is not configured on this server")
+		}
+		payload, err := json.Marshal(map[string]any{"note_id": noteID})
+		if err != nil {
+			return nil, fmt.Errorf("task: marshal subtask payload: %w", err)
+		}
+		runID, err := p.enqueue("_system", "generate_subtasks", payload)
+		if err != nil {
+			return nil, fmt.Errorf("task: enqueue subtask generation: %w", err)
+		}
+		return map[string]any{"job_run_id": runID, "status": "planned"}, nil
 	default:
 		return nil, fmt.Errorf("%w: %s", notetype.ErrUnknownAction, actionID)
 	}

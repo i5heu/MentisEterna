@@ -122,6 +122,14 @@ type ActionHandler interface {
 	HandleAction(ctx context.Context, db *sql.DB, userID int, noteID int64, actionID string, params json.RawMessage) (any, error)
 }
 
+// JobEnqueuer is implemented by plugins whose actions need to schedule
+// background jobs. The server injects the job manager's Enqueue function at
+// startup; plugins call the injected function with a pluginID/jobName the
+// server has registered as an ad-hoc job.
+type JobEnqueuer interface {
+	SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []byte) (int64, error))
+}
+
 // ErrUnknownAction is returned by ActionHandler when the requested action is not recognised.
 // The server translates this to HTTP 404.
 var ErrUnknownAction = errors.New("unknown action")

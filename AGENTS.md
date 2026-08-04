@@ -43,6 +43,7 @@ Plugins may also implement these optional interfaces as needed:
 - `ConfigLoader` — `LoadConfig(ctx, db, userID, noteID) (json.RawMessage, error)` — load persisted config
 - `ViewBuilder` — `BuildView(ctx, db, userID, noteID) (any, error)` — build computed/derived view data
 - `ActionHandler` — `HandleAction(ctx, db, userID, noteID, actionID, params) (any, error)` — execute actions
+- `JobEnqueuer` — `SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []byte) (int64, error))` — lets a plugin's actions enqueue background jobs; the server injects the job manager's `Enqueue`
 
 **Capability declaration is mandatory**: if a plugin's `Manifest` declares `HasConfig=true`, the plugin MUST implement `ConfigValidator`, `ConfigSaver`, and `ConfigLoader`. Similarly for `HasView` (→ `ViewBuilder`) and `HasActions` (→ `ActionHandler`). The server validates this at startup and will `log.Fatal` on mismatch.
 

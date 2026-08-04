@@ -207,17 +207,27 @@
                     </button>
                 </li>
             </ul>
-            <button
-                v-if="editing"
-                class="btn-ghost btn-sm"
-                @click="addSubtask"
-            >
-                + Add Subtask
-            </button>
-            <p v-else-if="localSubtasks.length === 0" class="task-value">—</p>
+            <div class="subtask-actions">
+                <button
+                    v-if="editing"
+                    class="btn-ghost btn-sm"
+                    @click="addSubtask"
+                >
+                    + Add Subtask
+                </button>
+                <button
+                    class="btn-ghost btn-sm"
+                    :disabled="generating"
+                    @click="generateSubTasks"
+                >
+                    {{ generating ? "Generating…" : "Generate Subtasks" }}
+                </button>
+            </div>
+            <p v-if="!editing && localSubtasks.length === 0" class="task-value">—</p>
             <p v-if="!editing && toggleError" class="subtask-toggle-error">
                 {{ toggleError }}
             </p>
+            <p v-if="generateError" class="subtask-toggle-error">{{ generateError }}</p>
         </div>
 
         <!-- Due Date -->
@@ -306,9 +316,10 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, onBeforeUnmount } from "vue";
+import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
 import { usePluginAction } from "../shared/usePluginAction.js";
 import { useTaskEventBus } from "../shared/useTaskEventBus.js";
+import { fetchNote } from "../../api.js";
 
 const props = defineProps({
     note: { type: Object, default: null },
@@ -331,6 +342,11 @@ const {
     execute: execToggleSubtask,
 } = usePluginAction(() => props.token);
 const subtaskToggling = ref({});
+
+const { execute: execGenerateSubtasks } = usePluginAction(() => props.token);
+const generating = ref(false);
+const generateError = ref("");
+let pendingRunID = null;
 
 const { emitStatusChange, onStatusChange, emitSubtaskChange } =
     useTaskEventBus();
@@ -514,6 +530,52 @@ function removeSubtask(idx) {
     localSubtasks.value.splice(idx, 1);
 }
 
+async function generateSubTasks() {
+    if (!props.note?.id || generating.value) return;
+    generateError.value = "";
+    try {
+        const result = await execGenerateSubtasks(props.note.id, "generate_subtasks", {});
+        pendingRunID = result?.job_run_id ?? null;
+        generating.value = true;
+    } catch (e) {
+        generateError.value = e?.message || "Failed to start subtask generation";
+    }
+}
+
+function onJobsChanged(event) {
+    const detail = event?.detail;
+    if (!detail || detail.type !== "jobs.changed" || !pendingRunID) return;
+    const job = detail.job;
+    if (!job || job.run_id !== pendingRunID) return;
+    if (job.status === "done") {
+        pendingRunID = null;
+        void refreshGeneratedSubtasks();
+    } else if (job.status === "errored") {
+        pendingRunID = null;
+        generating.value = false;
+        generateError.value = job.error || "Subtask generation failed";
+    }
+}
+
+async function refreshGeneratedSubtasks() {
+    try {
+        const detail = await fetchNote(props.token, props.note.id);
+        const cfg = detail?.plugin?.config || detail?.custom_data || {};
+        const subtasks = Array.isArray(cfg.subtasks) ? cfg.subtasks : [];
+        localSubtasks.value = subtasks.map((s) => ({
+            id: s.id || 0,
+            label: s.label || "",
+            description: s.description || "",
+            checked: !!s.checked,
+        }));
+        syncCustomData(); // parent draft in sync; not dirty
+    } catch {
+        // The job task's notes.changed broadcast triggers NotesView refresh anyway.
+    } finally {
+        generating.value = false;
+    }
+}
+
 // Computed styles
 const funClass = computed(() => {
     if (localFun.value > 0) return "fun-positive";
@@ -587,6 +649,8 @@ const unsubStatus = onStatusChange((noteId, status) => {
 });
 
 onBeforeUnmount(unsubStatus);
+onMounted(() => window.addEventListener("live:message", onJobsChanged));
+onBeforeUnmount(() => window.removeEventListener("live:message", onJobsChanged));
 </script>
 
 <style scoped>
@@ -870,6 +934,12 @@ onBeforeUnmount(unsubStatus);
     font-size: 0.75rem;
     color: var(--heading-color);
     margin: 0.25rem 0 0;
+}
+
+.subtask-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
 }
 </style>
 
