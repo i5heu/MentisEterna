@@ -29,7 +29,7 @@ type Server struct {
 	addr          string
 	cfg           serverConfig
 	llm           llm.Embedder
-	chatClient    llm.Generator
+	titleClient   llm.Generator
 	autoTagger    llm.AutoTagger
 	subtaskGen    llm.SubTaskGenerator
 	ocrClient     llm.OCRer
@@ -43,7 +43,7 @@ type Server struct {
 	liveHub       *liveHub
 }
 
-func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Generator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
+func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generator, autoTagger llm.AutoTagger, subtaskGen llm.SubTaskGenerator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
 	cfg := loadServerConfig(addr)
 	wconfig := &webauthn.Config{
 		RPID:                  cfg.WebAuthnRPID,
@@ -112,22 +112,12 @@ func New(d *db.DB, addr string, embeddingClient llm.Embedder, chatClient llm.Gen
 		log.Printf("backup: BACKUP_ENCRYPTION_KEY not set — backups disabled")
 	}
 
-	var autoTagger llm.AutoTagger
-	if at, ok := chatClient.(llm.AutoTagger); ok {
-		autoTagger = at
-	}
-
-	var subtaskGen llm.SubTaskGenerator
-	if sg, ok := chatClient.(llm.SubTaskGenerator); ok {
-		subtaskGen = sg
-	}
-
 	return &Server{
 		db:            d,
 		addr:          addr,
 		cfg:           cfg,
-		llm:           embeddingClient,
-		chatClient:    chatClient,
+		llm:           llmClient,
+		titleClient:   titleClient,
 		autoTagger:    autoTagger,
 		subtaskGen:    subtaskGen,
 		ocrClient:     ocrClient,
@@ -215,9 +205,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	// Register ad-hoc chat-model jobs.
-	if s.chatClient != nil || s.autoTagger != nil {
+	if s.titleClient != nil || s.autoTagger != nil {
 		chatJobs := make([]jobs.CronJob, 0, 2)
-		if s.chatClient != nil {
+		if s.titleClient != nil {
 			chatJobs = append(chatJobs, jobs.CronJob{Name: "generate_title", Task: s.generateTitleTask})
 		}
 		if s.autoTagger != nil {
@@ -1034,20 +1024,11 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		embeddingModel = "text-embedding-ada-002"
 	}
 
-	chatModel := os.Getenv("LOCALAI_CHAT_MODEL")
-	if chatModel == "" {
-		chatModel = "gpt-3.5-turbo"
-	}
+	chatModel := llm.FeatureModel("title")
 
-	ocrModel := os.Getenv("LOCALAI_OCR_MODEL")
-	if ocrModel == "" {
-		ocrModel = "gpt-4o-mini"
-	}
+	ocrModel := llm.FeatureModel("ocr")
 
-	sttModel := os.Getenv("LOCALAI_STT_MODEL")
-	if sttModel == "" {
-		sttModel = "nemo-parakeet-tdt-0.6b"
-	}
+	sttModel := llm.FeatureModel("stt")
 
 	// Test embedding connectivity
 	embeddingOK := false
@@ -1068,9 +1049,9 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 	// Test chat connectivity
 	chatOK := false
 	chatErr := ""
-	if s.chatClient != nil {
-		release := llm.BeginBackendUse(s.chatClient)
-		_, err := s.chatClient.GenerateTitle("test")
+	if s.titleClient != nil {
+		release := llm.BeginBackendUse(s.titleClient)
+		_, err := s.titleClient.GenerateTitle("test")
 		release()
 		if err != nil {
 			chatErr = err.Error()
@@ -1159,6 +1140,19 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 			"model": sttModel,
 			"ok":    sttOK,
 			"error": sttErr,
+		},
+		"tiers": map[string]any{
+			"smart":  map[string]any{"model": llm.TierModel(llm.TierSmart), "base_url": llm.TierBaseURL(llm.TierSmart)},
+			"medium": map[string]any{"model": llm.TierModel(llm.TierMedium), "base_url": llm.TierBaseURL(llm.TierMedium)},
+			"small":  map[string]any{"model": llm.TierModel(llm.TierSmall), "base_url": llm.TierBaseURL(llm.TierSmall)},
+			"tiny":   map[string]any{"model": llm.TierModel(llm.TierTiny), "base_url": llm.TierBaseURL(llm.TierTiny)},
+		},
+		"features": map[string]any{
+			"title":    map[string]any{"tier": llm.FeatureTier("title"), "model": llm.FeatureModel("title"), "base_url": llm.FeatureBaseURL("title")},
+			"tags":     map[string]any{"tier": llm.FeatureTier("tags"), "model": llm.FeatureModel("tags"), "base_url": llm.FeatureBaseURL("tags")},
+			"subtasks": map[string]any{"tier": llm.FeatureTier("subtasks"), "model": llm.FeatureModel("subtasks"), "base_url": llm.FeatureBaseURL("subtasks")},
+			"ocr":      map[string]any{"tier": llm.FeatureTier("ocr"), "model": llm.FeatureModel("ocr"), "base_url": llm.FeatureBaseURL("ocr")},
+			"stt":      map[string]any{"tier": llm.FeatureTier("stt"), "model": llm.FeatureModel("stt"), "base_url": llm.FeatureBaseURL("stt")},
 		},
 	})
 }

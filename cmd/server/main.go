@@ -38,10 +38,12 @@ func main() {
 	defer stop()
 
 	embeddingClient := llm.NewEmbeddingClient()
-	chatClient := llm.NewChatClient()
-	ocrClient := llm.NewOCRClient()
-	sttClient := llm.NewSTTClient()
-	if err := server.New(database, envOr("ADDR", ":8080"), embeddingClient, chatClient, ocrClient, sttClient).Start(ctx); err != nil {
+	titleClient := llm.NewTitleClient()
+	autoTaggerClient := llm.NewAutoTaggerClient()
+	subtaskClient := llm.NewSubTaskClient()
+	ocrClient := llm.NewTieredOCRClient()
+	sttClient := llm.NewTieredSTTClient()
+	if err := server.New(database, envOr("ADDR", ":8080"), embeddingClient, titleClient, autoTaggerClient, subtaskClient, ocrClient, sttClient).Start(ctx); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 	log.Println("server stopped, database closed")

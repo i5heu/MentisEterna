@@ -383,7 +383,7 @@ func TestGenerateTitleTaskBroadcastsNoteChange(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer d.Close()
-	s := New(d, ":0", nil, stubTitleGenerator{title: "Generated Title"}, nil, nil)
+	s := New(d, ":0", nil, stubTitleGenerator{title: "Generated Title"}, nil, nil, nil, nil)
 	note := helperCreateNote(t, s, "Untitled", "body", nil)
 	token := createTestSession(t, s)
 	httpServer, wsURL := newLiveTestHTTPServer(t, s)

@@ -135,12 +135,11 @@ type ChatClient struct {
 	http    *http.Client
 }
 
-// NewChatClient creates a chat client with sensible defaults. The base URL
-// is configurable via LOCALAI_BASE_URL; the model via LOCALAI_CHAT_MODEL.
-func NewChatClient() *ChatClient {
+// NewChatClient creates a chat client for the given base URL and model.
+func NewChatClient(baseURL, model string) *ChatClient {
 	return &ChatClient{
-		BaseURL: llmBaseURL(),
-		Model:   envOr("LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"),
+		BaseURL: baseURL,
+		Model:   model,
 		http:    newLLMHTTPClient(),
 	}
 }
@@ -388,7 +387,7 @@ func (c *ChatClient) GenerateSubTasks(input SubTaskGenerationInput) (SubTaskSugg
 	- CRITICAL: Output raw JSON ONLY.
 	- Do NOT wrap the JSON in markdown code blocks (e.g., forbidden: '''json ...''').
 	- Do NOT include any preamble, intro, outro, explanation, or commentary.
-`, input.MaxSubtasks)
+`)
 
 	userPayload := map[string]any{
 		"title":             input.Title,

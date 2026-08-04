@@ -40,7 +40,7 @@ func TestGenerateSubTasksTaskAppendsAndBroadcasts(t *testing.T) {
 	}
 	defer d.Close()
 	gen := &stubSubTaskGenerator{title: "Title"}
-	s := New(d, ":0", nil, gen, nil, nil)
+	s := New(d, ":0", nil, gen, nil, gen, nil, nil)
 	if err := notetype.Registry["task"].InitSchema(d.DB); err != nil {
 		t.Fatalf("init task schema: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestGenerateSubTasksTaskMissingNote(t *testing.T) {
 	}
 	defer d.Close()
 	gen := &stubSubTaskGenerator{title: "Title"}
-	s := New(d, ":0", nil, gen, nil, nil)
+	s := New(d, ":0", nil, gen, nil, gen, nil, nil)
 
 	result, err := s.generateSubTasksTask(d.DB, []byte(`{"note_id":999999}`))
 	if err != nil {

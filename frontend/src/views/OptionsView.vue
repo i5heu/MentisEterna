@@ -223,7 +223,8 @@
                 <h2 class="section-title">AI API Connection</h2>
                 <p class="section-desc">
                     LocalAI instance providing embeddings, title generation,
-                    OCR, and speech-to-text.
+                    OCR, and speech-to-text. Models are configurable via
+                    LLM_TIER_* and LLM_FEATURE_*_TIER environment variables.
                 </p>
                 <button
                     class="btn-ghost shortcut-anchor"
@@ -363,6 +364,82 @@
                             }}</span>
                         </div>
                     </div>
+                    <!-- Tiers -->
+                    <template v-if="aiStatus.tiers">
+                        <div
+                            v-for="t in Object.keys(aiStatus.tiers)"
+                            :key="'tier-model-' + t"
+                            class="status-row"
+                        >
+                            <span class="status-label">{{
+                                t.charAt(0).toUpperCase() +
+                                t.slice(1) +
+                                " Model"
+                            }}</span>
+                            <code class="status-value">{{
+                                aiStatus.tiers[t].model || "—"
+                            }}</code>
+                        </div>
+                        <div
+                            v-for="t in Object.keys(aiStatus.tiers)"
+                            :key="'tier-url-' + t"
+                            class="status-row"
+                        >
+                            <span class="status-label">{{
+                                t.charAt(0).toUpperCase() +
+                                t.slice(1) +
+                                " Base URL"
+                            }}</span>
+                            <code class="status-value">{{
+                                aiStatus.tiers[t].base_url || "—"
+                            }}</code>
+                        </div>
+                    </template>
+                    <!-- Feature bindings -->
+                    <template v-if="aiStatus.features">
+                        <div
+                            v-for="f in [
+                                'title',
+                                'tags',
+                                'subtasks',
+                                'ocr',
+                                'stt',
+                            ]"
+                            :key="'feat-model-' + f"
+                            class="status-row"
+                        >
+                            <span class="status-label">{{
+                                f.charAt(0).toUpperCase() +
+                                f.slice(1) +
+                                " (tier: " +
+                                aiStatus.features[f].tier +
+                                ")"
+                            }}</span>
+                            <code class="status-value">{{
+                                aiStatus.features[f].model
+                            }}</code>
+                        </div>
+                        <div
+                            v-for="f in [
+                                'title',
+                                'tags',
+                                'subtasks',
+                                'ocr',
+                                'stt',
+                            ]"
+                            :key="'feat-url-' + f"
+                            class="status-row"
+                        >
+                            <span class="status-label">{{
+                                f.charAt(0).toUpperCase() +
+                                f.slice(1) +
+                                " Base URL"
+                            }}</span>
+                            <code class="status-value">{{
+                                aiStatus.features[f].base_url
+                            }}</code>
+                        </div>
+                    </template>
                 </div>
                 <p v-if="aiErr" class="msg-error">{{ aiErr }}</p>
             </section>

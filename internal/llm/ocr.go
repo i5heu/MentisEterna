@@ -23,12 +23,11 @@ type OCRClient struct {
 	http    *http.Client
 }
 
-// NewOCRClient creates an OCR client with sensible defaults. The base URL
-// is configurable via LOCALAI_BASE_URL; the model via LOCALAI_OCR_MODEL.
-func NewOCRClient() *OCRClient {
+// NewOCRClient creates an OCR client for the given base URL and model.
+func NewOCRClient(baseURL, model string) *OCRClient {
 	return &OCRClient{
-		BaseURL: llmBaseURL(),
-		Model:   envOr("LOCALAI_OCR_MODEL", "gpt-4o-mini"),
+		BaseURL: baseURL,
+		Model:   model,
 		http:    newLLMHTTPClient(),
 	}
 }

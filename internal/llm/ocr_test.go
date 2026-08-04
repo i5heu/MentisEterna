@@ -145,16 +145,16 @@ func TestOCRClientRunOCRErrorOnConnectionFailure(t *testing.T) {
 }
 
 func TestNewOCRClientDefaults(t *testing.T) {
-	// Test only that NewOCRClient returns a non-nil client with defaults.
-	// We can't test the actual LocalAI connection here.
-	client := NewOCRClient()
+	// Test only that NewOCRClient returns a non-nil client with the
+	// given base URL and model. We can't test the actual LocalAI connection here.
+	client := NewOCRClient("http://localhost:8080", "gpt-4o-mini")
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
-	if client.Model == "" {
-		t.Error("expected non-empty model")
+	if client.BaseURL != "http://localhost:8080" {
+		t.Errorf("expected base URL http://localhost:8080, got %q", client.BaseURL)
 	}
-	if client.BaseURL == "" {
-		t.Error("expected non-empty base URL")
+	if client.Model != "gpt-4o-mini" {
+		t.Errorf("expected model gpt-4o-mini, got %q", client.Model)
 	}
 }

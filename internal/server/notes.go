@@ -1225,7 +1225,7 @@ func (s *Server) enqueueVSSIndex(noteID int64) {
 // generateTitleTask is the job task handler for auto-generating a note title.
 // It accepts a JSON payload with "note_id" and "body" fields.
 func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
-	if s.chatClient == nil {
+	if s.titleClient == nil {
 		return "", fmt.Errorf("generate_title: no chat client configured")
 	}
 	var p struct {
@@ -1236,9 +1236,9 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 		return "", fmt.Errorf("generate_title: invalid payload: %w", err)
 	}
 
-	release := llm.BeginBackendUse(s.chatClient)
+	release := llm.BeginBackendUse(s.titleClient)
 	defer release()
-	title, err := s.chatClient.GenerateTitle(p.Body)
+	title, err := s.titleClient.GenerateTitle(p.Body)
 	if err != nil {
 		return "", fmt.Errorf("generate title: %w", err)
 	}
@@ -1468,7 +1468,7 @@ func (s *Server) enqueueSTTEmbedding(fileID int64, sttText string) {
 
 // enqueueTitleGeneration enqueues a generate_title job for the given note.
 func (s *Server) enqueueTitleGeneration(noteID int64, body string) {
-	if s.jobManager == nil || s.chatClient == nil {
+	if s.jobManager == nil || s.titleClient == nil {
 		return
 	}
 	payload, _ := json.Marshal(map[string]interface{}{

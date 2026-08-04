@@ -103,7 +103,7 @@ func newTestServerWithEmbedder(t *testing.T) *Server {
 	}
 
 	m := newMockEmbedder()
-	return New(d, ":0", m, nil, nil, nil)
+	return New(d, ":0", m, nil, nil, nil, nil, nil)
 }
 
 // helperCreateNoteSync creates a note and ensures the embedding is
@@ -151,7 +151,7 @@ func TestGenerateAndPersistAutoTagsCreatesAndSeparatesTags(t *testing.T) {
 			NewTags:      []string{"  Next Steps  ", "#Fresh Idea", "project"},
 		},
 	}
-	s := New(d, ":0", nil, gen, nil, nil)
+	s := New(d, ":0", nil, gen, gen, nil, nil, nil)
 
 	n := helperCreateNoteRaw(t, s, `{"title":"Project note","body":"Plan the next phase","tags":["project"]}`)
 	autoTags, err := s.generateAndPersistAutoTags(context.Background(), s.db.DB, n.ID)
@@ -194,7 +194,7 @@ func TestHandleAutoTagsRoute(t *testing.T) {
 	gen := &stubAutoTagGenerator{
 		suggestion: llm.AutoTagSuggestion{NewTags: []string{"roadmap"}},
 	}
-	s := New(d, ":0", nil, gen, nil, nil)
+	s := New(d, ":0", nil, gen, gen, nil, nil, nil)
 	n := helperCreateNoteRaw(t, s, `{"title":"Q4 Plan","body":"Prepare the quarterly plan"}`)
 
 	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/notes/%d/auto-tags", n.ID), nil)
@@ -229,7 +229,7 @@ func TestSearchFindsAutoTags(t *testing.T) {
 	gen := &stubAutoTagGenerator{
 		suggestion: llm.AutoTagSuggestion{NewTags: []string{"roadmap"}},
 	}
-	s := New(d, ":0", embedder, gen, nil, nil)
+	s := New(d, ":0", embedder, gen, gen, nil, nil, nil)
 
 	n := helperCreateNoteRaw(t, s, `{"title":"Q4 Plan","body":"Prepare the quarterly plan"}`)
 	if _, err := s.generateAndPersistAutoTags(context.Background(), s.db.DB, n.ID); err != nil {

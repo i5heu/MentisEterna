@@ -24,12 +24,11 @@ type STTClient struct {
 	http    *http.Client
 }
 
-// NewSTTClient creates an STT client with sensible defaults. The base URL
-// is configurable via LOCALAI_BASE_URL; the model via LOCALAI_STT_MODEL.
-func NewSTTClient() *STTClient {
+// NewSTTClient creates an STT client for the given base URL and model.
+func NewSTTClient(baseURL, model string) *STTClient {
 	return &STTClient{
-		BaseURL: llmBaseURL(),
-		Model:   envOr("LOCALAI_STT_MODEL", "nemo-parakeet-tdt-0.6b"),
+		BaseURL: baseURL,
+		Model:   model,
 		http:    newLLMHTTPClient(),
 	}
 }
