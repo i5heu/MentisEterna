@@ -41,6 +41,27 @@ export LOCALAI_EMBEDDING_MODEL="Qwen3-Embedding-4B-GGUF"  # Model for embeddings
 export LOCALAI_CHAT_MODEL="gemma-3-4b-it"  # Model for title generation
 export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
 export LOCALAI_STT_MODEL="voxtral-mini-4b-realtime"  # Whisper-compatible model for speech-to-text
+# Optional: four named model tiers, each independently configurable. A tier's
+# model/base URL take precedence over the shared LOCALAI_* vars above. Unset
+# tiers fall back to LOCALAI_BASE_URL and the matching legacy LOCALAI_* model.
+# These tiers apply to the chat-style features (title, tags, subtasks).
+export LLM_TIER_TINY_MODEL=""      # "tiny" tier model    (title generation)
+export LLM_TIER_SMALL_MODEL=""     # "small" tier model
+export LLM_TIER_MEDIUM_MODEL=""    # "medium" tier model  (auto-tags)
+export LLM_TIER_SMART_MODEL=""     # "smart" tier model   (subtask planning)
+export LLM_TIER_TINY_BASE_URL=""   # Optional per-tier base URL override (default: LOCALAI_BASE_URL)
+export LLM_TIER_SMALL_BASE_URL=""  # —— all four tiers support a _BASE_URL override ——
+export LLM_TIER_MEDIUM_BASE_URL=""
+export LLM_TIER_SMART_BASE_URL=""
+# OCR and STT are single-purpose models (they only perform one task), so they
+# use dedicated model vars that take precedence over the tier model vars.
+export LLM_OCR_MODEL=""            # Multimodal model for OCR
+export LLM_STT_MODEL=""            # Whisper-compatible model for speech-to-text
+# Feature→tier binding. Defaults if unset: title=tiny, tags=medium,
+# subtasks=smart, ocr=medium, stt=small.
+export LLM_FEATURE_TITLE_TIER="tiny"
+export LLM_FEATURE_TAGS_TIER="medium"
+export LLM_FEATURE_SUBTASKS_TIER="smart"
 export LOCALAI_TLS_INSECURE="0"  # Set to "1", "true", "yes", or "on" to skip TLS verification (self-signed certs)
 export JOB_WORKERS="10"  # Concurrent background jobs (reindexing, OCR, STT, etc.)
 export RECIPE_CATEGORY_WORKERS="10"  # Parallel ingredient-category embedding requests

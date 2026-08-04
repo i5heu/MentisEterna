@@ -58,4 +58,33 @@ func TestTiers(t *testing.T) {
 			t.Errorf("FeatureModel(ocr) = %q, want med (tier precedence)", got)
 		}
 	})
+
+	t.Run("DedicatedOCRSTTModel", func(t *testing.T) {
+		t.Setenv("LLM_TIER_MEDIUM_MODEL", "med")
+		t.Setenv("LLM_TIER_SMALL_MODEL", "small")
+		t.Setenv("LOCALAI_OCR_MODEL", "legacy-ocr")
+		t.Setenv("LOCALAI_STT_MODEL", "legacy-stt")
+
+		// Dedicated model wins over tier and legacy.
+		t.Setenv("LLM_OCR_MODEL", "dedicated-ocr")
+		if got := FeatureModel("ocr"); got != "dedicated-ocr" {
+			t.Errorf("FeatureModel(ocr) = %q, want dedicated-ocr", got)
+		}
+
+		// Unset dedicated -> tier model.
+		t.Setenv("LLM_OCR_MODEL", "")
+		if got := FeatureModel("ocr"); got != "med" {
+			t.Errorf("FeatureModel(ocr) = %q, want med (tier)", got)
+		}
+
+		// STT same pattern.
+		t.Setenv("LLM_STT_MODEL", "dedicated-stt")
+		if got := FeatureModel("stt"); got != "dedicated-stt" {
+			t.Errorf("FeatureModel(stt) = %q, want dedicated-stt", got)
+		}
+		t.Setenv("LLM_STT_MODEL", "")
+		if got := FeatureModel("stt"); got != "small" {
+			t.Errorf("FeatureModel(stt) = %q, want small (tier)", got)
+		}
+	})
 }

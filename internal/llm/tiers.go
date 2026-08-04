@@ -12,20 +12,26 @@ const (
 	TierTiny   = "tiny"
 )
 
-// featureSpec: tier assignment env var name, default tier, legacy model env var, default model.
+// featureSpec: tier assignment env var name, default tier, dedicated model env
+// var ("" if none), legacy model env var, default model.
+//
+// OCR and STT are single-purpose models (they only perform one task), so they
+// have dedicated model env vars that take precedence over the shared tier
+// model vars.
 type featureSpec struct {
-	tierEnv      string
-	defaultTier  string
-	legacyModel  string
-	defaultModel string
+	tierEnv        string
+	defaultTier    string
+	dedicatedModel string
+	legacyModel    string
+	defaultModel   string
 }
 
 var featureSpecs = map[string]featureSpec{
-	"title":    {"LLM_FEATURE_TITLE_TIER", TierTiny, "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
-	"tags":     {"LLM_FEATURE_TAGS_TIER", TierMedium, "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
-	"subtasks": {"LLM_FEATURE_SUBTASKS_TIER", TierSmart, "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
-	"ocr":      {"LLM_FEATURE_OCR_TIER", TierMedium, "LOCALAI_OCR_MODEL", "gpt-4o-mini"},
-	"stt":      {"LLM_FEATURE_STT_TIER", TierSmall, "LOCALAI_STT_MODEL", "nemo-parakeet-tdt-0.6b"},
+	"title":    {"LLM_FEATURE_TITLE_TIER", TierTiny, "", "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
+	"tags":     {"LLM_FEATURE_TAGS_TIER", TierMedium, "", "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
+	"subtasks": {"LLM_FEATURE_SUBTASKS_TIER", TierSmart, "", "LOCALAI_CHAT_MODEL", "gpt-3.5-turbo"},
+	"ocr":      {"LLM_FEATURE_OCR_TIER", TierMedium, "LLM_OCR_MODEL", "LOCALAI_OCR_MODEL", "gpt-4o-mini"},
+	"stt":      {"LLM_FEATURE_STT_TIER", TierSmall, "LLM_STT_MODEL", "LOCALAI_STT_MODEL", "nemo-parakeet-tdt-0.6b"},
 }
 
 // TierNames returns the four tier names in capability order.
@@ -48,9 +54,15 @@ func TierBaseURL(name string) string {
 	return os.Getenv("LLM_TIER_" + strings.ToUpper(name) + "_BASE_URL")
 }
 
-// FeatureModel: tier model, else legacy feature env, else default.
+// FeatureModel: dedicated feature model (OCR/STT only), else tier model, else
+// legacy feature env, else default.
 func FeatureModel(feature string) string {
 	spec := featureSpecs[feature]
+	if spec.dedicatedModel != "" {
+		if v := os.Getenv(spec.dedicatedModel); v != "" {
+			return v
+		}
+	}
 	if m := TierModel(FeatureTier(feature)); m != "" {
 		return m
 	}
