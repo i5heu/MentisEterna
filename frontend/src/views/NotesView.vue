@@ -906,6 +906,11 @@
                                     dirty = true;
                                 }
                             "
+                            @syncCustomData="
+                                (d) => {
+                                    customData = d;
+                                }
+                            "
                             @import:recipes="importRecipes"
                         />
                         <NoteAttachments

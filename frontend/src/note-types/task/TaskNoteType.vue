@@ -397,8 +397,8 @@ watch(
 );
 
 // Emit custom data on change.
-function emitCustomData() {
-    const payload = {
+function buildPayload() {
+    return {
         status: localStatus.value,
         difficulty: localDifficulty.value,
         fun: localFun.value,
@@ -418,8 +418,22 @@ function emitCustomData() {
             checked: s.checked,
         })),
     };
+}
+
+function emitCustomData() {
+    const payload = buildPayload();
     lastEmitted = payload;
     emit("update:customData", payload);
+}
+
+// Like emitCustomData, but for changes that are ALREADY persisted server-side
+// (view-mode actions). Keeps the parent's draft in sync so edit-mode hydration
+// is correct, without marking the note dirty and tripping the unsaved-changes
+// warning on navigation.
+function syncCustomData() {
+    const payload = buildPayload();
+    lastEmitted = payload;
+    emit("syncCustomData", payload);
 }
 
 watch(
@@ -475,8 +489,8 @@ async function toggleSubtask(st) {
             subtask_id: st.id,
             checked: st.checked,
         });
-        // Keep the parent's customData in sync (edit-mode hydration reads it).
-        emitCustomData();
+        // Action already persisted; sync the parent draft without dirtying it.
+        syncCustomData();
         // Notify task overviews so their progress bars update without reload.
         emitSubtaskChange(
             props.note.id,
@@ -486,7 +500,7 @@ async function toggleSubtask(st) {
     } catch {
         // Revert the optimistic flip so the UI matches the server.
         st.checked = !st.checked;
-        emitCustomData();
+        syncCustomData();
     } finally {
         subtaskToggling.value = { ...subtaskToggling.value, [st.id]: false };
     }
@@ -541,8 +555,9 @@ async function quickSetStatus(status) {
         } else if (status !== "done") {
             localCompletedAt.value = "";
         }
-        // Emit the full updated config so the parent syncs on save.
-        emitCustomData();
+        // The action persisted the status; sync the parent draft without
+        // dirtying the note.
+        syncCustomData();
         // Broadcast to all other task components so they refresh.
         emitStatusChange(noteId, status);
     } catch {
@@ -562,7 +577,13 @@ const unsubStatus = onStatusChange((noteId, status) => {
     } else if (localCompletedAt.value !== "") {
         localCompletedAt.value = "";
     }
-    emitCustomData();
+    if (props.editing) {
+        emitCustomData();
+    } else {
+        // The change was persisted by its source; keep the draft in sync
+        // without dirtying the note.
+        syncCustomData();
+    }
 });
 
 onBeforeUnmount(unsubStatus);

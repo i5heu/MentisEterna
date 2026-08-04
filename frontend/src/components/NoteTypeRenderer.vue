@@ -13,6 +13,7 @@
             :actionError="actionError"
             @selectNote="(id) => $emit('selectNote', id)"
             @update:customData="(d) => $emit('update:customData', d)"
+            @syncCustomData="(d) => $emit('syncCustomData', d)"
             @import:recipes="(recipes) => $emit('import:recipes', recipes)"
         />
 
@@ -58,7 +59,7 @@ const props = defineProps({
     actionError: { type: String, default: "" },
 });
 
-defineEmits(["selectNote", "update:customData", "import:recipes"]);
+defineEmits(["selectNote", "update:customData", "syncCustomData", "import:recipes"]);
 
 const typeDef = computed(() => {
     if (!props.note) return null;
