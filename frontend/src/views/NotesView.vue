@@ -303,7 +303,7 @@
         </aside>
 
         <!-- Editor / Chat Pane -->
-        <main class="editor-pane">
+        <main class="editor-pane" @scroll="scheduleLinkHintRefresh">
             <template v-if="selected">
                 <!-- Header bar -->
                 <div class="editor-header">
@@ -5494,9 +5494,9 @@ function onPopstate() {
 
 /* Editor */
 .editor-pane {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
+    /*flex: 1;*/
+    display: block;
+    /*flex-direction: column;*/
     overflow: hidden;
     background: var(--html-bg);
 }
@@ -6678,11 +6678,36 @@ function onPopstate() {
     .layout.mobile.has-selection.sidebar-open .sidebar {
         transform: translateX(0);
     }
-    .layout.mobile .editor-pane {
-        display: none;
-    }
-    .layout.mobile.has-selection .editor-pane {
+
+    /* Mobile header: wrap onto new rows instead of squeezing the title to
+       zero width (the desktop 3-column grid forces one row per column). */
+    .layout.mobile .editor-header {
         display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 0.75rem;
+        padding: 0.7rem 0.85rem;
+        min-height: 0;
+    }
+    .layout.mobile .editor-header-left {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    .layout.mobile .editor-actions {
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+    }
+    /* With the pane scrolling, let the chat feed grow naturally and keep the
+       composer pinned to the bottom. */
+    .layout.mobile .chat-feed {
+        flex: 0 0 auto;
+        overflow: visible;
+    }
+    .layout.mobile .chat-composer {
+        position: sticky;
+        bottom: 0;
+        z-index: 6;
+        background: var(--panel-bg);
     }
     .mobile-back-btn,
     .layout.mobile .sidebar-close-btn {
