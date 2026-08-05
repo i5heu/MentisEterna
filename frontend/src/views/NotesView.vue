@@ -5495,8 +5495,9 @@ function onPopstate() {
     /*flex: 1;*/
     display: block;
     /*flex-direction: column;*/
-    overflow: hidden;
+    overflow: auto;
     background: var(--html-bg);
+    width: 100%;
 }
 
 .editor-header {
@@ -5519,6 +5520,8 @@ function onPopstate() {
     padding: 0.85rem 1.25rem;
     border-bottom: 1px solid var(--border-color);
     background: var(--panel-bg);
+    position: sticky;
+    top: 0;
 }
 
 .mobile-back-btn {
@@ -6615,7 +6618,7 @@ function onPopstate() {
    ============================================= */
 
 .thread-sidebar {
-    width: 33vw;
+    width: 75%;
     min-width: 260px;
     background: var(--panel-bg);
     border-left: 1px solid var(--border-color);
@@ -6726,6 +6729,7 @@ function onPopstate() {
         padding: 0.7rem 0.85rem;
         min-height: 0;
         align-items: baseline;
+        position: inherit;
     }
     .layout.mobile .editor-actions {
         flex-wrap: wrap;
