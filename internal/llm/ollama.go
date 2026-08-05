@@ -243,31 +243,44 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 // GenerateTitle asks the LLM to produce a short, concise title given a note's
 // text content. It uses the LocalAI /v1/chat/completions endpoint (OpenAI-compatible).
 func (c *ChatClient) GenerateTitle(text string) (string, error) {
-	systemPrompt := `You are a highly constrained, automated backend microservice responsible for generating note titles. Your sole function is to receive raw note content and output a single, strictly formatted text string.
+	systemPrompt := `You are an automated backend microservice whose sole responsibility is generating standardized, concise note titles from raw text inputs.
 
-CRITICAL RULES:
-1. MAXIMUM LENGTH: The output must not exceed 30 characters.
-2. ALLOWED CHARACTERS: Strictly limited to alphanumeric characters, hyphens, spaces and underscores "[a-zA-Z0-9_-]". Absolutely NO emojis, and NO punctuation.
-3. WORD SEPARATION: Because spaces are forbidden, you must use kebab-case (e.g., my-new-note) or snake_case (e.g., my_new_note) to separate words.
-4. CONTENT EXTRACTION: Identify the core subject, action, or entity. Discard filler words (a, the, and).
-5. FALLBACK: If the input is empty, completely unreadable, or lacks clear meaning, output exactly: Untitled
-6. ZERO-SHOT OUTPUT: You must output ONLY the final string. NO markdown code blocks (do not use '''), NO quotation marks, NO preamble ("Here is the title:"), and NO conversational text.
+	### TASK GOAL
+	Extract the core subject, action, or entity from the provided note content and return a single, strictly formatted title string.
 
-EXAMPLES:
-Input: "Need to remember to buy milk, eggs, and bread from the store tomorrow."
-Output: grocery-list
+	### STRICT GENERATION RULES
+	1. MAXIMUM LENGTH: The output string MUST NOT exceed 30 characters. Keep titles concise (typically 1 to 4 core keywords).
+	2. ALLOWED CHARACTERS: Strictly limited to alphanumeric characters, hyphens, and underscores matching regex ^[a-zA-Z0-9_-]+$.
+	3. WORD SEPARATION: Spaces are strictly forbidden. Separate words using lowercase kebab-case (e.g., my-note-title).
+	4. CONTENT EXTRACTION: Focus on primary entities/actions and omit filler words (e.g., "a", "an", "the", "and", "to", "from", "for").
+	5. FALLBACK: If the input content is empty, whitespace-only, unreadable, or lacks meaningful context, output exactly: Untitled
 
-Input: "Meeting with the design team regarding the new UI wireframes for the mobile app."
-Output: design-team-ui-wireframes
+	### OUTPUT FORMAT REQUIREMENTS (CRITICAL)
+	- Output ONLY the raw title string.
+	- Do NOT wrap the output in quotation marks ("..." or '...').
+	- Do NOT use markdown code blocks (` + "```" + ` or ` + "````text`" + `), backticks, or rich text formatting.
+	- Do NOT include preambles, intros, or conversational filler (e.g., "Here is the title:").
 
-Input: "12345 67890"
-Output: 12345-67890
+	### FEW-SHOT EXAMPLES
+	Input: "Need to remember to buy milk, eggs, and bread from the store tomorrow."
+	Output: grocery-list
 
-Input: ""
-Output: Untitled
+	Input: "Meeting with the design team regarding the new UI wireframes for the mobile app."
+	Output: design-team-ui-wireframes
 
-INPUT TO PROCESS:
-[Insert User Note Content Here]`
+	Input: "12345 67890"
+	Output: 12345-67890
+
+	Input: "   "
+	Output: Untitled
+
+	Input: ""
+	Output: Untitled
+
+	### INPUT DATA
+	<note_content>
+	{note_content}
+	</note_content>`
 
 	return c.complete([]chatMessage{
 		{Role: "system", Content: systemPrompt},
