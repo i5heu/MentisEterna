@@ -42,6 +42,7 @@ type Server struct {
 	mediaService  *media.Service
 	backupService *backup.Service
 	liveHub       *liveHub
+	ingestToken   string
 }
 
 func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generator, autoTagger llm.AutoTagger, subtaskGen llm.SubTaskGenerator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
@@ -134,6 +135,7 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 		mediaService:  mediaSvc,
 		backupService: backupSvc,
 		liveHub:       liveHub,
+		ingestToken:   os.Getenv("INGEST_TOKEN"),
 	}
 }
 
@@ -239,6 +241,7 @@ func (s *Server) Start(ctx context.Context) error {
 			{Name: "delete_file_replica", Task: s.mediaService.DeleteReplicaTask},
 			{Name: "ocr_file", Task: s.ocrFileTask},
 			{Name: "stt_file", Task: s.sttFileTask},
+			{Name: "stt_to_note", Task: s.ingestSTTToNoteTask},
 		}); err != nil {
 			log.Fatalf("Failed to register media ad-hoc jobs: %v", err)
 		}
@@ -433,6 +436,8 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		http.Error(w, "not found", http.StatusNotFound)
 	}))
+
+	mux.HandleFunc("/ingest/audio", s.handleAudioIngest)
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 

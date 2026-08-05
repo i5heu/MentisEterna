@@ -117,6 +117,7 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
 `hf.co/ggml-org/GLM-OCR-GGUF:Q8_0`
 
 ## TODO Bugs
+- [ ] If inline upload the uploaded file is added 2 times to the .note-attachments list until reload.
 - [x] If the .options-card model is oppened, the .ws-indicator > .ws-dot is red altohugh the ping is changing.
 - [x] note-list shortcut keys are not shown properly (z-index)
 - [x] links in a note need shortcut support
@@ -149,19 +150,57 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
 - [x] Media with OCR and STT jobs, will not be retried if "Re-Index STT Files" or "Re-Index OCR Files" is pressed in the settings. We need aditional buttongs with "Re-Index missing X" and "Re-Index all X" should re-index all files regardless if they have been indexed before or not ("re-index all X" with warning) 
 - [x] The .note-attachments audio "Transcribe" button should trigger a new stt job if the file has a failed transciption (not that it should like now just show that it is running if a job is already running), if there is a transcription, it should change to "transcription" button.
 - [x] .note-attachments Pictures need like .note-attachments audio has a "Transcribe" button, a "OCR" button that triggers a new ocr job if the file has a failed ocr (not that it should like now just show that it is running if a job is already running), if there is a ocr, it should change to "ocr" button. 
-- [ ] If inline upload the uploaded file is added 2 times to the .note-attachments list until reload.
+
 
 ## TODO
-- [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] socratic Questionnaire Mode
+- [ ] delte stall upload chunks after a timeout (12h)
+- [ ] delete embeddings for deleted notes and files
+- [ ] Setup building pipeline
+- [ ] UX Improvements
+  - [ ] Note Editor
+    - [ ] Note Types in note create and edit mode should be searchable.
+    - [ ] Inline note editing (From Child or thread or thread child)
+    - [ ] Autocomplete and predictive text
+    - [ ] Brainstorm and Research mode
+    - [ ] Fast note creation with LLM parent selection
+  - [ ] New Input Methods
+    - [ ] Fast Handnote import
+    - [ ] Quick Voice Input
+      - [ ] Create Note from Voice Input
+      - [ ] Create Note from Audio File
+      - [ ] Live Transcription into Editor
+      - [ ] POST http endpoint to resive audio files (M4A) which will create a Note with the audio file and a transcription if possible. (secure with a secret token in the header)
+  - [x] UI General
+    - [x] Better Keyboard Shortcuts
+      - [x] Unified Keyboard Shortcuts System
+      - [x] Any UI function gets mapped to a keyboard shortcut
+      - [x] Keyboard shortcuts can be viewed with pressing and holding 'strg', they apread over relevant buttons and locations 
+- [ ] better search (by title, path and tags)
+  - [ ] Include Flieds in search:
+    - [x] embedding should be limited to paragraphs instead of the whole note to make it more accurate. The Avrage match is then calculated which is then used for the search ranking.
+    - [x] Note titles
+    - [x] Note Paths
+    - [x] Note tags
+    - [ ] Uploaded text files (.txt, .srt, .vtt) should be added to embedding search and SQLite FTS4 search
+    - [ ] Uploaded pdfs should be added to embedding search and SQLite FTS4 search
+    - [ ] OCR and STT should be added to SQLite FTS4 search.
+  - [x] Filter by note type
+    - [x] Default exclution: Anything but default notes
+    - [x] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
+    - [x] Include all note types with '.a'
+- [ ] Multi-Device Support
+  - [ ] Make MentisEterna usable with multiple devices at the same time per user.
+  - [ ] Create "Sync" via WebRTC to sync Edit Modes.
+  - [ ] Secure E2E mode via WebRTC DataChannel and public key exchange via QR code.
+  - [ ] Create DeviceTeleport which allows to teleport text and files between devices via WebRTC E2E encrypted.
+- [ ] SQLite AES-256 in OFB mode
+- [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [x] Remove legacy model config (chat/ocr/stt fallbacks)
 - [x] Change "Chat AI Models" to tiered models like "Smart Model" and "Small Model"
 - [x] Move from Env vars to a toml config file except for secrets like S3 and LocalAI API keys.
 - [x] User uploads (including inline uploads) in chunks, verify checksum and resume if connection is lost. Chunking in webworker if possible to keep the UI responsive.
 - [x] Upload spinner and stats in the left bottom corner for inline uploads and for attachment uploads a modal with upload progress and stats.
-- [ ] delte stall upload chunks after a timeout (12h)
-- [ ] delete embeddings for deleted notes and files
-- [ ] Setup building pipeline
 - [x] audio inline playback does not work
 - [x] In note edit add "//" to search and add a page link to the note
 - [x] Stream Search results, beginn with tags, categories, Title fuzzy matches etc and then stream the embedding based results.
@@ -181,45 +220,31 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
   - [x] Re Index ingridients category
   - [x] Parallelize re-indexing jobs.
 - [x] Server stats in header above ".editor-header > .editor-actions"
-
-- [x] better search (by title, path and tags)
-  - [x] Include Flieds in search:
-    - [x] embedding should be limited to paragraphs instead of the whole note to make it more accurate. The Avrage match is then calculated which is then used for the search ranking.
-    - [x] Note titles
-    - [x] Note Paths
-    - [x] Note tags
-    - [ ] Uploaded text files (.txt, .srt, .vtt) should be added to embedding search and SQLite FTS4 search
-    - [ ] Uploaded pdfs should be added to embedding search and SQLite FTS4 search
-    - [ ] OCR and STT should be added to SQLite FTS4 search.
-  - [x] Filter by note type
-    - [x] Default exclution: Anything but default notes
-    - [x] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
-    - [x] Include all note types with '.a'
 - [x] add recipie printer function to help note types to print stuff
-- [ ] UX Improvements
-  - [x] UI General
-    - [x] Better Keyboard Shortcuts
-      - [x] Unified Keyboard Shortcuts System
-      - [x] Any UI function gets mapped to a keyboard shortcut
-      - [x] Keyboard shortcuts can be viewed with pressing and holding 'strg', they apread over relevant buttons and locations 
-  - [ ] Note Editor
-    - [ ] Note Types in note create and edit mode should be searchable.
-    - [ ] Inline note editing (From Child or thread or thread child)
-    - [ ] Autocomplete and predictive text
-    - [ ] Brainstorm and Research mode
-    - [ ] Fast note creation with LLM parent selection
-  - [ ] New Input Methods
-    - [ ] Fast Handnote import
-    - [ ] Quick Voice Input
-      - [ ] Create Note from Voice Input
-      - [ ] Create Note from Audio File
-      - [ ] Live Transcription into Editor
-
-- [ ] support AsciiDoc and Markdown (with live preview)
-- [ ] SQLite AES-256 in OFB mode
+- [x] support ~~AsciiDoc~~ and Markdown (with live preview)
 
 
 ## TODO Note Types
+- [ ] Jornal Note Type - daily journal with mood tracking, done todo items.
+- [ ] Password Note Type - encrypted E2E password storage with password generator.
+- [ ] Skill Note Type - for tracking skills, subskills, resources, progress, etc.
+  - [ ] Skill Overview Dashboard Note Type - shows all skills, progress, etc.
+- [ ] Car refuling log note type
+  - [ ] Car refuleling log overview dashboard
+- [ ] Gridfinity note type
+  - [ ] Gridfinity overview dashboard with search and filter options
+- [ ] Wants and wishes note type - has button to add "Today i wanted this", has fields: Acquisition Cost, Operating Expenses per month, Disposal Costs, potential profit per month, Durability in years, Space Requirements in m³
+  - [ ] wants and wishes overview dashboard, with Total Cost of Ownership, Total Potential Profit and space requirements.
+- [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note
+- [ ] Task Sytem
+  - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
+    - [x] SubTasks (Items in a Task Note Type)
+      - [x] Add SubTasks
+      - [x] LLM Create "SubTasks" from Task Description
+  - [x] Task overview dashboard - list all tasks, filter by status, due date, etc. 
+    - [ ] Quick add ToDo
+  - [x] Daily task list - give 3 random tasks per day
+  - [ ] Todays 3 Todos should be printed via the recipe printer. 
 - [x] Recipe (with ingredient table)
   - [x] Recipe Overview (dashboard listing all recipe notes, grocery list generation via RPC action)
   - [x] Recipe Note Type must include following fields: Servings, Attention Time, Total Time, grams per serving, kcal per serving, Freezable (boolean)
@@ -240,26 +265,7 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
   - [x] On the Recipe Note Type, there must be a input for how many servings the ingridiants are shown and that will also lead to the adjustment amounts in the print version of the recipe. 
   - [x] On the Recipe Note Type: The ingrediants should manually sortable (order). The manual order must be shown in the recipe web and printed version. If no manual order is set, the ingredients should be sorted by category and then alphabetically.
  
-- [x] Task Sytem
-  - [x] Task note type - title, status, dificulty (from 0 to 10), Fun (from -5 to 5), priority (from 0 to 10), description, due date, time estimation, time used, recurring options
-    - [x] SubTasks (Items in a Task Note Type)
-      - [x] Add SubTasks
-      - [x] LLM Create "SubTasks" from Task Description
-  - [x] Task overview dashboard - list all tasks, filter by status, due date, etc. 
-    - [ ] Quick add ToDo
-  - [x] Daily task list - give 3 random tasks per day
-  - [ ] Todays 3 Todos should be printed via the recipe printer. 
 - [x] Home Note Type - Shows latest notes, stats, has "Mind Dump" section for quick note creation.
-- [ ] Jornal Note Type - daily journal with mood tracking, done todo items.
-- [ ] Skill Note Type - for tracking skills, subskills, resources, progress, etc.
-  - [ ] Skill Overview Dashboard Note Type - shows all skills, progress, etc.
-- [ ] Car refuling log note type
-  - [ ] Car refuleling log overview dashboard
-- [ ] Gridfinity note type
-  - [ ] Gridfinity overview dashboard with search and filter options
-- [ ] Wants and wishes note type - has button to add "Today i wanted this", has fields: Acquisition Cost, Operating Expenses per month, Disposal Costs, potential profit per month, Durability in years, Space Requirements in m³
-  - [ ] wants and wishes overview dashboard, with Total Cost of Ownership, Total Potential Profit and space requirements.
-- [ ] Web Fetcher note type - fetches a webpage and extracts the main content (like mercury parser) and saves it as a note
 
 ## TODO MVP
 - [x] Pin notes 
@@ -464,6 +470,62 @@ go run ./cmd/restore/ backups/mentis-2026-07-22T03-00-05.db.enc mentis_restored.
 ```
 
 Full documentation: [`docs/Backups.md`](docs/Backups.md).
+
+## Audio Ingestion (`POST /ingest/audio`)
+
+External recorders can push an audio file (e.g. M4A) over HTTP and have it stored as a note with a transcription. The endpoint creates a `standard` note, attaches the uploaded file, then queues a background job that runs the existing STT pipeline and appends the transcript **to the note body**.
+
+The endpoint bypasses session/cookie auth; it is instead secured by a secret token sent as `Authorization: Bearer <token>`.
+
+### Configuration
+
+Set the secret token in the environment before starting the server (there is no `config.toml` field):
+
+```bash
+export INGEST_TOKEN=your-secret-token
+INGEST_TOKEN=your-secret-token go run ./cmd/server/
+```
+
+If `INGEST_TOKEN` is not set, the endpoint returns `503`. STT must also be configured (a `[llm]` STT backend and `[media] cache_dir` / endpoints); otherwise the endpoint returns `503`.
+
+### Usage
+
+```bash
+curl -s -X POST http://localhost:8080/ingest/audio \
+  -H "Authorization: Bearer your-secret-token" \
+  -F "file=@clip.m4a" \
+  -F "title=My recording"
+```
+
+| Form field | Required | Notes |
+|---|---|---|
+| `file` | yes | The audio file (M4A detected as `audio/mp4`; other audio types accepted via `IsSTTable`). Non-audio files are rejected with `415`. |
+| `title` | no | Note title; falls back to the filename (extension stripped), or `"Audio note"`. |
+| `parent_id` | no | Integer ID of the parent note; invalid values are rejected with `400`. |
+
+**Response** (`201 Created`): a JSON object with:
+
+```json
+{
+  "note": { "id": 42, "title": "My recording", "parent_id": null, "type": "standard", "body": "", "attachments": [...] },
+  "file": { "id": 7, "filename": "clip.m4a", "mime_type": "audio/mp4", "is_audio": true, "url": "/file/42/7" },
+  "results": {}
+}
+```
+
+**Status codes:**
+
+| Code | Meaning |
+|---|---|
+| `201` | Note + attachment created; STT queued |
+| `401` | Missing or wrong bearer token |
+| `503` | Ingest not configured (`INGEST_TOKEN` unset) or STT/media unavailable |
+| `405` | Non-`POST` method |
+| `415` | Uploaded file is not a supported audio type |
+| `400` | No `file` field, or invalid `parent_id` |
+| `413` | Upload exceeds the configured size limit (`[server] max_upload_bytes`) |
+
+The transcript is appended to the note body **and** indexed in the file STT store (`files_stt` / `vss_files_stt`), reusing the existing STT pipeline (`RunSTTForFile` → `appendNoteTranscript` → `enqueueSTTEmbedding`). If STT fails, `files_stt.error` is set and the note body is left unchanged; the job is not retried.
 
 ## Creating Custom Note Types
 

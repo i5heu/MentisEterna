@@ -117,4 +117,5 @@ write_delay_ms = 25           # 0 = default inter-chunk delay
 #   BACKUP_ENCRYPTION_KEY          — hex AES-256 key for encrypted backups
 #   MEDIA_S3_<ID>_ACCESS_KEY_ID    — per-endpoint S3 access key (ID = endpoint id)
 #   MEDIA_S3_<ID>_SECRET_ACCESS_KEY — per-endpoint S3 secret access key
+#   INGEST_TOKEN                   — secret bearer token for POST /ingest/audio
 # ---------------------------------------------------------------------------
