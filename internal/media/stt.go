@@ -50,7 +50,7 @@ func (s *Service) RunSTTForFile(ctx context.Context, fileID int64, sttClient llm
 		return nil, fmt.Errorf("stt: load file %d: %w", fileID, err)
 	}
 
-	model := "nemo-parakeet-tdt-0.6b"
+	model := "vibevoice-cpp-asr"
 	if sc, ok := sttClient.(*llm.STTClient); ok {
 		model = sc.Model
 	}

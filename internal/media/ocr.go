@@ -46,7 +46,7 @@ func (s *Service) RunOCRForFile(ctx context.Context, fileID int64, ocrClient llm
 		return nil, fmt.Errorf("ocr: load file %d: %w", fileID, err)
 	}
 
-	model := "gpt-4o-mini"
+	model := "GLM-OCR-GGUF"
 	if oc, ok := ocrClient.(*llm.OCRClient); ok {
 		model = oc.Model
 	}

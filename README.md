@@ -154,7 +154,7 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
 ## TODO
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] socratic Questionnaire Mode
-- [ ] Remove legacy ocr_model and stt_model config
+- [x] Remove legacy model config (chat/ocr/stt fallbacks)
 - [x] Change "Chat AI Models" to tiered models like "Smart Model" and "Small Model"
 - [x] Move from Env vars to a toml config file except for secrets like S3 and LocalAI API keys.
 - [x] User uploads (including inline uploads) in chunks, verify checksum and resume if connection is lost. Chunking in webworker if possible to keep the UI responsive.

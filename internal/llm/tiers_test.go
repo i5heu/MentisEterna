@@ -42,14 +42,20 @@ func TestTiers(t *testing.T) {
 		if got := FeatureTier("title"); got != TierTiny {
 			t.Errorf("FeatureTier(title) = %q, want %q", got, TierTiny)
 		}
-		if got := FeatureModel("title"); got != "gpt-3.5-turbo" {
-			t.Errorf("FeatureModel(title) = %q, want gpt-3.5-turbo", got)
+		if got := FeatureModel("title"); got != "granite-4.1-3b-Q4_K_M" {
+			t.Errorf("FeatureModel(title) = %q, want granite-4.1-3b-Q4_K_M (tiny default)", got)
 		}
 		if got := FeatureTier("subtasks"); got != TierSmart {
 			t.Errorf("FeatureTier(subtasks) = %q, want %q", got, TierSmart)
 		}
 		if got := FeatureBaseURL("stt"); got != "http://localhost:8080" {
 			t.Errorf("FeatureBaseURL(stt) = %q, want http://localhost:8080", got)
+		}
+		if got := FeatureModel("ocr"); got != "GLM-OCR-GGUF" {
+			t.Errorf("FeatureModel(ocr) = %q, want GLM-OCR-GGUF (dedicated default)", got)
+		}
+		if got := FeatureModel("stt"); got != "vibevoice-cpp-asr" {
+			t.Errorf("FeatureModel(stt) = %q, want vibevoice-cpp-asr (dedicated default)", got)
 		}
 	})
 
@@ -74,29 +80,13 @@ func TestTiers(t *testing.T) {
 		}
 	})
 
-	t.Run("LegacyFallback", func(t *testing.T) {
-		config.Reset()
-		t.Cleanup(config.Reset)
-		config.Get().LLM.OCRModel = "legacy-ocr"
-		if got := FeatureModel("ocr"); got != "legacy-ocr" {
-			t.Errorf("FeatureModel(ocr) = %q, want legacy-ocr", got)
-		}
-
-		setTierModel(TierMedium, "med")
-		if got := FeatureModel("ocr"); got != "med" {
-			t.Errorf("FeatureModel(ocr) = %q, want med (tier precedence)", got)
-		}
-	})
-
 	t.Run("DedicatedOCRSTTModel", func(t *testing.T) {
 		config.Reset()
 		t.Cleanup(config.Reset)
 		setTierModel(TierMedium, "med")
 		setTierModel(TierSmall, "small")
-		config.Get().LLM.OCRModel = "legacy-ocr"
-		config.Get().LLM.STTModel = "legacy-stt"
 
-		// Dedicated model wins over tier and legacy.
+		// Dedicated model wins over tier.
 		config.Get().LLM.OCRDedicatedModel = "dedicated-ocr"
 		if got := FeatureModel("ocr"); got != "dedicated-ocr" {
 			t.Errorf("FeatureModel(ocr) = %q, want dedicated-ocr", got)

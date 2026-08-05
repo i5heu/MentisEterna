@@ -14,8 +14,7 @@ const (
 )
 
 // featureSpec: default tier, dedicated model ("ocr"/"stt" if the feature has a
-// dedicated model override, else ""), legacy model ("chat"/"ocr"/"stt" — which
-// llm legacy model is the fallback), default model.
+// dedicated model override, else ""), default model.
 //
 // OCR and STT are single-purpose models (they only perform one task), so they
 // have dedicated model overrides that take precedence over the shared tier
@@ -23,16 +22,15 @@ const (
 type featureSpec struct {
 	defaultTier  string
 	dedicated    string // "ocr"/"stt" if the feature has a dedicated model override, else ""
-	legacy       string // "chat"/"ocr"/"stt" — which llm legacy model is the fallback
 	defaultModel string
 }
 
 var featureSpecs = map[string]featureSpec{
-	"title":    {TierTiny, "", "chat", "gpt-3.5-turbo"},
-	"tags":     {TierMedium, "", "chat", "gpt-3.5-turbo"},
-	"subtasks": {TierSmart, "", "chat", "gpt-3.5-turbo"},
-	"ocr":      {TierMedium, "ocr", "ocr", "gpt-4o-mini"},
-	"stt":      {TierSmall, "stt", "stt", "nemo-parakeet-tdt-0.6b"},
+	"title":    {TierTiny, "", "granite-4.1-3b-Q4_K_M"},
+	"tags":     {TierMedium, "", "gemma-4-e2b-it-qat-q4_0"},
+	"subtasks": {TierSmart, "", "Qwen3.6-27B-MTP-GGUF"},
+	"ocr":      {TierMedium, "ocr", "GLM-OCR-GGUF"},
+	"stt":      {TierSmall, "stt", "vibevoice-cpp-asr"},
 }
 
 // TierNames returns the four tier names in capability order.
@@ -65,20 +63,7 @@ func dedicatedModel(spec featureSpec) string {
 	return ""
 }
 
-func legacyModel(spec featureSpec) string {
-	switch spec.legacy {
-	case "chat":
-		return config.Get().LLM.ChatModel
-	case "ocr":
-		return config.Get().LLM.OCRModel
-	case "stt":
-		return config.Get().LLM.STTModel
-	}
-	return ""
-}
-
-// FeatureModel: dedicated feature model (OCR/STT only), else tier model, else
-// legacy model, else default.
+// FeatureModel: dedicated feature model (OCR/STT only), else tier model, else default.
 func FeatureModel(feature string) string {
 	spec := featureSpecs[feature]
 	if d := dedicatedModel(spec); d != "" {
@@ -86,9 +71,6 @@ func FeatureModel(feature string) string {
 	}
 	if m := TierModel(FeatureTier(feature)); m != "" {
 		return m
-	}
-	if l := legacyModel(spec); l != "" {
-		return l
 	}
 	return spec.defaultModel
 }

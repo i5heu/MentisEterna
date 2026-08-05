@@ -42,9 +42,6 @@ type LLMConfig struct {
 	EmbeddingModel    string                   `toml:"embedding_model"`    // was LOCALAI_EMBEDDING_MODEL
 	EmbeddingMaxChars int                      `toml:"embedding_max_chars"`   // was LOCALAI_EMBEDDING_MAX_CHARS
 	TLSInsecure       bool                     `toml:"tls_insecure"`          // was LOCALAI_TLS_INSECURE
-	ChatModel         string                   `toml:"chat_model"`            // legacy fallback, was LOCALAI_CHAT_MODEL
-	OCRModel          string                   `toml:"ocr_model"`             // legacy fallback, was LOCALAI_OCR_MODEL
-	STTModel          string                   `toml:"stt_model"`             // legacy fallback, was LOCALAI_STT_MODEL
 	OCRDedicatedModel string                   `toml:"ocr_dedicated_model"`   // was LLM_OCR_MODEL
 	STTDedicatedModel string                   `toml:"stt_dedicated_model"`   // was LLM_STT_MODEL
 	Tiers             map[string]TierConfig    `toml:"tiers"`                 // was LLM_TIER_<NAME>_MODEL
@@ -52,7 +49,7 @@ type LLMConfig struct {
 }
 
 type TierConfig struct {
-	Model   string `toml:"model"`    // empty = fall back to legacy model
+	Model   string `toml:"model"`    // empty = fall back to the feature's default model
 	BaseURL string `toml:"base_url"` // was LLM_TIER_<NAME>_BASE_URL
 }
 
@@ -110,9 +107,14 @@ func DefaultConfig() Config {
 		LLM: LLMConfig{
 			EmbeddingModel:    "text-embedding-ada-002",
 			EmbeddingMaxChars: 16 * 1024,
-			ChatModel:         "gpt-3.5-turbo",
-			OCRModel:          "gpt-4o-mini",
-			STTModel:          "nemo-parakeet-tdt-0.6b",
+			OCRDedicatedModel: "GLM-OCR-GGUF",
+			STTDedicatedModel: "vibevoice-cpp-asr",
+			Tiers: map[string]TierConfig{
+				"smart":  {Model: "Qwen3.6-27B-MTP-GGUF"},
+				"medium": {Model: "gemma-4-e2b-it-qat-q4_0"},
+				"small":  {Model: "gemma-4-e2b-it-qat-q4_0"},
+				"tiny":   {Model: "granite-4.1-3b-Q4_K_M"},
+			},
 		},
 		Printer: PrinterConfig{
 			ImageThreshold:     120.0,

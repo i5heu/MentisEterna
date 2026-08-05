@@ -90,8 +90,7 @@ The OCR model is configured in `config.toml` under `[llm]` (see
 
 | Setting | Default | Description |
 |---|---|---|
-| `[llm] ocr_model` | `gpt-4o-mini` | The multimodal model used for OCR (legacy fallback) |
-| `[llm] ocr_dedicated_model` | (empty) | Dedicated OCR model; takes precedence over the tier/legacy model |
+| `[llm] ocr_dedicated_model` | `GLM-OCR-GGUF` | Dedicated OCR model; takes precedence over the tier model |
 | `[llm] base_url` | `http://localhost:8080` | LLM backend URL (shared with embeddings/chat) |
 | `[llm.tiers.medium] model` / `base_url` | (empty) | Medium tier model/base URL used by OCR when bound to it |
 

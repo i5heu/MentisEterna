@@ -282,7 +282,6 @@ Key sections (see `config.default.toml` for all fields):
 | `[llm] embedding_model` | `LOCALAI_EMBEDDING_MODEL` | Embedding model |
 | `[llm] embedding_max_chars` | `LOCALAI_EMBEDDING_MAX_CHARS` | Max runes per embedding request |
 | `[llm] tls_insecure` | `LOCALAI_TLS_INSECURE` | Skip TLS verification for the LLM backend |
-| `[llm] chat_model` / `ocr_model` / `stt_model` | `LOCALAI_CHAT/OCR/STT_MODEL` | Legacy model fallbacks |
 | `[llm] ocr_dedicated_model` / `stt_dedicated_model` | `LLM_OCR_MODEL` / `LLM_STT_MODEL` | Dedicated OCR/STT models |
 | `[llm.tiers.<name>] model` / `base_url` | `LLM_TIER_<NAME>_MODEL` / `_BASE_URL` | Per-tier model / base URL |
 | `[llm.features.<name>] tier` | `LLM_FEATURE_<NAME>_TIER` | Feature→tier binding |

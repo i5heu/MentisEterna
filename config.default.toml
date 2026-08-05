@@ -54,14 +54,14 @@ embedding_max_chars = 16384
 tls_insecure = false
 
 
-# Single-purpose OCR/STT models, taking precedence over both the tier model and
-# the legacy *_model above. Leave empty to disable the dedicated override.
+# Single-purpose OCR/STT models, taking precedence over the tier model.
+# Leave empty to disable the dedicated override.
 ocr_dedicated_model = "GLM-OCR-GGUF"
 stt_dedicated_model = "vibevoice-cpp-asr"
 
 # Four named model tiers. A tier's model is used by every feature bound to that
-# tier; empty = fall back to the legacy *_model. A tier's base_url overrides
-# [llm] base_url for features on that tier; empty = use [llm] base_url.
+# tier; empty = fall back to the feature's default model. A tier's base_url
+# overrides [llm] base_url for features on that tier; empty = use [llm] base_url.
 [llm.tiers]
 smart  = { model = "Qwen3.6-27B-MTP-GGUF", base_url = "" }
 medium = { model = "gemma-4-e2b-it-qat-q4_0", base_url = "" }
