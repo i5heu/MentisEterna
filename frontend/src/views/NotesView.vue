@@ -308,11 +308,10 @@
                 <!-- Header bar -->
                 <div class="editor-header">
                     <button type="button" class="btn-ghost mobile-back-btn" @click="openMobileSidebar" aria-label="Menu">☰</button>
-                    <div class="editor-header-left">
-                        <div
-                            v-if="isEditing"
-                            class="shortcut-anchor title-input-anchor"
-                        >
+                    <div
+                        v-if="isEditing"
+                        class="shortcut-anchor title-input-anchor"
+                    >
                             <input
                                 ref="editTitleInput"
                                 v-model="editTitle"
@@ -403,7 +402,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div v-if="selected.id" class="tag-row auto-tag-row">
+                        <div v-if="selected.id" class="tag-row">
                             <span class="parent-label">Auto Tags:</span>
                             <div class="tag-list auto-tag-list">
                                 <span
@@ -615,7 +614,6 @@
                                 ></span
                             >
                         </div>
-                    </div>
                     <div class="editor-actions">
                         <button
                             class="btn-ghost shortcut-anchor"
@@ -5504,6 +5502,17 @@ function onPopstate() {
 .editor-header {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
+    /* Named grid areas let header blocks be repositioned freely. To move a
+       block (e.g. the tag row), either change its `grid-area` below or
+       reassign the area inside the grid-template-areas map. Columns are:
+       left (mobile back button), middle (title + metadata), right (actions). */
+    grid-template-areas:
+        "back title actions"
+        ".    type   actions"
+        ".    tags   actions"
+        ".    auto   actions"
+        ".    parent actions"
+        ".    bread  actions";
     align-items: start;
     min-height: 7.4em;
     gap: 0.75rem;
@@ -5513,15 +5522,31 @@ function onPopstate() {
 }
 
 .mobile-back-btn {
+    grid-area: back;
     display: none;
 }
 
-.editor-header-left {
-    grid-column: 2;
+/* Title block — both the editing input and the read-only display map here. */
+.title-input-anchor,
+.title-display {
+    grid-area: title;
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
     min-width: 0;
+}
+
+.type-row {
+    grid-area: type;
+}
+.tag-row {
+    grid-area: tags;
+}
+.parent-row {
+    grid-area: parent;
+}
+.breadcrumb-trail {
+    grid-area: bread;
 }
 
 .title-input {
@@ -5549,7 +5574,7 @@ function onPopstate() {
 }
 
 .editor-actions {
-    grid-column: 3;
+    grid-area: actions;
     display: flex;
     gap: 0.5rem;
     flex-shrink: 0;
@@ -5604,6 +5629,7 @@ function onPopstate() {
     align-items: flex-start;
     gap: 0.4rem;
     margin-bottom: 0.25rem;
+    align-items: baseline;
 }
 
 .tag-list {
@@ -6679,22 +6705,29 @@ function onPopstate() {
         transform: translateX(0);
     }
 
-    /* Mobile header: wrap onto new rows instead of squeezing the title to
-       zero width (the desktop 3-column grid forces one row per column). */
+    /* Mobile header: still a grid, but with areas suited to a narrow column
+       instead of the desktop 3-column map — back button + title on the first
+       row, actions wrapping on their own row, then the metadata rows stacked.
+       The grid-area names below are the same ones assigned per-block in the
+       base styles, so they map in automatically; reposition by editing those. */
     .layout.mobile .editor-header {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: flex-start;
-        gap: 0.75rem;
+        display: grid;
+        grid-template-columns: 3rem auto auto;
+        grid-template-areas:
+            "back  bread bread"
+            "title title title"
+            "actions actions actions"
+            "type type type"
+            "tags tags tags"
+            "auto auto auto"
+            "parent parent parent";
+        align-items: start;
+        gap: 0.5rem;
         padding: 0.7rem 0.85rem;
         min-height: 0;
-    }
-    .layout.mobile .editor-header-left {
-        flex: 1 1 auto;
-        min-width: 0;
+        align-items: baseline;
     }
     .layout.mobile .editor-actions {
-        flex: 1 1 100%;
         flex-wrap: wrap;
     }
     /* With the pane scrolling, let the chat feed grow naturally and keep the
@@ -6714,8 +6747,8 @@ function onPopstate() {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 2.5rem;
-        min-height: 2.5rem;
+        width: 2.5rem;
+        height: 2.5rem;
         padding: 0;
     }
 
