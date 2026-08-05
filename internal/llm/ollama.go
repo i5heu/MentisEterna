@@ -79,9 +79,8 @@ type SubTaskItem struct {
 // --- Shared HTTP client & base URL helpers ---
 
 // newLLMHTTPClient returns an *http.Client configured for LLM backend requests.
-// When LOCALAI_TLS_INSECURE is a non-empty truthy string (e.g. "1", "true", "yes"),
-// TLS certificate verification is skipped — useful for self-signed certificates
-// on internal LAN addresses.
+// When [llm] tls_insecure is true, TLS certificate verification is skipped —
+// useful for self-signed certificates on internal LAN addresses.
 func newLLMHTTPClient() *http.Client {
 	if config.Get().LLM.TLSInsecure {
 		return &http.Client{

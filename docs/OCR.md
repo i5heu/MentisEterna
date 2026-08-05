@@ -85,10 +85,15 @@ Returns the OCR result for a file.
 
 ## Configuration
 
-| Variable | Default | Description |
+The OCR model is configured in `config.toml` under `[llm]` (see
+`config.default.toml`):
+
+| Setting | Default | Description |
 |---|---|---|
-| `LOCALAI_OCR_MODEL` | `gpt-4o-mini` | The multimodal model used for OCR |
-| `LOCALAI_BASE_URL` | `http://localhost:8080` | LocalAI instance URL (shared with embeddings/chat) |
+| `[llm] ocr_model` | `gpt-4o-mini` | The multimodal model used for OCR (legacy fallback) |
+| `[llm] ocr_dedicated_model` | (empty) | Dedicated OCR model; takes precedence over the tier/legacy model |
+| `[llm] base_url` | `http://localhost:8080` | LLM backend URL (shared with embeddings/chat) |
+| `[llm.tiers.medium] model` / `base_url` | (empty) | Medium tier model/base URL used by OCR when bound to it |
 
 ## Supported Image Types
 

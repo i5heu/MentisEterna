@@ -34,60 +34,31 @@ As I am building for a long time now on [OuroborosDB](https://github.com/i5heu/o
 
 
 ## Usage
-Environment variables:
+All non-secret configuration lives in a TOML file (default `config.toml`). Copy
+the fully-documented template and edit it:
+
 ```bash
-export LOCALAI_BASE_URL="http://localhost:8080"  # LocalAI server URL
-export LOCALAI_EMBEDDING_MODEL="Qwen3-Embedding-4B-GGUF"  # Model for embeddings
-export LOCALAI_CHAT_MODEL="gemma-3-4b-it"  # Model for title generation
-export LOCALAI_OCR_MODEL="glm-ocr"  # Multimodal model for OCR
-export LOCALAI_STT_MODEL="voxtral-mini-4b-realtime"  # Whisper-compatible model for speech-to-text
-# Optional: four named model tiers, each independently configurable. A tier's
-# model/base URL take precedence over the shared LOCALAI_* vars above. Unset
-# tiers fall back to LOCALAI_BASE_URL and the matching legacy LOCALAI_* model.
-# These tiers apply to the chat-style features (title, tags, subtasks).
-export LLM_TIER_TINY_MODEL=""      # "tiny" tier model    (title generation)
-export LLM_TIER_SMALL_MODEL=""     # "small" tier model
-export LLM_TIER_MEDIUM_MODEL=""    # "medium" tier model  (auto-tags)
-export LLM_TIER_SMART_MODEL=""     # "smart" tier model   (subtask planning)
-export LLM_TIER_TINY_BASE_URL=""   # Optional per-tier base URL override (default: LOCALAI_BASE_URL)
-export LLM_TIER_SMALL_BASE_URL=""  # —— all four tiers support a _BASE_URL override ——
-export LLM_TIER_MEDIUM_BASE_URL=""
-export LLM_TIER_SMART_BASE_URL=""
-# OCR and STT are single-purpose models (they only perform one task), so they
-# use dedicated model vars that take precedence over the tier model vars.
-export LLM_OCR_MODEL=""            # Multimodal model for OCR
-export LLM_STT_MODEL=""            # Whisper-compatible model for speech-to-text
-# Feature→tier binding. Defaults if unset: title=tiny, tags=medium,
-# subtasks=smart, ocr=medium, stt=small.
-export LLM_FEATURE_TITLE_TIER="tiny"
-export LLM_FEATURE_TAGS_TIER="medium"
-export LLM_FEATURE_SUBTASKS_TIER="smart"
-export LOCALAI_TLS_INSECURE="0"  # Set to "1", "true", "yes", or "on" to skip TLS verification (self-signed certs)
-export JOB_WORKERS="10"  # Concurrent background jobs (reindexing, OCR, STT, etc.)
-export RECIPE_CATEGORY_WORKERS="10"  # Parallel ingredient-category embedding requests
-export PUBLIC_BASE_URL="http://localhost:8080"  # Browser URL; set https://... when serving TLS or deploying remotely
-export TLS_CERT_FILE="/path/to/server.crt"  # Optional: when set together with TLS_KEY_FILE, Go serves HTTPS directly
-export TLS_KEY_FILE="/path/to/server.key"  # Optional: private key matching TLS_CERT_FILE
-export WEBAUTHN_RPID="notes.example.com"  # Optional override for the WebAuthn RP ID
-export WEBAUTHN_RP_ORIGINS="https://notes.example.com"  # Optional comma-separated WebAuthn origins
-export MAX_UPLOAD_BYTES="67108864"  # Max upload size in bytes
-export MAX_INLINE_UPLOAD_BYTES="16777216"  # Max inline-upload size in bytes
-export MEDIA_CACHE_DIR="/var/mentis/cache"  # Local directory for encrypted file cache
-export MEDIA_S3_ENDPOINTS='[
-  {
-    "id": "primary",
-    "bucket": "mentis-files",
-    "region": "nbg1",
-    "endpoint": "https://nbg1.your-objectstorage.com",
-    "access_key_id": "XXX",
-    "secret_access_key": "XXX",
-    "force_path_style": false
-  }
-]'  # JSON array of S3 endpoint configurations
-export BACKUP_ENCRYPTION_KEY="your-encryption-key"  # Encryption key for backups
+cp config.default.toml config.toml
+# then edit config.toml: [llm] base_url + model names/tiers, [media] cache_dir
+# and endpoint definitions, [jobs]/[recipe] workers, [printer], etc.
 ```
 
-Create `BACKUP_ENCRYPTION_KEY` with `openssl rand -hex 32`.
+Run the server (it reads `config.toml` by default):
+
+```bash
+go run ./cmd/server/ --create-db   # first run
+go run ./cmd/server/               # subsequent runs
+```
+
+Secrets (API keys, backup encryption key) stay in the environment:
+
+```bash
+export BACKUP_ENCRYPTION_KEY="$(openssl rand -hex 32)"   # encrypted backups
+# Per-endpoint S3 credentials (endpoint definitions live in config.toml under
+# [media.endpoints]):
+export MEDIA_S3_PRIMARY_ACCESS_KEY_ID="XXX"
+export MEDIA_S3_PRIMARY_SECRET_ACCESS_KEY="XXX"
+```
 
 Security review checklist: [`docs/SecurityChecklist.md`](docs/SecurityChecklist.md)
 
@@ -97,9 +68,9 @@ Build and run with Docker Compose:
 
 ```bash
 # .env is loaded automatically by Docker Compose
-# Edit it as needed, especially:
-#   For local use: PUBLIC_BASE_URL=http://localhost:8080
-#   For non-localhost deployments: PUBLIC_BASE_URL=https://notes.example.com
+# Edit config.toml as needed, especially:
+#   For local use: [server] public_base_url=http://localhost:8080
+#   For non-localhost deployments: [server] public_base_url=https://notes.example.com
 
 docker compose up --build
 ```
@@ -109,18 +80,18 @@ The bundled Caddy auth proxy has been removed; the Go server now performs its
 own request hardening.
 
 If you want the Go process itself to serve HTTPS, mount your certificate and
-key into the container, then set `TLS_CERT_FILE`, `TLS_KEY_FILE`, and a matching
-`PUBLIC_BASE_URL=https://...`.
+key into the container, then set `[server] tls_cert_file`, `[server] tls_key_file`,
+and a matching `[server] public_base_url=https://...` in `config.toml`.
 
 Notes:
 - Browser auth is cookie-only; the SPA no longer stores session tokens in
   `localStorage`.
 - The server derives cookie security, trusted origin checks, and default
-  WebAuthn RP settings from `PUBLIC_BASE_URL`.
-- Non-localhost deployments must set `PUBLIC_BASE_URL` to an `https://...`
+  WebAuthn RP settings from `public_base_url`.
+- Non-localhost deployments must set `public_base_url` to an `https://...`
   URL; the server now refuses to start otherwise.
-- Setting both `TLS_CERT_FILE` and `TLS_KEY_FILE` makes the Go server switch to
-  HTTPS via `ListenAndServeTLS` on `ADDR`.
+- Setting both `tls_cert_file` and `tls_key_file` makes the Go server switch to
+  HTTPS via `ListenAndServeTLS` on `addr`.
 - If you deploy behind your own TLS terminator or reverse proxy, make sure it
   preserves the original `Host` header so the server's trusted-host checks keep
   working.
@@ -135,10 +106,11 @@ After that, normal `docker compose up` works without the flag.
 
 The Compose setup stores the SQLite database and media cache in the bind-mounted host directory `./mentis-data`, mounted at `/data` inside the container.
 For remote deployments, either terminate TLS in your own ingress/reverse proxy
-or provide `TLS_CERT_FILE` + `TLS_KEY_FILE` to the Go server directly, and set
-`PUBLIC_BASE_URL` to the external `https://...` origin that browsers use.
+or provide `tls_cert_file` + `tls_key_file` to the Go server directly, and set
+`public_base_url` to the external `https://...` origin that browsers use.
 
-If you want AI features to work from inside the container, set `LOCALAI_BASE_URL` in `.env` to a reachable endpoint for your LocalAI instance.
+If you want AI features to work from inside the container, set `[llm] base_url`
+in `config.toml` to a reachable endpoint for your LocalAI instance.
 
 **Models**:  
 `hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M`  
@@ -182,6 +154,7 @@ If you want AI features to work from inside the container, set `LOCALAI_BASE_URL
 ## TODO
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [ ] socratic Questionnaire Mode
+- [ ] Remove legacy ocr_model and stt_model config
 - [x] Change "Chat AI Models" to tiered models like "Smart Model" and "Small Model"
 - [x] Move from Env vars to a toml config file except for secrets like S3 and LocalAI API keys.
 - [x] User uploads (including inline uploads) in chunks, verify checksum and resume if connection is lost. Chunking in webworker if possible to keep the UI responsive.
@@ -325,41 +298,43 @@ After downloading and extracting the correct pre-compiled extension for your pla
 - macOS: `lib/vec0.dylib`
 - Windows: `lib/vec0.dll`
 
-The server loads `vec0` automatically from `lib/`. If you want to keep the extension somewhere else, set `VEC_EXT_PATH` to the directory containing the file. `VSS_EXT_PATH` is also accepted as a legacy alias.
+The server loads `vec0` automatically from `lib/`. If you want to keep the extension somewhere else, set `[database] vec_ext_path` in `config.toml` to the directory containing the file.
 
 ## S3 Media Storage
 
 MentisEterna supports encrypted file attachments stored on any S3-compatible object storage (AWS S3, MinIO, Backblaze B2, etc.). Files are **AES-256-GCM encrypted** before leaving the server — each file gets its own random 256-bit key. Ciphertext is cached locally and replicated to all configured S3 endpoints.
 
-### Environment Variables
+### Configuration (`config.toml`)
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `MEDIA_CACHE_DIR` | Yes | Writable directory for local encrypted file cache (e.g. `/var/mentis/cache`) |
-| `MEDIA_S3_ENDPOINTS` | Yes | JSON array of endpoint configurations (see format below) |
-| `MAX_UPLOAD_BYTES` | No | App and proxy upload limit in bytes. Defaults to `67108864` (64 MiB). |
-| `MAX_INLINE_UPLOAD_BYTES` | No | Max inline-upload size in bytes. Defaults to `16777216` (16 MiB) in Compose. |
+| Setting | Purpose |
+|---|---|
+| `[media] cache_dir` | Writable directory for local encrypted file cache (e.g. `/var/mentis/cache`); empty disables media |
+| `[media] endpoints` | Endpoint definitions (id/bucket/region/endpoint/force_path_style) — see format below |
+| `[server] max_upload_bytes` / `max_inline_upload_bytes` | Upload size limits; defaults `67108864` (64 MiB) |
+| `[server] max_json_body_bytes` | JSON body limit; default `1048576` |
 
-If these variables are not set, the media subsystem is disabled and a warning is logged at startup. The server still runs — file upload/download endpoints simply return `503 Service Unavailable`.
+If `cache_dir` or the endpoints are not configured, the media subsystem is
+disabled and a warning is logged at startup. The server still runs — file
+upload/download endpoints simply return `503 Service Unavailable`.
 Uploaded files are classified server-side from their bytes. Only a small allowlist
 of image/audio types is rendered inline; everything else is served as a download.
 
-### `MEDIA_S3_ENDPOINTS` Format
+Per-endpoint API keys are secrets and stay in the environment as
+`MEDIA_S3_<ID>_ACCESS_KEY_ID` and `MEDIA_S3_<ID>_SECRET_ACCESS_KEY` (replace
+`<ID>` with the endpoint id, upper-cased).
 
-A JSON array of objects, each describing one S3-compatible endpoint:
+### `[media] endpoints` Format
 
-```json
-[
-  {
-    "id":                "primary",
-    "bucket":            "my-bucket",
-    "region":            "us-east-1",
-    "endpoint":          "https://s3.amazonaws.com",
-    "access_key_id":     "AKIAIOSFODNN7EXAMPLE",
-    "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    "force_path_style":  false
-  }
-]
+A list of objects, each describing one S3-compatible endpoint (non-secret
+fields only):
+
+```toml
+[[media.endpoints]]
+id = "primary"
+bucket = "my-bucket"
+region = "us-east-1"
+endpoint = "https://s3.amazonaws.com"
+force_path_style = false
 ```
 
 | Field | Required | Notes |
@@ -368,36 +343,35 @@ A JSON array of objects, each describing one S3-compatible endpoint:
 | `bucket` | Yes | S3 bucket name. |
 | `region` | No | AWS region. Defaults to `us-east-1` if omitted. |
 | `endpoint` | Yes | Base URL of the S3-compatible service. For AWS: `https://s3.amazonaws.com`. For MinIO: `http://localhost:9000`. |
-| `access_key_id` | Yes | Access key / username. |
-| `secret_access_key` | Yes | Secret key / password. |
 | `force_path_style` | No | Use path-style bucket addressing (`/bucket/key`) instead of virtual-hosted style (`bucket.endpoint/key`). Required for MinIO and many self-hosted S3 services. Defaults to `false`. |
+
+The matching access key and secret key are provided via the environment
+(`MEDIA_S3_PRIMARY_ACCESS_KEY_ID` / `MEDIA_S3_PRIMARY_SECRET_ACCESS_KEY` for the
+endpoint above).
 
 ### Multiple Endpoints (Replication)
 
 You can configure multiple endpoints for redundancy. Files are uploaded to **all** endpoints simultaneously, and the `repair_replicas` background job (sweeps every 30m) heals any replicas that failed during upload:
 
-```json
-[
-  {
-    "id":                "aws-primary",
-    "bucket":            "mentis-files",
-    "region":            "us-east-1",
-    "endpoint":          "https://s3.amazonaws.com",
-    "access_key_id":     "AKIA...",
-    "secret_access_key": "...",
-    "force_path_style":  false
-  },
-  {
-    "id":                "backblaze-backup",
-    "bucket":            "mentis-backup",
-    "region":            "us-west-004",
-    "endpoint":          "https://s3.us-west-004.backblazeb2.com",
-    "access_key_id":     "...",
-    "secret_access_key": "...",
-    "force_path_style":  true
-  }
-]
+```toml
+[[media.endpoints]]
+id = "aws-primary"
+bucket = "mentis-files"
+region = "us-east-1"
+endpoint = "https://s3.amazonaws.com"
+force_path_style = false
+
+[[media.endpoints]]
+id = "backblaze-backup"
+bucket = "mentis-backup"
+region = "us-west-004"
+endpoint = "https://s3.us-west-004.backblazeb2.com"
+force_path_style = true
 ```
+
+With the corresponding secrets exported:
+`MEDIA_S3_AWS_PRIMARY_ACCESS_KEY_ID`/`MEDIA_S3_AWS_PRIMARY_SECRET_ACCESS_KEY` and
+`MEDIA_S3_BACKBLAZE_BACKUP_ACCESS_KEY_ID`/`MEDIA_S3_BACKBLAZE_BACKUP_SECRET_ACCESS_KEY`.
 
 ### Encryption Details
 
@@ -418,39 +392,42 @@ The media subsystem registers these cron jobs:
 
 ### Example: MinIO for Local Development
 
+```toml
+# config.toml
+[media]
+cache_dir = "/tmp/mentis-media-cache"
+[[media.endpoints]]
+id = "minio"
+bucket = "mentis"
+endpoint = "http://localhost:9000"
+force_path_style = true
+```
+
 ```bash
-export MEDIA_CACHE_DIR="/tmp/mentis-media-cache"
-export MEDIA_S3_ENDPOINTS='[
-  {
-    "id": "minio",
-    "bucket": "mentis",
-    "endpoint": "http://localhost:9000",
-    "access_key_id": "minioadmin",
-    "secret_access_key": "minioadmin",
-    "force_path_style": true
-  }
-]'
+# secrets stay in the environment
+export MEDIA_S3_MINIO_ACCESS_KEY_ID="minioadmin"
+export MEDIA_S3_MINIO_SECRET_ACCESS_KEY="minioadmin"
 ```
 
 ## Thermal Receipt Printer
 
 For printing recipes (and other note types) on a thermal receipt printer, the server uses raw USB bulk transfers via Linux usbdevfs (`/dev/bus/usb/BBB/DDD`). This is the same path as Python's `escpos.printer.Usb(vendor, product)` — **no usblp kernel module required**.
 
-Text is emitted as ESC/POS code table `PC437` (`ESC t 0`) by default, which matches TM-T88III-compatible printers and works for German umlauts like `Ä Ö Ü ä ö ü`. Override this with `THERMAL_PRINTER_CODEPAGE` if your printer expects another table (for example `wpc1252`).
+Text is emitted as ESC/POS code table `PC437` (`ESC t 0`) by default, which matches TM-T88III-compatible printers and works for German umlauts like `Ä Ö Ü ä ö ü`. Override this with `[printer] codepage` in `config.toml` if your printer expects another table (for example `wpc1252`).
 
-### Environment Variables
+### Configuration (`[printer]` in `config.toml`)
 
-| Variable | Default | Purpose |
+| Setting | Default | Purpose |
 |---|---|---|
-| `THERMAL_PRINTER_USB_ID` | (none — raw USB disabled) | Combined USB vendor:product ID in hex, e.g. `08a6:003d` for Epson TM-T88III |
-| `THERMAL_PRINTER_DEVICE` | (auto-detect) | Explicit device path, e.g. `/dev/usb/lp0` — bypasses USB ID discovery |
-| `THERMAL_PRINTER_CODEPAGE` | `pc437` | ESC/POS text code page override. Supported values: `pc437`, `tm-t88iii`, `wpc1252` |
+| `usb_id` | (none — raw USB disabled) | Combined USB vendor:product ID in hex, e.g. `08a6:003d` for Epson TM-T88III |
+| `device` | (auto-detect) | Explicit device path, e.g. `/dev/usb/lp0` — bypasses USB ID discovery |
+| `codepage` | `pc437` | ESC/POS text code page override. Supported values: `pc437`, `tm-t88iii`, `wpc1252` |
 
 ### Discovery order
 
-1. If `THERMAL_PRINTER_DEVICE` is set, open that device node directly (usblp path).
+1. If `[printer] device` is set, open that device node directly (usblp path).
 2. Else try `/dev/usb/lp*` device nodes (usblp kernel module).
-3. Else if `THERMAL_PRINTER_USB_ID` is set, scan `/sys/bus/usb/devices/` for a device matching the given vendor:product ID and use raw USB bulk transfers.
+3. Else if `[printer] usb_id` is set, scan `/sys/bus/usb/devices/` for a device matching the given vendor:product ID and use raw USB bulk transfers.
 
 ### Common printer IDs
 

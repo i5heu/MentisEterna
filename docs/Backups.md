@@ -201,12 +201,18 @@ To restore manually (without the CLI tool):
 4. If the plaintext begins with `MENTISETERNA-BACKUP-BUNDLE\n`, treat the remaining bytes as a TAR archive containing `db.sqlite3` plus `media/...`
 5. Otherwise, treat the plaintext as a legacy SQLite database
 
-The built-in `restore` tool does this automatically:
+The built-in `restore` tool does this automatically. Endpoint definitions come
+from `config.toml` (`[media] endpoints`); the key and per-endpoint API keys are
+secrets in the environment:
 
 ```bash
-# Set required environment
+# config.toml: set [[media.endpoints]] for the S3 endpoint(s) to read from
+cp config.default.toml config.toml   # then add your [media] endpoints
+
+# Secrets (environment):
 export BACKUP_ENCRYPTION_KEY="<64-character hex key>"
-export MEDIA_S3_ENDPOINTS='[{"id":"primary","bucket":"...","endpoint":"...",...}]'
+export MEDIA_S3_PRIMARY_ACCESS_KEY_ID="<access key>"
+export MEDIA_S3_PRIMARY_SECRET_ACCESS_KEY="<secret key>"
 
 # Download + decrypt + restore DB + re-upload media to configured endpoints
 go run ./cmd/restore/ backup-object-key.bundle.enc mentis_restored.db
@@ -215,7 +221,7 @@ go run ./cmd/restore/ backup-object-key.bundle.enc mentis_restored.db
 ./restore backups/mentis-2026-07-22T03-00-05.bundle.enc mentis_restored.db
 ```
 
-The restore tool tries each configured S3 endpoint in order until one succeeds. For current bundle backups it also re-uploads every bundled media object to each configured endpoint and rewrites `file_s3` rows in the restored database to match those endpoints. The resulting `.db` file is then ready to use with `DB_PATH=mentis_restored.db`.
+The restore tool tries each configured S3 endpoint in order until one succeeds. For current bundle backups it also re-uploads every bundled media object to each configured endpoint and rewrites `file_s3` rows in the restored database to match those endpoints. The resulting `.db` file can then be used by pointing `[database] path` at it in `config.toml`.
 
 ### Code Reference
 
@@ -244,31 +250,35 @@ openssl rand -hex 32
 
 This produces a 64-character hex string (32 bytes = 256 bits).
 
-### 2. Configure Environment Variables
+### 2. Configure Media Endpoints + Secrets
+
+Endpoint definitions (non-secret) go in `config.toml` under `[media]`:
+
+```toml
+[media]
+cache_dir = "/path/to/media/cache"
+[[media.endpoints]]
+id = "primary"
+bucket = "my-bucket"
+region = "us-east-1"
+endpoint = "https://s3.amazonaws.com"
+force_path_style = false
+```
+
+The encryption key and per-endpoint API keys are secrets in the environment:
 
 ```bash
 export BACKUP_ENCRYPTION_KEY="<64-character hex key>"
-export MEDIA_CACHE_DIR="/path/to/media/cache"
-export MEDIA_S3_ENDPOINTS='[
-  {
-    "id": "primary",
-    "bucket": "my-bucket",
-    "region": "us-east-1",
-    "endpoint": "https://s3.amazonaws.com",
-    "access_key_id": "AKIA...",
-    "secret_access_key": "...",
-    "force_path_style": false
-  }
-]'
+export MEDIA_S3_PRIMARY_ACCESS_KEY_ID="<access key>"
+export MEDIA_S3_PRIMARY_SECRET_ACCESS_KEY="<secret key>"
 ```
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `BACKUP_ENCRYPTION_KEY` | Yes | 64-char hex AES-256 key |
-| `MEDIA_CACHE_DIR` | Yes | Local directory for media cache |
-| `MEDIA_S3_ENDPOINTS` | Yes | JSON array of S3 endpoint configs |
+| Secret | Purpose |
+|---|---|
+| `BACKUP_ENCRYPTION_KEY` | 64-char hex AES-256 key |
+| `MEDIA_S3_<ID>_ACCESS_KEY_ID` / `MEDIA_S3_<ID>_SECRET_ACCESS_KEY` | Per-endpoint S3 credentials |
 
-### 3. What Happens If Env Vars Are Missing
+### 3. What Happens If Configuration Is Missing
 
 - If `BACKUP_ENCRYPTION_KEY` is not set → backups are **silently disabled**. The server logs: `backup: BACKUP_ENCRYPTION_KEY not set — backups disabled`
 - If the key is invalid (wrong length, not hex) → `backup: invalid BACKUP_ENCRYPTION_KEY (...) — backups disabled`
@@ -320,14 +330,15 @@ go run ./cmd/restore/ backups/mentis-2026-07-22T03-00-05.bundle.enc mentis_resto
 
 The tool:
 
-1. Reads `BACKUP_ENCRYPTION_KEY` and `MEDIA_S3_ENDPOINTS` from the environment
+1. Reads endpoint definitions from `config.toml` (`[media] endpoints`) and the
+   per-endpoint API keys + `BACKUP_ENCRYPTION_KEY` from the environment
 2. Tries each configured S3 endpoint in order
 3. Downloads the encrypted backup from the first endpoint that responds
 4. Decrypts with AES-256-GCM (fails if the key is wrong or data is corrupted)
 5. Restores the SQLite database to the output path
 6. For bundle backups, re-uploads each bundled media object to every configured endpoint and rewrites `file_s3` rows accordingly
 
-Then you can start MentisEterna with `DB_PATH=mentis_restored.db`.
+Then you can start MentisEterna by pointing `[database] path` at `mentis_restored.db` in `config.toml`.
 
 ---
 

@@ -8,31 +8,19 @@ services:
         ports:
             - "${MENTIS_HTTP_PORT:-8080}:8080"
         environment:
-            ADDR: ":8080"
-            PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}"
-            TLS_CERT_FILE: "${TLS_CERT_FILE:-}"
-            TLS_KEY_FILE: "${TLS_KEY_FILE:-}"
-            WEBAUTHN_RPID: "${WEBAUTHN_RPID:-}"
-            WEBAUTHN_RP_ORIGINS: "${WEBAUTHN_RP_ORIGINS:-}"
-            MAX_UPLOAD_BYTES: "${MAX_UPLOAD_BYTES:-67108864}"
-            MAX_INLINE_UPLOAD_BYTES: "${MAX_INLINE_UPLOAD_BYTES:-16777216}"
-            MAX_JSON_BODY_BYTES: "${MAX_JSON_BODY_BYTES:-1048576}"
-            DB_PATH: "${DB_PATH:-/data/mentis.db}"
-            VEC_EXT_PATH: "${VEC_EXT_PATH:-/app/lib}"
-            MEDIA_CACHE_DIR: "${MEDIA_CACHE_DIR:-/data/media-cache}"
-            JOB_WORKERS: "${JOB_WORKERS:-10}"
-            RECIPE_CATEGORY_WORKERS: "${RECIPE_CATEGORY_WORKERS:-10}"
-            LOCALAI_BASE_URL: "${LOCALAI_BASE_URL:-}"
-            LOCALAI_EMBEDDING_MODEL: "${LOCALAI_EMBEDDING_MODEL:-}"
-            LOCALAI_CHAT_MODEL: "${LOCALAI_CHAT_MODEL:-}"
-            LOCALAI_OCR_MODEL: "${LOCALAI_OCR_MODEL:-}"
-            LOCALAI_STT_MODEL: "${LOCALAI_STT_MODEL:-}"
-            MEDIA_S3_ENDPOINTS: "${MEDIA_S3_ENDPOINTS:-}"
+            # Secrets only — all non-secret config lives in config.toml.
             BACKUP_ENCRYPTION_KEY: "${BACKUP_ENCRYPTION_KEY:-}"
-            THERMAL_PRINTER_USB_ID: "${THERMAL_PRINTER_USB_ID:-}"
-            THERMAL_PRINTER_WRITE_CHUNK_BYTES: "${THERMAL_PRINTER_WRITE_CHUNK_BYTES:-}"
-            THERMAL_PRINTER_WRITE_DELAY_MS: "${THERMAL_PRINTER_WRITE_DELAY_MS:-}"
+            MEDIA_S3_PRIMARY_ACCESS_KEY_ID: "${MEDIA_S3_PRIMARY_ACCESS_KEY_ID:-}"
+            MEDIA_S3_PRIMARY_SECRET_ACCESS_KEY: "${MEDIA_S3_PRIMARY_SECRET_ACCESS_KEY:-}"
         volumes:
             - ./mentis-data:/data
+            # Optional override of the baked /app/config.toml (config.container.toml
+            # defaults; see comment below). Create config.toml first by copying
+            # config.default.toml — a missing file becomes an empty directory mount
+            # and shadows the baked config. Point [database].path / [media].cache_dir
+            # at /data for container persistence, and set [[media.endpoints]] if you
+            # use S3 (keys stay env: MEDIA_S3_<ID>_ACCESS_KEY_ID / _SECRET_ACCESS_KEY).
+            - ./config.toml:/app/config.toml
         extra_hosts:
             - "host.docker.internal:host-gateway"
+

@@ -93,7 +93,7 @@ func FeatureModel(feature string) string {
 	return spec.defaultModel
 }
 
-// FeatureBaseURL: tier base URL, else LOCALAI_BASE_URL (via existing llmBaseURL()).
+// FeatureBaseURL: tier base URL, else [llm] base_url (via llmBaseURL()).
 func FeatureBaseURL(feature string) string {
 	if u := TierBaseURL(FeatureTier(feature)); u != "" {
 		return u

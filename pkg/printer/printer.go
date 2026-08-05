@@ -214,7 +214,7 @@ func configuredCodePage() escposCodePage {
 	case "16", "wpc1252", "cp1252", "windows1252", "windows-1252":
 		return escposCodePage{name: "wpc1252", table: escposCodeTableWPC1252, encode: encodeWindows1252}
 	default:
-		log.Printf("printer: unknown THERMAL_PRINTER_CODEPAGE=%q, falling back to pc437", config.Get().Printer.CodePage)
+		log.Printf("printer: unknown codepage=%q, falling back to pc437", config.Get().Printer.CodePage)
 		return escposCodePage{name: "pc437", table: escposCodeTablePC437, encode: encodePC437}
 	}
 }

@@ -223,8 +223,8 @@
                 <h2 class="section-title">AI API Connection</h2>
                 <p class="section-desc">
                     LocalAI instance providing embeddings, title generation,
-                    OCR, and speech-to-text. Models are configurable via
-                    LLM_TIER_* and LLM_FEATURE_*_TIER environment variables.
+                    OCR, and speech-to-text. Models and tiers are configurable
+                    in config.toml under [llm].
                 </p>
                 <button
                     class="btn-ghost shortcut-anchor"

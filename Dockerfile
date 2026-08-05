@@ -40,16 +40,15 @@ RUN apt-get update \
         sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
-ENV ADDR=:8080 \
-    DB_PATH=/data/mentis.db \
-    VEC_EXT_PATH=/app/lib \
-    MEDIA_CACHE_DIR=/data/media-cache
-
 COPY --from=go-builder /out/mentis-server /app/mentis-server
 COPY --from=go-builder /src/FrontEndDist /app/FrontEndDist
 COPY --from=go-builder /src/lib /app/lib
+# Baked default non-secret config (override by mounting config.toml here).
+COPY config.container.toml /app/config.toml
+# Overridable copy of the fully-documented template for reference.
+COPY config.default.toml /app/config.default.toml
 
 EXPOSE 8080
 VOLUME ["/data"]
 
-ENTRYPOINT ["/app/mentis-server"]
+ENTRYPOINT ["/app/mentis-server", "-config", "/app/config.toml"]

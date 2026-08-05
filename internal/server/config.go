@@ -38,7 +38,7 @@ func loadServerConfig(addr string) serverConfig {
 	case certFile == "" && keyFile == "":
 		// TLS disabled
 	case certFile == "" || keyFile == "":
-		log.Fatalf("server: TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable HTTPS")
+		log.Fatalf("server: tls_cert_file and tls_key_file must both be set to enable HTTPS (config.toml [server])")
 	}
 	tlsEnabled := certFile != "" && keyFile != ""
 
@@ -50,7 +50,7 @@ func loadServerConfig(addr string) serverConfig {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		fallbackBaseURL := defaultPublicBaseURL(addr, tlsEnabled)
-		log.Printf("server: invalid PUBLIC_BASE_URL=%q, falling back to %s", baseURL, fallbackBaseURL)
+		log.Printf("server: invalid public_base_url=%q, falling back to %s", baseURL, fallbackBaseURL)
 		parsed, _ = url.Parse(fallbackBaseURL)
 		baseURL = fallbackBaseURL
 	}
@@ -62,7 +62,7 @@ func loadServerConfig(addr string) serverConfig {
 
 	cookieSecure := parsed.Scheme == "https"
 	if !cookieSecure && !isLocalhostHost(parsed.Hostname()) {
-		log.Fatalf("server: PUBLIC_BASE_URL=%q must use https:// for non-localhost deployments", baseURL)
+		log.Fatalf("server: public_base_url=%q must use https:// for non-localhost deployments", baseURL)
 	}
 
 	rpID := strings.TrimSpace(cfg.Auth.WebAuthnRPID)

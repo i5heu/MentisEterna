@@ -479,7 +479,7 @@ func TestFindPrinterFallsBackToUSBID(t *testing.T) {
 
 	wantPrinter := &mockPrinter{}
 	newFilePrinter = func(devicePath string) (Printer, error) {
-		t.Fatalf("newFilePrinter should not be called without THERMAL_PRINTER_DEVICE")
+		t.Fatalf("newFilePrinter should not be called without a configured printer device")
 		return nil, nil
 	}
 	findUSBLPStrategy = func() (Printer, error) {

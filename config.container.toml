@@ -1,0 +1,20 @@
+# Container default configuration (baked into the Docker image as
+# /app/config.toml). Copy config.default.toml for the fully-documented local
+# template. Override at runtime by mounting your own config.toml at
+# /app/config.toml.
+
+[database]
+path = "/data/mentis.db"
+vec_ext_path = "/app/lib"
+
+[server]
+addr = ":8080"
+
+[media]
+cache_dir = "/data/media-cache"
+# [[media.endpoints]]
+# id = "primary"
+# bucket = "my-bucket"
+# region = "us-east-1"
+# endpoint = "https://s3.example.com"
+# force_path_style = true

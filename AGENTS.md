@@ -259,23 +259,49 @@ npm run dev      # dev server with proxy to :8080
 npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 ```
 
-## Environment Variables
+## Configuration
 
-| Variable | Default | Purpose |
+Non-secret settings are read from a TOML config file (default `config.toml`);
+the fully-documented template is `config.default.toml` (`config.container.toml`
+holds container-appropriate defaults, baked into the Docker image). Each
+binary's `main` takes a `-config <path>` flag and falls back to built-in
+defaults if the file is absent.
+
+Key sections (see `config.default.toml` for all fields):
+
+| Section / field | Former env var | Purpose |
 |---|---|---|
-| `DB_PATH` | `mentis.db` | SQLite database path |
-| `ADDR` | `:8080` | HTTP listen address |
-| `LOCALAI_BASE_URL` | `http://localhost:8080` | LocalAI instance URL |
-| `LOCALAI_EMBEDDING_MODEL` | `text-embedding-ada-002` | Embedding model |
-| `LOCALAI_EMBEDDING_MAX_CHARS` | `16384` | Max runes per embedding request (avoids context overflow) |
-| `LOCALAI_CHAT_MODEL` | `gpt-3.5-turbo` | Chat/generation model (title generation) |
-| `LOCALAI_OCR_MODEL` | `gpt-4o-mini` | Multimodal vision model for OCR |
-| `LOCALAI_STT_MODEL` | `nemo-parakeet-tdt-0.6b` | Whisper-compatible model for speech-to-text transcription |
-| `VEC_EXT_PATH` | auto-detected | Directory containing `vec0.so` |
-| `VSS_EXT_PATH` | legacy alias | Backward-compatible alias for `VEC_EXT_PATH` |
-| `BACKUP_ENCRYPTION_KEY` | none (backups disabled) | hex-encoded 64-char AES-256 key for encrypted backups |
-| `MEDIA_CACHE_DIR` | required for media | Directory for local file cache (also required for backups) |
-| `MEDIA_S3_ENDPOINTS` | required for media | JSON array of S3 endpoint configs (also used for backups) |
+| `[database] path` | `DB_PATH` | SQLite database path |
+| `[database] vec_ext_path` | `VEC_EXT_PATH` | Directory containing `vec0.so` (auto-detected) |
+| `[server] addr` | `ADDR` | HTTP listen address |
+| `[server] public_base_url` | `PUBLIC_BASE_URL` | Public origin for cookie/CSRF/WebAuthn |
+| `[server] max_upload_bytes` / `max_inline_upload_bytes` / `max_json_body_bytes` | `MAX_*` | Request/body size limits |
+| `[server] tls_cert_file` / `tls_key_file` | `TLS_CERT_FILE` / `TLS_KEY_FILE` | TLS cert/key for HTTPS |
+| `[auth] webauthn_rpid` / `webauthn_rp_origins` | `WEBAUTHN_RPID` / `WEBAUTHN_RP_ORIGINS` | WebAuthn RP identity/origins |
+| `[llm] base_url` | `LOCALAI_BASE_URL` | LLM/embedding backend base URL |
+| `[llm] embedding_model` | `LOCALAI_EMBEDDING_MODEL` | Embedding model |
+| `[llm] embedding_max_chars` | `LOCALAI_EMBEDDING_MAX_CHARS` | Max runes per embedding request |
+| `[llm] tls_insecure` | `LOCALAI_TLS_INSECURE` | Skip TLS verification for the LLM backend |
+| `[llm] chat_model` / `ocr_model` / `stt_model` | `LOCALAI_CHAT/OCR/STT_MODEL` | Legacy model fallbacks |
+| `[llm] ocr_dedicated_model` / `stt_dedicated_model` | `LLM_OCR_MODEL` / `LLM_STT_MODEL` | Dedicated OCR/STT models |
+| `[llm.tiers.<name>] model` / `base_url` | `LLM_TIER_<NAME>_MODEL` / `_BASE_URL` | Per-tier model / base URL |
+| `[llm.features.<name>] tier` | `LLM_FEATURE_<NAME>_TIER` | Feature→tier binding |
+| `[media] cache_dir` | `MEDIA_CACHE_DIR` | Local file cache directory |
+| `[media] endpoints` | `MEDIA_S3_ENDPOINTS` | S3 endpoint definitions (id/bucket/region/endpoint/force_path_style) |
+| `[jobs] workers` | `JOB_WORKERS` | Concurrent background job workers |
+| `[recipe] category_workers` | `RECIPE_CATEGORY_WORKERS` | Recipe-category classification workers |
+| `[printer] device` / `usb_id` / `codepage` / etc. | `THERMAL_PRINTER_*` | Thermal printer settings |
+
+### Secrets (stay in the environment)
+
+| Variable | Purpose |
+|---|---|
+| `BACKUP_ENCRYPTION_KEY` | hex-encoded 64-char AES-256 key for encrypted backups |
+| `MEDIA_S3_<ID>_ACCESS_KEY_ID` / `MEDIA_S3_<ID>_SECRET_ACCESS_KEY` | Per-endpoint S3 API keys |
+
+`LOCALAI_BASE_URL`, `LLM_TIER_*_BASE_URL`, and `MEDIA_S3_ENDPOINTS` are **not**
+env vars anymore — base URLs moved to `config.toml` `[llm]`/`[llm.tiers]`, and
+S3 endpoint definitions moved to `[media] endpoints` (keys stay env).
 
 ## Key Quirks
 
@@ -287,7 +313,7 @@ DELETE FROM vss_notes WHERE rowid = ?;
 INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
 ```
 
-**WebAuthn**: RPID is hardcoded to `localhost`, origins locked to `http://localhost:8080` and `https://localhost:8080`. Changing the host/port requires updating `internal/server/server.go`.
+**WebAuthn**: RPID is derived from `[server] public_base_url`, with origins locked to the public origin (plus any `[auth] webauthn_rp_origins`). By default this is `localhost` on `http://localhost:8080` and `https://localhost:8080`. Changing the host/port is done via `config.toml`.
 
 **Embedding dimension**: 2560. The mock embedder in tests uses 2560 — keep them in sync with whichever embedding model you use.
 

@@ -47,21 +47,17 @@ webauthn_rp_origins = []
 base_url = "https://100.111.10.89:8188"
 
 # Embedding model used for vector search.
-embedding_model = "text-embedding-ada-002"
+embedding_model = "Qwen3-Embedding-4B-GGUF"
 # Max runes per embedding request, to avoid context overflow.
 embedding_max_chars = 16384
 # Set true to skip TLS verification for the LLM backend (self-signed certs).
 tls_insecure = false
 
-# Legacy chat/OCR/STT model fallbacks. A tier's model (below) takes precedence;
-# these are used when the relevant tier model is empty.
-chat_model = "gpt-3.5-turbo"
-ocr_model = "gpt-4o-mini"
-stt_model = "nemo-parakeet-tdt-0.6b"
+
 # Single-purpose OCR/STT models, taking precedence over both the tier model and
 # the legacy *_model above. Leave empty to disable the dedicated override.
-ocr_dedicated_model = ""
-stt_dedicated_model = ""
+ocr_dedicated_model = "GLM-OCR-GGUF"
+stt_dedicated_model = "vibevoice-cpp-asr"
 
 # Four named model tiers. A tier's model is used by every feature bound to that
 # tier; empty = fall back to the legacy *_model. A tier's base_url overrides

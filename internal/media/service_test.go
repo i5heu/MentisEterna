@@ -951,7 +951,7 @@ func TestConfigValidation(t *testing.T) {
 	t.Cleanup(config.Reset)
 	_, err := LoadConfigFromEnv()
 	if err == nil {
-		t.Fatal("expected LoadConfigFromEnv to fail without media.cache_dir / MEDIA_S3_ENDPOINTS")
+		t.Fatal("expected LoadConfigFromEnv to fail without media.cache_dir / media.endpoints")
 	}
 	t.Logf("config validation: %v", err)
 }

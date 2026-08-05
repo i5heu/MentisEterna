@@ -284,9 +284,9 @@ func findUSBByID(vendorID, productID uint16) (Printer, error) {
 }
 
 // FindPrinter tries multiple strategies to locate a thermal receipt printer:
-//  1. THERMAL_PRINTER_DEVICE env var (explicit device path, e.g. /dev/usb/lp0)
+//  1. [printer] device config (explicit device path, e.g. /dev/usb/lp0)
 //  2. /dev/usb/lp* (usblp kernel module)
-//  3. Raw USB by vendor/product ID from THERMAL_PRINTER_USB_ID env var
+//  3. Raw USB by vendor/product ID from [printer] usb_id
 //     (format: "vid:pid", e.g. "08a6:003d")
 //
 // Returns the first successful connection.
@@ -311,9 +311,9 @@ func FindPrinter() (Printer, error) {
 		log.Printf("printer: /dev/usb/lp* auto-detect failed: %v", err)
 	}
 
-	// Strategy 3: raw USB by THERMAL_PRINTER_USB_ID (format: "vid:pid").
+	// Strategy 3: raw USB by usb_id (format: "vid:pid").
 	if vid, pid, ok := PrinterUSBID(); ok {
-		log.Printf("printer: trying raw USB %04x:%04x from THERMAL_PRINTER_USB_ID", vid, pid)
+		log.Printf("printer: trying raw USB %04x:%04x from printer.usb_id", vid, pid)
 		if pr, err := findUSBByIDStrategy(vid, pid); err == nil {
 			return pr, nil
 		} else {
@@ -323,7 +323,7 @@ func FindPrinter() (Printer, error) {
 
 	log.Printf("printer: all discovery strategies exhausted — no printer found")
 	return nil, fmt.Errorf(
-		"printer: no thermal printer found (tried THERMAL_PRINTER_DEVICE, /dev/usb/lp*)",
+		"printer: no thermal printer found (tried printer.device, /dev/usb/lp*)",
 	)
 }
 

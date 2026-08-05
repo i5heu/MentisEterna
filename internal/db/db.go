@@ -77,7 +77,8 @@ func ensureVecRuntimeDeps() error {
 }
 
 // findExtPath locates the directory containing vec0.
-// It checks VEC_EXT_PATH, then legacy VSS_EXT_PATH, then searches from CWD up to the module root.
+// It checks [database] vec_ext_path / legacy vss_ext_path (via config), then
+// searches from CWD up to the module root.
 func findExtPath() string {
 	dir, err := os.Getwd()
 	if err != nil {
