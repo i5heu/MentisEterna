@@ -87,12 +87,12 @@ cache_dir = ""
 # API keys are secrets and stay in the environment
 # (MEDIA_S3_<ID>_ACCESS_KEY_ID / MEDIA_S3_<ID>_SECRET_ACCESS_KEY).
 # Leave empty to disable media/backups.
-# [[media.endpoints]]
-# id = "primary"
-# bucket = "my-bucket"
-# region = "us-east-1"
-# endpoint = "https://s3.example.com"
-# force_path_style = true
+[[media.endpoints]]
+id = "primary"
+bucket = "my-bucket"
+region = "us-east-1"
+endpoint = "https://s3.example.com"
+force_path_style = true
 
 [jobs]
 # Number of concurrent background job workers.
