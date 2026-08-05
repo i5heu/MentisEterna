@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/db"
 )
 
@@ -944,10 +945,13 @@ func TestPendingInlineCleanupDeletesAbandonedFile(t *testing.T) {
 }
 
 func TestConfigValidation(t *testing.T) {
-	// Test that LoadConfigFromEnv fails without env vars (we don't set them in tests)
+	// LoadConfigFromEnv must fail when media.cache_dir is unset (empty default)
+	// and no S3 endpoints are configured.
+	config.Reset()
+	t.Cleanup(config.Reset)
 	_, err := LoadConfigFromEnv()
 	if err == nil {
-		t.Skip("MEDIA_CACHE_DIR set in environment")
+		t.Fatal("expected LoadConfigFromEnv to fail without media.cache_dir / MEDIA_S3_ENDPOINTS")
 	}
 	t.Logf("config validation: %v", err)
 }

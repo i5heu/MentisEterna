@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 // EndpointConfig holds the configuration for a single S3-compatible endpoint.
@@ -65,13 +67,13 @@ func LoadEndpointsFromEnv() ([]EndpointConfig, error) {
 	return endpoints, nil
 }
 
-// LoadConfigFromEnv reads media configuration from environment variables.
-// MEDIA_S3_ENDPOINTS must be a JSON array of endpoint configs.
-// MEDIA_CACHE_DIR must be set to a writable directory path.
+// LoadConfigFromEnv reads media configuration: the cache directory comes from
+// config (media.cache_dir), while S3 endpoints stay in MEDIA_S3_ENDPOINTS
+// (secret). MEDIA_S3_ENDPOINTS must be a JSON array of endpoint configs.
 func LoadConfigFromEnv() (Config, error) {
-	cacheDir := os.Getenv("MEDIA_CACHE_DIR")
+	cacheDir := config.Get().Media.CacheDir
 	if cacheDir == "" {
-		return Config{}, fmt.Errorf("MEDIA_CACHE_DIR environment variable is required")
+		return Config{}, fmt.Errorf("media.cache_dir is not set (set it in config.toml)")
 	}
 
 	endpoints, err := LoadEndpointsFromEnv()

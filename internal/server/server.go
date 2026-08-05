@@ -557,7 +557,7 @@ func (s *Server) handleBackupTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.backupService == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Backups are not enabled. Set BACKUP_ENCRYPTION_KEY, MEDIA_CACHE_DIR, and MEDIA_S3_ENDPOINTS."})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Backups are not enabled. Set BACKUP_ENCRYPTION_KEY, MEDIA_S3_ENDPOINTS, and media.cache_dir."})
 		return
 	}
 	// Enqueue a one-shot backup via the job system so it shows up in /jobs.
@@ -579,7 +579,7 @@ func (s *Server) handleBackupPurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.backupService == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Backups are not enabled. Set BACKUP_ENCRYPTION_KEY, MEDIA_CACHE_DIR, and MEDIA_S3_ENDPOINTS."})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Backups are not enabled. Set BACKUP_ENCRYPTION_KEY, MEDIA_S3_ENDPOINTS, and media.cache_dir."})
 		return
 	}
 	runID, err := s.jobManager.Enqueue("_backup", "retention_purge", nil)
@@ -1167,7 +1167,7 @@ func (s *Server) handleDeleteUnknownS3Files(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if s.mediaService == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media not enabled. Set MEDIA_CACHE_DIR and MEDIA_S3_ENDPOINTS."})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Media not enabled. Set media.cache_dir and MEDIA_S3_ENDPOINTS."})
 		return
 	}
 
