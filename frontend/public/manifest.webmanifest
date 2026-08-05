@@ -1,0 +1,15 @@
+{
+  "name": "MentisEterna",
+  "short_name": "MentisEterna",
+  "description": "Personal note-taking app with vector search",
+  "lang": "en",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#01101f",
+  "theme_color": "#01101f",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

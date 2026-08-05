@@ -92,3 +92,38 @@ func TestNewSPAHandler(t *testing.T) {
 		t.Error("expected non-nil handler")
 	}
 }
+
+func TestSPAHandlerPWAAssets(t *testing.T) {
+	dir := makeStaticDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "manifest.webmanifest"), []byte(`{"name":"MentisEterna"}`), 0644); err != nil {
+		t.Fatalf("write manifest.webmanifest: %v", err)
+	}
+	icon := make([]byte, 4)
+	copy(icon, []byte{0x89, 'P', 'N', 'G'})
+	if err := os.WriteFile(filepath.Join(dir, "apple-touch-icon.png"), icon, 0644); err != nil {
+		t.Fatalf("write apple-touch-icon.png: %v", err)
+	}
+	h := newSPAHandler(dir)
+
+	// Manifest must be served with the MIME iOS requires for recognition.
+	r := httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected manifest 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/manifest+json" {
+		t.Errorf("expected application/manifest+json, got %q", ct)
+	}
+
+	// apple-touch-icon must be served as image/png.
+	ri := httptest.NewRequest(http.MethodGet, "/apple-touch-icon.png", nil)
+	wi := httptest.NewRecorder()
+	h.ServeHTTP(wi, ri)
+	if wi.Code != http.StatusOK {
+		t.Fatalf("expected icon 200, got %d", wi.Code)
+	}
+	if ct := wi.Header().Get("Content-Type"); !strings.HasPrefix(ct, "image/png") {
+		t.Errorf("expected image/png content type, got %q", ct)
+	}
+}

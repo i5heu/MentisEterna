@@ -31,6 +31,11 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.serveHTMLFile(w, r, path)
 			return
 		}
+		// Go's stdlib mime table doesn't map .webmanifest; set it explicitly so
+		// iOS recognizes the manifest (http.FileServer only fills an unset header).
+		if strings.EqualFold(filepath.Ext(path), ".webmanifest") {
+			w.Header().Set("Content-Type", "application/manifest+json")
+		}
 		h.fs.ServeHTTP(w, r)
 		return
 	}
