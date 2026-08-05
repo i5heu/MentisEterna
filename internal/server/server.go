@@ -88,7 +88,7 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 	var mediaSvc *media.Service
 	var mediaEndpoints []media.EndpointConfig
 	cacheDir := config.Get().Media.CacheDir
-	endpoints, epErr := media.LoadEndpointsFromEnv() // secrets, stays env
+	endpoints, epErr := media.BuildEndpoints() // endpoint defs from config, keys stay env
 	if cacheDir == "" {
 		log.Printf("media: not enabled (media.cache_dir not set)")
 	} else if epErr != nil {
@@ -1006,7 +1006,7 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseURL := os.Getenv("LOCALAI_BASE_URL")
+	baseURL := config.Get().LLM.BaseURL
 	if baseURL == "" {
 		baseURL = "http://localhost:8080"
 	}

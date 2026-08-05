@@ -9,11 +9,11 @@
 # Path to the SQLite database file. Use ":memory:" or a "file:...?mode=memory"
 # URI for an in-memory database. Created on first run when starting with
 # `--create-db`.
-path = "mentis.db"
+path = "/data/mentis.db"
 
 # [Advanced] Directory containing the prebuilt sqlite-vec extension (vec0.so).
 # Normally auto-detected relative to the repo root; only set this to override.
-vec_ext_path = ""
+vec_ext_path = "/app/lib"
 # Legacy alias for vec_ext_path; deprecated, prefer vec_ext_path.
 vss_ext_path = ""
 
@@ -28,8 +28,8 @@ public_base_url = ""
 
 # Request/upload size limits in bytes. Defaults: 64 MiB upload, 64 MiB inline,
 # 1 MiB JSON body. For ~5 GiB uploads use 5368709120.
-max_upload_bytes = 67108864
-max_inline_upload_bytes = 67108864
+max_upload_bytes = 5368709120
+max_inline_upload_bytes = 5368709120
 max_json_body_bytes = 1048576
 
 # TLS certificate + key to enable HTTPS. Both must be set (or both empty).
@@ -43,6 +43,9 @@ webauthn_rpid = ""
 webauthn_rp_origins = []
 
 [llm]
+# Base URL of the LLM/embedding backend (e.g. http://localhost:1234).
+base_url = "https://100.111.10.89:8188"
+
 # Embedding model used for vector search.
 embedding_model = "text-embedding-ada-002"
 # Max runes per embedding request, to avoid context overflow.
@@ -61,13 +64,13 @@ ocr_dedicated_model = ""
 stt_dedicated_model = ""
 
 # Four named model tiers. A tier's model is used by every feature bound to that
-# tier; empty = fall back to the legacy *_model. The tier's Base URL is a
-# secret and is NOT set here — use the LLM_TIER_<NAME>_BASE_URL env var.
+# tier; empty = fall back to the legacy *_model. A tier's base_url overrides
+# [llm] base_url for features on that tier; empty = use [llm] base_url.
 [llm.tiers]
-smart  = { model = "" }
-medium = { model = "" }
-small  = { model = "" }
-tiny   = { model = "" }
+smart  = { model = "Qwen3.6-27B-MTP-GGUF", base_url = "" }
+medium = { model = "gemma-4-e2b-it-qat-q4_0", base_url = "" }
+small  = { model = "gemma-4-e2b-it-qat-q4_0", base_url = "" }
+tiny   = { model = "granite-4.1-3b-Q4_K_M", base_url = "" }
 
 # Feature -> tier binding. Values are one of smart/medium/small/tiny.
 # Defaults: title=tiny, tags=medium, subtasks=smart, ocr=medium, stt=small.
@@ -80,8 +83,20 @@ stt      = { tier = "small" }
 
 [media]
 # Local cache directory for media files. Leave blank to disable media (and
-# backups, which need S3). S3 endpoints are secrets — see below.
+# backups, which need S3).
 cache_dir = ""
+
+# S3-compatible endpoints for media replication and encrypted backups. This is
+# the non-secret definition (id/bucket/region/endpoint/force_path_style); the
+# API keys are secrets and stay in the environment
+# (MEDIA_S3_<ID>_ACCESS_KEY_ID / MEDIA_S3_<ID>_SECRET_ACCESS_KEY).
+# Leave empty to disable media/backups.
+# [[media.endpoints]]
+# id = "primary"
+# bucket = "my-bucket"
+# region = "us-east-1"
+# endpoint = "https://s3.example.com"
+# force_path_style = true
 
 [jobs]
 # Number of concurrent background job workers.
@@ -103,8 +118,7 @@ write_delay_ms = 0           # 0 = default inter-chunk delay
 
 # ---------------------------------------------------------------------------
 # Secrets (stay in the ENVIRONMENT, never here):
-#   LOCALAI_BASE_URL            — LLM/embedding backend base URL (or per-tier
-#                                 LLM_TIER_SMART_BASE_URL / _MEDIUM_ / _SMALL_ / _TINY_)
-#   MEDIA_S3_ENDPOINTS          — JSON array of S3 endpoint configs incl. keys
-#   BACKUP_ENCRYPTION_KEY       — hex AES-256 key for encrypted backups
+#   BACKUP_ENCRYPTION_KEY          — hex AES-256 key for encrypted backups
+#   MEDIA_S3_<ID>_ACCESS_KEY_ID    — per-endpoint S3 access key (ID = endpoint id)
+#   MEDIA_S3_<ID>_SECRET_ACCESS_KEY — per-endpoint S3 secret access key
 # ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -94,10 +93,10 @@ func newLLMHTTPClient() *http.Client {
 	return &http.Client{}
 }
 
-// llmBaseURL returns the LocalAI base URL, configurable via the
-// LOCALAI_BASE_URL environment variable (default: http://localhost:8080).
+// llmBaseURL returns the LocalAI base URL, configurable via config.toml
+// ([llm] base_url; default: http://localhost:8080).
 func llmBaseURL() string {
-	if u := os.Getenv("LOCALAI_BASE_URL"); u != "" {
+	if u := config.Get().LLM.BaseURL; u != "" {
 		return u
 	}
 	return "http://localhost:8080"
@@ -112,8 +111,7 @@ type EmbeddingClient struct {
 }
 
 // NewEmbeddingClient creates a client with sensible defaults. The base URL and
-// model can be overridden via environment variables LOCALAI_BASE_URL and
-// LOCALAI_EMBEDDING_MODEL.
+// model are read from config.toml ([llm] base_url and embedding_model).
 func NewEmbeddingClient() *EmbeddingClient {
 	return &EmbeddingClient{
 		BaseURL: llmBaseURL(),

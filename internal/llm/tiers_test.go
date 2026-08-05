@@ -20,11 +20,24 @@ func setTierModel(name, model string) {
 	c.LLM.Tiers = tiers
 }
 
+// setTierBaseURL sets a tier's base URL in the global config, working around
+// maps being non-addressable.
+func setTierBaseURL(name, baseURL string) {
+	c := config.Get()
+	if c.LLM.Tiers == nil {
+		c.LLM.Tiers = map[string]config.TierConfig{}
+	}
+	tiers := c.LLM.Tiers
+	t := tiers[name]
+	t.BaseURL = baseURL
+	tiers[name] = t
+	c.LLM.Tiers = tiers
+}
+
 func TestTiers(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		config.Reset()
 		t.Cleanup(config.Reset)
-		t.Setenv("LOCALAI_BASE_URL", "")
 
 		if got := FeatureTier("title"); got != TierTiny {
 			t.Errorf("FeatureTier(title) = %q, want %q", got, TierTiny)
@@ -55,7 +68,7 @@ func TestTiers(t *testing.T) {
 	t.Run("TierBaseURLOverride", func(t *testing.T) {
 		config.Reset()
 		t.Cleanup(config.Reset)
-		t.Setenv("LLM_TIER_TINY_BASE_URL", "http://tiny:9000")
+		setTierBaseURL(TierTiny, "http://tiny:9000")
 		if got := FeatureBaseURL("title"); got != "http://tiny:9000" {
 			t.Errorf("FeatureBaseURL(title) = %q, want http://tiny:9000", got)
 		}

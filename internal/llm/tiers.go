@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"os"
 	"strings"
 
 	"github.com/i5heu/MentisEterna/internal/config"
@@ -51,9 +50,9 @@ func FeatureTier(feature string) string {
 // TierModel returns the model for a tier from config ("" if unset).
 func TierModel(name string) string { return config.Get().LLM.Tiers[name].Model }
 
-// TierBaseURL returns the per-tier base URL from env (secret, stays env; "" if unset).
+// TierBaseURL returns the per-tier base URL from config ("" if unset).
 func TierBaseURL(name string) string {
-	return os.Getenv("LLM_TIER_" + strings.ToUpper(name) + "_BASE_URL")
+	return config.Get().LLM.Tiers[name].BaseURL
 }
 
 func dedicatedModel(spec featureSpec) string {

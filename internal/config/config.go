@@ -38,7 +38,8 @@ type AuthConfig struct {
 }
 
 type LLMConfig struct {
-	EmbeddingModel    string                   `toml:"embedding_model"`       // was LOCALAI_EMBEDDING_MODEL
+	BaseURL           string                   `toml:"base_url"`           // was LOCALAI_BASE_URL
+	EmbeddingModel    string                   `toml:"embedding_model"`    // was LOCALAI_EMBEDDING_MODEL
 	EmbeddingMaxChars int                      `toml:"embedding_max_chars"`   // was LOCALAI_EMBEDDING_MAX_CHARS
 	TLSInsecure       bool                     `toml:"tls_insecure"`          // was LOCALAI_TLS_INSECURE
 	ChatModel         string                   `toml:"chat_model"`            // legacy fallback, was LOCALAI_CHAT_MODEL
@@ -51,7 +52,8 @@ type LLMConfig struct {
 }
 
 type TierConfig struct {
-	Model string `toml:"model"` // empty = fall back to legacy model
+	Model   string `toml:"model"`    // empty = fall back to legacy model
+	BaseURL string `toml:"base_url"` // was LLM_TIER_<NAME>_BASE_URL
 }
 
 type FeatureConfig struct {
@@ -59,7 +61,19 @@ type FeatureConfig struct {
 }
 
 type MediaConfig struct {
-	CacheDir string `toml:"cache_dir"` // was MEDIA_CACHE_DIR (S3 endpoints stay env)
+	CacheDir  string                `toml:"cache_dir"` // was MEDIA_CACHE_DIR
+	Endpoints []MediaEndpointConfig `toml:"endpoints"` // was MEDIA_S3_ENDPOINTS (definitions; API keys stay env)
+}
+
+// MediaEndpointConfig is a single S3-compatible endpoint definition. The
+// access key ID and secret access key are deliberately NOT here — they stay in
+// the environment (MEDIA_S3_<ID>_ACCESS_KEY_ID / _SECRET_ACCESS_KEY).
+type MediaEndpointConfig struct {
+	ID             string `toml:"id"`
+	Bucket         string `toml:"bucket"`
+	Region         string `toml:"region"`
+	Endpoint       string `toml:"endpoint"`
+	ForcePathStyle bool   `toml:"force_path_style"`
 }
 
 type PrinterConfig struct {

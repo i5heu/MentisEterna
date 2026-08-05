@@ -2,12 +2,14 @@
 //
 // Usage:
 //
-//	restore <s3-backup-key> <output.db>
+//	restore [-config config.toml] <s3-backup-key> <output.db>
 //
-// Environment:
+// Configuration:
 //
-//	BACKUP_ENCRYPTION_KEY   hex-encoded 64-character AES-256 key (required)
-//	MEDIA_S3_ENDPOINTS      JSON array of S3 endpoint configs (required)
+//	config.toml                  media.endpoints (endpoint definitions)
+//	BACKUP_ENCRYPTION_KEY        hex-encoded 64-character AES-256 key (required)
+//	MEDIA_S3_<ID>_ACCESS_KEY_ID  per-endpoint access key (required)
+//	MEDIA_S3_<ID>_SECRET_ACCESS_KEY  per-endpoint secret key (required)
 //
 // Example:
 //
@@ -16,24 +18,42 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 
 	"github.com/i5heu/MentisEterna/internal/backup"
+	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/media"
 )
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: restore <s3-backup-key> <output.db>\n")
-		fmt.Fprintf(os.Stderr, "\nEnvironment:\n")
-		fmt.Fprintf(os.Stderr, "  BACKUP_ENCRYPTION_KEY   hex-encoded 64-char AES-256 key\n")
-		fmt.Fprintf(os.Stderr, "  MEDIA_S3_ENDPOINTS      JSON array of S3 endpoint configs\n")
+	configPath := flag.String("config", "config.toml", "path to TOML config file; if absent, defaults are used")
+	flag.Parse()
+	if flag.NArg() < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: restore [-config config.toml] <s3-backup-key> <output.db>\n")
+		fmt.Fprintf(os.Stderr, "\nConfiguration:\n")
+		fmt.Fprintf(os.Stderr, "  config.toml                    media.endpoints (endpoint definitions)\n")
+		fmt.Fprintf(os.Stderr, "  BACKUP_ENCRYPTION_KEY          hex-encoded 64-char AES-256 key\n")
+		fmt.Fprintf(os.Stderr, "  MEDIA_S3_<ID>_ACCESS_KEY_ID    per-endpoint access key\n")
+		fmt.Fprintf(os.Stderr, "  MEDIA_S3_<ID>_SECRET_ACCESS_KEY per-endpoint secret key\n")
 		os.Exit(1)
 	}
-	remoteKey := os.Args[1]
-	outputPath := os.Args[2]
+	remoteKey := flag.Arg(0)
+	outputPath := flag.Arg(1)
+
+	if fi, err := os.Stat(*configPath); err == nil && fi != nil {
+		if err := config.Load(*configPath); err != nil {
+			log.Fatalf("config: %v", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		log.Fatalf("config: stat %s: %v", *configPath, err)
+	} else {
+		log.Printf("config: %s not found; using defaults (copy config.default.toml to customize)", *configPath)
+	}
 
 	// Load encryption key.
 	hexKey := os.Getenv("BACKUP_ENCRYPTION_KEY")
@@ -47,11 +67,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load S3 endpoint configuration.
-	endpoints, err := media.LoadEndpointsFromEnv()
+	// Load S3 endpoint configuration (definitions from config.toml, keys from env).
+	endpoints, err := media.BuildEndpoints()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: loading S3 config: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Set MEDIA_S3_ENDPOINTS to a JSON array of endpoint configs.\n")
+		fmt.Fprintf(os.Stderr, "Set media.endpoints in config.toml and the matching MEDIA_S3_<ID>_* key env vars.\n")
 		os.Exit(1)
 	}
 
