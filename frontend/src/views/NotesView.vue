@@ -1,5 +1,12 @@
 <template>
-    <div class="layout" :class="{ mobile: isMobile, 'has-selection': !!selected }">
+    <div
+        class="layout"
+        :class="{
+            mobile: isMobile,
+            'has-selection': !!selected,
+            'sidebar-open': mobileSidebarOpen,
+        }"
+    >
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -31,6 +38,16 @@
                         v-if="shortcutHintsVisible"
                         :label="getHintLabel('open-options')"
                     />
+                </button>
+                <button
+                    v-if="isMobile && selected"
+                    type="button"
+                    class="btn-ghost icon-btn sidebar-close-btn"
+                    aria-label="Close sidebar"
+                    title="Close sidebar"
+                    @click="closeMobileSidebar"
+                >
+                    ✕
                 </button>
             </div>
             <button
@@ -290,7 +307,7 @@
             <template v-if="selected">
                 <!-- Header bar -->
                 <div class="editor-header">
-                    <button type="button" class="btn-ghost mobile-back-btn" @click="mobileBack" aria-label="Back to notes">←</button>
+                    <button type="button" class="btn-ghost mobile-back-btn" @click="openMobileSidebar" aria-label="Menu">☰</button>
                     <div class="editor-header-left">
                         <div
                             v-if="isEditing"
@@ -2666,11 +2683,17 @@ function confirmLeaveCurrentNote() {
     return window.confirm(UNSAVED_NOTE_WARNING);
 }
 
-function mobileBack() {
-    if (!confirmLeaveCurrentNote()) return;
-    selected.value = null;
-    threadNote.value = null;
-    replaceURL();
+// Mobile: the note-list sidebar is a drawer you open with the ☰ menu button in
+// the editor header. It overlays the editor; the ✕ button (or picking a note)
+// closes it, always returning to the open note.
+const mobileSidebarOpen = ref(false);
+
+function openMobileSidebar() {
+    mobileSidebarOpen.value = true;
+}
+
+function closeMobileSidebar() {
+    mobileSidebarOpen.value = false;
 }
 
 function onBeforeUnload(event) {
@@ -3388,6 +3411,7 @@ async function selectNote(
         return false;
     }
 
+    mobileSidebarOpen.value = false;
     threadNote.value = null;
     // Re-fetch from server to get full enriched data (plugin.config, plugin.view, etc.)
     try {
@@ -4834,7 +4858,10 @@ onMounted(() => {
     window.addEventListener("blur", onLinkHintWindowBlur);
     // Mobile detection (same 767px breakpoint as CSS + innerWidth checks)
     mobileMQ = window.matchMedia("(max-width: 767px)");
-    onMobileChange = (e) => { isMobile.value = e.matches; };
+    onMobileChange = (e) => {
+        isMobile.value = e.matches;
+        if (!e.matches) mobileSidebarOpen.value = false;
+    };
     onMobileChange(mobileMQ);
     mobileMQ.addEventListener("change", onMobileChange);
     // Restore state from URL on initial load
@@ -6623,16 +6650,33 @@ function onPopstate() {
         height: 100vh;
         height: 100dvh;
     }
-    .layout.mobile .sidebar {
+    /* No selection: the note list is the mobile landing screen (fullscreen). */
+    .layout.mobile:not(.has-selection) .sidebar {
         position: fixed;
         inset: 0;
         width: 100%;
         min-width: 0;
         z-index: 40;
         border-right: none;
+        transform: none;
+        box-shadow: none;
     }
+    /* With a note open: the sidebar is a left drawer, hidden by default and
+       slid in by the ☰ menu button in the editor header. */
     .layout.mobile.has-selection .sidebar {
-        display: none;
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: min(85vw, 320px);
+        min-width: 0;
+        z-index: 40;
+        transform: translateX(-100%);
+        transition: transform 0.28s ease;
+        box-shadow: 2px 0 14px rgba(0, 0, 0, 0.25);
+    }
+    .layout.mobile.has-selection.sidebar-open .sidebar {
+        transform: translateX(0);
     }
     .layout.mobile .editor-pane {
         display: none;
@@ -6640,7 +6684,8 @@ function onPopstate() {
     .layout.mobile.has-selection .editor-pane {
         display: flex;
     }
-    .mobile-back-btn {
+    .mobile-back-btn,
+    .layout.mobile .sidebar-close-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
