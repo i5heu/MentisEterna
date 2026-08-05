@@ -96,7 +96,7 @@ force_path_style = true
 
 [jobs]
 # Number of concurrent background job workers.
-workers = 10
+workers = 15
 
 [recipe]
 # Number of concurrent workers for recipe-category classification.
@@ -105,12 +105,12 @@ category_workers = 10
 [printer]
 # USB-serial thermal printer settings.
 device = ""          # Explicit device path (e.g. /dev/usb/lp0); empty = auto-detect
-usb_id = ""          # Optional VID:PID override (e.g. "08a6:003d")
+usb_id = "08a6:003d"          # Optional VID:PID override (e.g. "08a6:003d")
 codepage = "auto"    # auto | pc437 | wpc1252 | ...
 image_threshold = 120.0      # 0-255, dithering threshold
 image_darkness_scale = 0.96  # relative darkness multiplier
-write_chunk_bytes = 0        # 0 = default chunk size
-write_delay_ms = 0           # 0 = default inter-chunk delay
+write_chunk_bytes = 1024        # 0 = default chunk size
+write_delay_ms = 25           # 0 = default inter-chunk delay
 
 # ---------------------------------------------------------------------------
 # Secrets (stay in the ENVIRONMENT, never here):
