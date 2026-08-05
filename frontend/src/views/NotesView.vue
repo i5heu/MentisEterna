@@ -1,5 +1,5 @@
 <template>
-    <div class="layout">
+    <div class="layout" :class="{ mobile: isMobile, 'has-selection': !!selected }">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -290,6 +290,7 @@
             <template v-if="selected">
                 <!-- Header bar -->
                 <div class="editor-header">
+                    <button type="button" class="btn-ghost mobile-back-btn" @click="mobileBack" aria-label="Back to notes">←</button>
                     <div class="editor-header-left">
                         <div
                             v-if="isEditing"
@@ -1676,6 +1677,11 @@ const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
 const liveRefreshPending = ref(false);
+const isMobile = ref(false);
+
+// Mobile breakpoint matching (same 767px as the CSS media query + innerWidth < 768 checks).
+let mobileMQ = null;
+let onMobileChange = null;
 const selectedRendererKey = ref(0);
 const threadRendererKey = ref(0);
 const editTitleInput = ref(null);
@@ -2658,6 +2664,13 @@ function hasUnsavedSelectedChanges() {
 function confirmLeaveCurrentNote() {
     if (!hasUnsavedSelectedChanges()) return true;
     return window.confirm(UNSAVED_NOTE_WARNING);
+}
+
+function mobileBack() {
+    if (!confirmLeaveCurrentNote()) return;
+    selected.value = null;
+    threadNote.value = null;
+    replaceURL();
 }
 
 function onBeforeUnload(event) {
@@ -3715,9 +3728,18 @@ async function selectNoteById(id) {
         // Fetch fresh from the server.
         try {
             note = await fetchNote(props.token, id);
+            if (note && !notes.value.some((n) => n.id === note.id)) {
+                notes.value.push(note);
+            }
         } catch {
             return;
         }
+    }
+    if (!note) return;
+    if (isMobile.value) {
+        // No thread sidebar on mobile -> open the target note as the main view.
+        await selectNote(note);
+        return;
     }
     // Open in the thread sidebar (right panel) instead of replacing the main editor.
     openThreadSidebar(note);
@@ -4810,6 +4832,11 @@ onMounted(() => {
     window.addEventListener("scroll", scheduleLinkHintRefresh, true);
     window.addEventListener("blur", onThreadSidebarCtrlBlur);
     window.addEventListener("blur", onLinkHintWindowBlur);
+    // Mobile detection (same 767px breakpoint as CSS + innerWidth checks)
+    mobileMQ = window.matchMedia("(max-width: 767px)");
+    onMobileChange = (e) => { isMobile.value = e.matches; };
+    onMobileChange(mobileMQ);
+    mobileMQ.addEventListener("change", onMobileChange);
     // Restore state from URL on initial load
     loadFromURL();
 });
@@ -4825,6 +4852,9 @@ onUnmounted(() => {
     window.removeEventListener("scroll", scheduleLinkHintRefresh, true);
     window.removeEventListener("blur", onThreadSidebarCtrlBlur);
     window.removeEventListener("blur", onLinkHintWindowBlur);
+    if (mobileMQ && onMobileChange) {
+        mobileMQ.removeEventListener("change", onMobileChange);
+    }
     cancelLinkHintRefresh();
     clearTimeout(searchTimeout);
     clearTimeout(parentSearchTimeout);
@@ -4919,6 +4949,28 @@ async function loadFromURL() {
 
     const noteSlug = m[1];
     const threadSlug = m[2];
+
+    // On mobile the thread sidebar is hidden, so a thread URL is treated as a
+    // request to open the thread's target note as the main editor view.
+    if (isMobile.value && threadSlug) {
+        const tid = extractID(threadSlug);
+        let tNote = notes.value.find((n) => n.id === tid);
+        if (!tNote) {
+            try {
+                tNote = await fetchNote(props.token, tid);
+                if (tNote && !notes.value.some((n) => n.id === tNote.id)) {
+                    notes.value.push(tNote);
+                }
+            } catch {
+                tNote = null;
+            }
+        }
+        if (tNote) {
+            await selectNote(tNote, { skipDirtyCheck: true, updateURL: false });
+        }
+        replaceURL();
+        return;
+    }
 
     // Handle /note/new
     if (noteSlug === "new") {
@@ -5423,17 +5475,22 @@ function onPopstate() {
 }
 
 .editor-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
     min-height: 7.4em;
-    align-items: flex-start;
     gap: 0.75rem;
     padding: 0.85rem 1.25rem;
     border-bottom: 1px solid var(--border-color);
     background: var(--panel-bg);
 }
 
+.mobile-back-btn {
+    display: none;
+}
+
 .editor-header-left {
-    flex: 1;
+    grid-column: 2;
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
@@ -5465,6 +5522,7 @@ function onPopstate() {
 }
 
 .editor-actions {
+    grid-column: 3;
     display: flex;
     gap: 0.5rem;
     flex-shrink: 0;
@@ -6559,6 +6617,44 @@ function onPopstate() {
 @media (max-width: 767px) {
     .thread-sidebar {
         display: none;
+    }
+
+    .layout {
+        height: 100vh;
+        height: 100dvh;
+    }
+    .layout.mobile .sidebar {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        min-width: 0;
+        z-index: 40;
+        border-right: none;
+    }
+    .layout.mobile.has-selection .sidebar {
+        display: none;
+    }
+    .layout.mobile .editor-pane {
+        display: none;
+    }
+    .layout.mobile.has-selection .editor-pane {
+        display: flex;
+    }
+    .mobile-back-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 2.5rem;
+        min-height: 2.5rem;
+        padding: 0;
+    }
+
+    /* Tap-target sizing for phones */
+    .note-item {
+        min-height: 3rem;
+    }
+    .layout.mobile .btn {
+        min-height: 2.5rem;
     }
 }
 

@@ -525,4 +525,10 @@ button[type="submit"] {
     padding: 0.5rem;
     font-size: 0.85rem;
 }
+
+@media (max-width: 480px) {
+    .login-card {
+        padding: 2rem 1.25rem;
+    }
+}
 </style>

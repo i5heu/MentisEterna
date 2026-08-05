@@ -1791,5 +1791,20 @@ onMounted(() => {
     .reindex-card-status {
         padding-left: 0;
     }
+
+    .options-wrap {
+        padding: 1rem;
+    }
+    .status-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .status-label {
+        min-width: 0;
+    }
+    .status-value,
+    .status-msg {
+        text-align: left;
+    }
 }
 </style>
