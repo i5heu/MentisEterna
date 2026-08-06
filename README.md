@@ -497,11 +497,25 @@ curl -s -X POST http://localhost:8080/ingest/audio \
   -F "title=My recording"
 ```
 
+Parent and date-prefix variants (parent via path instead of the `parent_id` form field; the path value wins if both are supplied):
+
+```bash
+# Create the note under parent note 39
+curl -s -X POST http://localhost:8080/ingest/audio/39 \
+  -H "Authorization: Bearer your-secret-token" \
+  -F "file=@clip.m4a"
+
+# Same, plus the STT-generated title becomes "DD-MM-YY: <title>" (ingest date)
+curl -s -X POST http://localhost:8080/ingest/audio/39/date \
+  -H "Authorization: Bearer your-secret-token" \
+  -F "file=@clip.m4a"
+```
+
 | Form field | Required | Notes |
 |---|---|---|
 | `file` | yes | The audio file (M4A detected as `audio/mp4`; other audio types accepted via `IsSTTable`). Non-audio files are rejected with `415`. |
 | `title` | no | Note title; falls back to the filename (extension stripped), or `"Audio note"`. |
-| `parent_id` | no | Integer ID of the parent note; invalid values are rejected with `400`. |
+| `parent_id` | no | Integer ID of the parent note; invalid values are rejected with `400`. Equivalent to the `{parent_id}` path segment. |
 
 **Response** (`201 Created`): a JSON object with:
 
@@ -523,6 +537,7 @@ curl -s -X POST http://localhost:8080/ingest/audio \
 | `405` | Non-`POST` method |
 | `415` | Uploaded file is not a supported audio type |
 | `400` | No `file` field, or invalid `parent_id` |
+| `404` | Unknown path flag (only `date` is supported after the parent ID) |
 | `413` | Upload exceeds the configured size limit (`[server] max_upload_bytes`) |
 
 The transcript is appended to the note body **and** indexed in the file STT store (`files_stt` / `vss_files_stt`), reusing the existing STT pipeline (`RunSTTForFile` → `appendNoteTranscript` → `enqueueSTTEmbedding`). If STT fails, `files_stt.error` is set and the note body is left unchanged; the job is not retried.

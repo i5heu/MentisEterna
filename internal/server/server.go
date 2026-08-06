@@ -438,6 +438,8 @@ func (s *Server) Start(ctx context.Context) error {
 	}))
 
 	mux.HandleFunc("/ingest/audio", s.handleAudioIngest)
+	mux.HandleFunc("/ingest/audio/{parent_id}", s.handleAudioIngest)
+	mux.HandleFunc("/ingest/audio/{parent_id}/{flag}", s.handleAudioIngest)
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 

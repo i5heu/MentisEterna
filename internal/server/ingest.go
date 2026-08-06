@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/i5heu/MentisEterna/internal/media"
 	internaltags "github.com/i5heu/MentisEterna/internal/tags"
@@ -38,6 +39,11 @@ func (s *Server) handleAudioIngest(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if flag := r.PathValue("flag"); flag != "" && flag != "date" {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -82,8 +88,12 @@ func (s *Server) handleAudioIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var parentID *int64
-	if v := strings.TrimSpace(r.FormValue("parent_id")); v != "" {
-		pid, convErr := strconv.ParseInt(v, 10, 64)
+	pidSrc := strings.TrimSpace(r.PathValue("parent_id"))
+	if pidSrc == "" {
+		pidSrc = strings.TrimSpace(r.FormValue("parent_id"))
+	}
+	if pidSrc != "" {
+		pid, convErr := strconv.ParseInt(pidSrc, 10, 64)
 		if convErr != nil || pid <= 0 {
 			http.Error(w, "invalid parent_id", http.StatusBadRequest)
 			return
@@ -97,13 +107,18 @@ func (s *Server) handleAudioIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	datePrefix := ""
+	if r.PathValue("flag") == "date" {
+		datePrefix = time.Now().Format("02-01-06") // DD-MM-YY
+	}
+
 	rec, results, err := s.mediaService.CreateAttachment(r.Context(), noteID, filename, mime, src)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 
-	s.enqueueSTTToNote(rec.ID, noteID)
+	s.enqueueSTTToNote(rec.ID, noteID, datePrefix)
 
 	sum, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, noteID))
 	if err != nil {
@@ -185,11 +200,12 @@ func (s *Server) insertIngestNote(title string, parentID *int64) (int64, error) 
 
 // enqueueSTTToNote enqueues an stt_to_note job for the given file, threading the
 // destination note ID so the transcript can be appended to the note body.
-func (s *Server) enqueueSTTToNote(fileID, noteID int64) {
+// datePrefix, when non-empty (DD-MM-YY), is prepended to the generated title.
+func (s *Server) enqueueSTTToNote(fileID, noteID int64, datePrefix string) {
 	if s.jobManager == nil || s.mediaService == nil || s.sttClient == nil {
 		return
 	}
-	payload, _ := json.Marshal(map[string]interface{}{"file_id": fileID, "note_id": noteID})
+	payload, _ := json.Marshal(map[string]interface{}{"file_id": fileID, "note_id": noteID, "date_prefix": datePrefix})
 	if _, err := s.jobManager.Enqueue("_media", "stt_to_note", payload); err != nil {
 		log.Printf("stt_to_note: enqueue file %d: %v", fileID, err)
 	}
@@ -232,8 +248,9 @@ func (s *Server) ingestSTTToNoteTask(db *sql.DB, payload []byte) (string, error)
 		return "", fmt.Errorf("stt_to_note: STT client or media service not configured")
 	}
 	var p struct {
-		FileID int64 `json:"file_id"`
-		NoteID int64 `json:"note_id"`
+		FileID     int64  `json:"file_id"`
+		NoteID     int64  `json:"note_id"`
+		DatePrefix string `json:"date_prefix"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return "", fmt.Errorf("stt_to_note: invalid payload: %w", err)
@@ -255,8 +272,17 @@ func (s *Server) ingestSTTToNoteTask(db *sql.DB, payload []byte) (string, error)
 
 	// STT succeeded: let the title model title the note from the transcript.
 	if s.titleClient != nil {
-		if _, err := s.generateTitleForNote(db, p.NoteID, result.STTText); err != nil {
+		generated, err := s.generateTitleForNote(db, p.NoteID, result.STTText)
+		if err != nil {
 			log.Printf("stt_to_note: title generation for note %d: %v", p.NoteID, err)
+		} else if generated != "" && p.DatePrefix != "" {
+			prefixed := p.DatePrefix + ": " + generated
+			if _, err := db.Exec(`UPDATE notes SET title = ? WHERE id = ?`, prefixed, p.NoteID); err != nil {
+				log.Printf("stt_to_note: date-prefix title for note %d: %v", p.NoteID, err)
+			} else {
+				s.enqueueVSSIndex(p.NoteID)
+				s.notifyNotesChanged("title_generated", p.NoteID)
+			}
 		}
 	}
 
