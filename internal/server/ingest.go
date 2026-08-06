@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/i5heu/MentisEterna/internal/media"
+	internaltags "github.com/i5heu/MentisEterna/internal/tags"
 )
 
 // handleAudioIngest accepts an audio file upload over HTTP, creates a standard
@@ -137,6 +138,11 @@ func (s *Server) handleAudioIngest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"note": note, "file": nf, "results": results})
 }
 
+// audioNoteTag is the manual tag forced onto every ingested audio note after a
+// successful STT transcription. It is stored as a manual tag (tags_refs) so it
+// survives auto-tag regeneration.
+const audioNoteTag = "audio-note"
+
 // audioTitleFromFilename derives a human-readable note title from an uploaded
 // file's name (e.g. "recording.m4a" → "recording").
 func audioTitleFromFilename(filename string) string {
@@ -246,6 +252,46 @@ func (s *Server) ingestSTTToNoteTask(db *sql.DB, payload []byte) (string, error)
 		return "", fmt.Errorf("stt_to_note: append to note %d: %w", p.NoteID, err)
 	}
 	s.enqueueSTTEmbedding(p.FileID, result.STTText)
+
+	// STT succeeded: let the title model title the note from the transcript.
+	if s.titleClient != nil {
+		if _, err := s.generateTitleForNote(db, p.NoteID, result.STTText); err != nil {
+			log.Printf("stt_to_note: title generation for note %d: %v", p.NoteID, err)
+		}
+	}
+
+	// Auto tags: the model now sees the generated title. Failures are logged,
+	// not fatal — the transcript is already persisted.
+	if s.autoTagger != nil {
+		if _, err := s.generateAndPersistAutoTags(ctx, db, p.NoteID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Sprintf("Skipped auto tags for missing note %d", p.NoteID), nil
+			}
+			log.Printf("stt_to_note: auto tags for note %d: %v", p.NoteID, err)
+		}
+	}
+
+	// Force the audio-note manual tag (merge so any user-added manual tags are kept).
+	manualTags, err := loadTags(db, p.NoteID)
+	if err != nil {
+		return "", fmt.Errorf("stt_to_note: load tags: %w", err)
+	}
+	forced := internaltags.NormalizeNames(append(manualTags, audioNoteTag))
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if err := saveTags(tx, p.NoteID, forced); err != nil {
+		return "", fmt.Errorf("stt_to_note: save tags: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	if s.llm != nil {
+		s.enqueueVSSIndex(p.NoteID)
+	}
+	s.notifyNotesChanged("auto_tags_generated", p.NoteID)
 
 	return fmt.Sprintf("STT for file %d appended to note %d: %d chars", p.FileID, p.NoteID, len(result.STTText)), nil
 }

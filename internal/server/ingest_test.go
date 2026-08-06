@@ -3,18 +3,25 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/media"
 )
 
-type mockSTT struct{ text string }
+type mockSTT struct {
+	text string
+	err  error
+}
 
-func (m mockSTT) RunSTT(_ []byte, _ string) (string, error) { return m.text, nil }
+func (m mockSTT) RunSTT(_ []byte, _ string) (string, error) { return m.text, m.err }
 
 func ingestMultipartBody(filename string, data []byte, extra map[string]string) (string, *bytes.Buffer) {
 	var buf bytes.Buffer
@@ -155,6 +162,123 @@ func TestIngestSTTToNoteTaskAppendsTranscript(t *testing.T) {
 	}
 	if bodyText != "hello world" {
 		t.Fatalf("expected body 'hello world', got %q", bodyText)
+	}
+}
+
+func TestIngestSTTToNoteTaskGeneratesTitleAndForcesTag(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	s.ingestToken = "secret"
+	s.sttClient = mockSTT{text: "hello world"}
+	gen := &stubAutoTagGenerator{
+		title:      "generated-title",
+		suggestion: llm.AutoTagSuggestion{ExistingTags: []string{"project"}, NewTags: []string{"voice memo"}},
+	}
+	s.titleClient = gen
+	s.autoTagger = gen
+
+	ct, body := ingestMultipartBody("recording.m4a", fakeM4A(), nil)
+	req := httptest.NewRequest(http.MethodPost, "/ingest/audio", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+	s.handleAudioIngest(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Note NoteDetail     `json:"note"`
+		File media.NoteFile `json:"file"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	noteID := resp.Note.ID
+
+	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, noteID))
+	if _, err := s.ingestSTTToNoteTask(s.db.DB, payload); err != nil {
+		t.Fatalf("ingestSTTToNoteTask: %v", err)
+	}
+
+	var title string
+	if err := s.db.QueryRow(`SELECT title FROM notes WHERE id = ?`, noteID).Scan(&title); err != nil {
+		t.Fatalf("query title: %v", err)
+	}
+	if title != "generated-title" {
+		t.Fatalf("expected title 'generated-title', got %q", title)
+	}
+
+	if gen.lastInput.Title != "generated-title" {
+		t.Fatalf("expected auto-tag input title 'generated-title' (title runs before auto tags), got %q", gen.lastInput.Title)
+	}
+
+	manualTags, err := loadTags(s.db.DB, noteID)
+	if err != nil {
+		t.Fatalf("load tags: %v", err)
+	}
+	if !reflect.DeepEqual(manualTags, []string{"audio-note"}) {
+		t.Fatalf("expected manual tags [audio-note], got %v", manualTags)
+	}
+
+	autoTags, err := loadAutoTags(s.db.DB, noteID)
+	if err != nil {
+		t.Fatalf("load auto tags: %v", err)
+	}
+	if !reflect.DeepEqual(autoTags, []string{"project", "voice memo"}) {
+		t.Fatalf("expected auto tags [project voice memo], got %v", autoTags)
+	}
+}
+
+func TestIngestSTTToNoteTaskSTTFailureSkipsTitleAndTag(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	s.ingestToken = "secret"
+	s.sttClient = mockSTT{err: errors.New("boom")}
+	gen := &stubAutoTagGenerator{}
+	s.titleClient = gen
+	s.autoTagger = gen
+
+	ct, body := ingestMultipartBody("recording.m4a", fakeM4A(), nil)
+	req := httptest.NewRequest(http.MethodPost, "/ingest/audio", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+	s.handleAudioIngest(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Note NoteDetail     `json:"note"`
+		File media.NoteFile `json:"file"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	noteID := resp.Note.ID
+
+	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, noteID))
+	msg, err := s.ingestSTTToNoteTask(s.db.DB, payload)
+	if err != nil {
+		t.Fatalf("ingestSTTToNoteTask: %v", err)
+	}
+	if !strings.Contains(msg, "completed with error") {
+		t.Fatalf("expected message mentioning error, got %q", msg)
+	}
+
+	var title string
+	if err := s.db.QueryRow(`SELECT title FROM notes WHERE id = ?`, noteID).Scan(&title); err != nil {
+		t.Fatalf("query title: %v", err)
+	}
+	if title != "recording" {
+		t.Fatalf("expected filename-derived title 'recording', got %q", title)
+	}
+
+	manualTags, err := loadTags(s.db.DB, noteID)
+	if err != nil {
+		t.Fatalf("load tags: %v", err)
+	}
+	if len(manualTags) != 0 {
+		t.Fatalf("expected no manual tags on STT failure, got %v", manualTags)
 	}
 }
 

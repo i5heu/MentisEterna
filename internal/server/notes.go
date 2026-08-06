@@ -1222,6 +1222,34 @@ func (s *Server) enqueueVSSIndex(noteID int64) {
 	}
 }
 
+// generateTitleForNote generates a title from the given body via the title
+// model, updates the note, and refreshes its search index. It returns the
+// generated title ("" when the model produced nothing usable).
+func (s *Server) generateTitleForNote(db *sql.DB, noteID int64, body string) (string, error) {
+	if s.titleClient == nil {
+		return "", fmt.Errorf("generate_title: no chat client configured")
+	}
+	release := llm.BeginBackendUse(s.titleClient)
+	defer release()
+	title, err := s.titleClient.GenerateTitle(body)
+	if err != nil {
+		return "", fmt.Errorf("generate title: %w", err)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", nil
+	}
+	if len(title) > 60 {
+		title = title[:60]
+	}
+	if _, err := db.Exec(`UPDATE notes SET title = ? WHERE id = ?`, title, noteID); err != nil {
+		return "", fmt.Errorf("update title: %w", err)
+	}
+	s.enqueueVSSIndex(noteID)
+	s.notifyNotesChanged("title_generated", noteID)
+	return title, nil
+}
+
 // generateTitleTask is the job task handler for auto-generating a note title.
 // It accepts a JSON payload with "note_id" and "body" fields.
 func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
@@ -1235,27 +1263,13 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return "", fmt.Errorf("generate_title: invalid payload: %w", err)
 	}
-
-	release := llm.BeginBackendUse(s.titleClient)
-	defer release()
-	title, err := s.titleClient.GenerateTitle(p.Body)
+	title, err := s.generateTitleForNote(db, p.NoteID, p.Body)
 	if err != nil {
-		return "", fmt.Errorf("generate title: %w", err)
+		return "", err
 	}
-	title = strings.TrimSpace(title)
 	if title == "" {
 		return "Empty title generated, keeping Untitled", nil
 	}
-	// Safety net: truncate to a reasonable length if the model misbehaves.
-	if len(title) > 60 {
-		title = title[:60]
-	}
-
-	if _, err := db.Exec(`UPDATE notes SET title = ? WHERE id = ?`, title, p.NoteID); err != nil {
-		return "", fmt.Errorf("update title: %w", err)
-	}
-	s.enqueueVSSIndex(p.NoteID)
-	s.notifyNotesChanged("title_generated", p.NoteID)
 	return fmt.Sprintf("Generated title for note %d: %q", p.NoteID, title), nil
 }
 
