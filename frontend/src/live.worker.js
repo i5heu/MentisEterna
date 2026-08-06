@@ -171,5 +171,11 @@ self.addEventListener("message", (event) => {
     }
     if (data.type === "stop") {
         stopLiveSocket();
+        return;
+    }
+    if (data.type === "send") {
+        if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+            liveSocket.send(JSON.stringify(data.payload));
+        }
     }
 });

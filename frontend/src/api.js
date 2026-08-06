@@ -251,6 +251,16 @@ export function stopLiveUpdates() {
     dispatchWindowEvent("live:status", { connected: false, connecting: false });
 }
 
+export function sendLiveMessage(payload) {
+    if (liveWorker) {
+        liveWorker.postMessage({ type: "send", payload });
+        return;
+    }
+    if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+        liveSocket.send(JSON.stringify(payload));
+    }
+}
+
 export async function login(username, password) {
     return request("/login", {
         method: "POST",

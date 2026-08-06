@@ -18,6 +18,7 @@ const (
 	liveTypeNotesChange            = "notes.changed"
 	liveTypeJobsChange             = "jobs.changed"
 	liveReasonInlineUploadResolved = "inline_upload_resolved"
+	liveTypeEditSync               = "edit.sync"
 
 	wsWriteWait      = 10 * time.Second
 	wsPongWait       = 60 * time.Second
@@ -42,6 +43,9 @@ type liveMessage struct {
 	ClientSentAtMS     *float64              `json:"client_sent_at_ms,omitempty"`
 	ServerReceivedAtUS int64                 `json:"server_received_at_us,omitempty"`
 	ServerSentAtUS     int64                 `json:"server_sent_at_us,omitempty"`
+	NoteID             int64                 `json:"note_id,omitempty"`
+	Editing            *bool                 `json:"editing,omitempty"`
+	DeviceID           string                `json:"device_id,omitempty"`
 }
 
 type liveHub struct {
@@ -51,9 +55,10 @@ type liveHub struct {
 }
 
 type liveClient struct {
-	hub  *liveHub
-	conn *websocket.Conn
-	send chan liveMessage
+	hub      *liveHub
+	conn     *websocket.Conn
+	send     chan liveMessage
+	username string
 }
 
 func newLiveHub() *liveHub {
@@ -74,7 +79,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, _, err := s.sessionUsername(r); errors.Is(err, db.ErrNotFound) {
+	username, _, err := s.sessionUsername(r)
+	if errors.Is(err, db.ErrNotFound) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	} else if err != nil {
@@ -97,9 +103,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := &liveClient{
-		hub:  s.liveHub,
-		conn: conn,
-		send: make(chan liveMessage, 64),
+		hub:      s.liveHub,
+		conn:     conn,
+		send:     make(chan liveMessage, 64),
+		username: username,
 	}
 	s.liveHub.register(client)
 	client.enqueueJSON(liveMessage{Type: liveTypeReady, Timestamp: liveTimestamp()})
@@ -193,6 +200,21 @@ func (h *liveHub) broadcast(msg liveMessage) {
 	}
 }
 
+func (h *liveHub) broadcastToUser(username string, except *liveClient, msg liveMessage) {
+	h.mu.RLock()
+	targets := make([]*liveClient, 0, len(h.clients))
+	for cl := range h.clients {
+		if cl.username == username && cl != except {
+			targets = append(targets, cl)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, cl := range targets {
+		cl.enqueueJSON(msg)
+	}
+}
+
 func (c *liveClient) enqueueJSON(msg liveMessage) {
 	select {
 	case c.send <- msg:
@@ -221,13 +243,30 @@ func (c *liveClient) readLoop() {
 			var m struct {
 				Type           string   `json:"type"`
 				ClientSentAtMS *float64 `json:"client_sent_at_ms"`
+				NoteID         int64    `json:"note_id"`
+				Editing        *bool    `json:"editing"`
+				DeviceID       string   `json:"device_id"`
 			}
-			if json.Unmarshal(msg, &m) == nil && m.Type == "ping" {
+			if json.Unmarshal(msg, &m) != nil {
+				continue
+			}
+			switch m.Type {
+			case "ping":
 				receivedAt := time.Now().UTC()
 				c.enqueueJSON(liveMessage{
 					Type:               "pong",
 					ClientSentAtMS:     m.ClientSentAtMS,
 					ServerReceivedAtUS: receivedAt.UnixMicro(),
+				})
+			case liveTypeEditSync:
+				if m.Editing == nil || m.NoteID <= 0 {
+					continue // malformed: ignore silently
+				}
+				c.hub.broadcastToUser(c.username, c, liveMessage{
+					Type:     liveTypeEditSync,
+					NoteID:   m.NoteID,
+					Editing:  m.Editing,
+					DeviceID: m.DeviceID,
 				})
 			}
 		}

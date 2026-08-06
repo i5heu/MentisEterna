@@ -111,7 +111,7 @@ func TestCreateSession(t *testing.T) {
 	}
 }
 
-func TestCreateSessionUnique(t *testing.T) {
+func TestCreateSessionAllowsConcurrentSessions(t *testing.T) {
 	d := openTestDB(t)
 	t1, _, err := d.CreateSession("admin")
 	if err != nil {
@@ -125,8 +125,12 @@ func TestCreateSessionUnique(t *testing.T) {
 		t.Error("expected unique tokens for consecutive sessions")
 	}
 
-	if _, err := d.ValidateSession(t1); err != ErrNotFound {
-		t.Fatalf("expected prior session to be revoked, got %v", err)
+	// The same user may be signed in on several devices at once: creating a new
+	// session must NOT revoke the prior one.
+	for _, tok := range []string{t1, t2} {
+		if _, err := d.ValidateSession(tok); err != nil {
+			t.Fatalf("expected session %q to remain valid, got %v", tok, err)
+		}
 	}
 }
 

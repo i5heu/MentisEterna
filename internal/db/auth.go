@@ -68,8 +68,10 @@ func (d *DB) rehashPassword(username, plaintext string) error {
 	return err
 }
 
-// CreateSession generates a secure random token, rotates prior sessions for the
-// user, persists the new session, and returns it with its expiry.
+// CreateSession generates a secure random token, persists a new session for the
+// user, and returns it with its expiry. Multiple concurrent sessions per user
+// are allowed (same user may be signed in on several devices at once); each
+// session is independent until it expires or is explicitly deleted.
 func (d *DB) CreateSession(username string) (token string, expiresAt time.Time, err error) {
 	raw := make([]byte, 32)
 	if _, err = rand.Read(raw); err != nil {
@@ -78,23 +80,11 @@ func (d *DB) CreateSession(username string) (token string, expiresAt time.Time, 
 	token = hex.EncodeToString(raw)
 	expiresAt = time.Now().UTC().Add(24 * time.Hour)
 
-	tx, err := d.Begin()
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	defer tx.Rollback()
-
-	if _, err = tx.Exec(`DELETE FROM sessions WHERE username = ?`, username); err != nil {
-		return "", time.Time{}, fmt.Errorf("delete prior sessions: %w", err)
-	}
-	if _, err = tx.Exec(
+	if _, err = d.Exec(
 		`INSERT INTO sessions (token, username, expires_at) VALUES (?, ?, ?)`,
 		token, username, expiresAt.Format(time.RFC3339),
 	); err != nil {
 		return "", time.Time{}, fmt.Errorf("insert session: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
-		return "", time.Time{}, err
 	}
 	return token, expiresAt, nil
 }

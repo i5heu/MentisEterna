@@ -626,6 +626,9 @@
                                 :label="getHintLabel('toggle-edit')"
                             />
                         </button>
+                        <div v-if="editingElsewhere" class="edit-sync-banner"
+                            >✍ Editing on another device</div
+                        >
                         <button
                             class="btn-amber btn-child shortcut-anchor"
                             :title="getShortcutLabel('new-child-note')"
@@ -1618,6 +1621,16 @@
     </div>
 </template>
 
+<script>
+// Module-scope: stable across component remounts within this tab, so each tab
+// acts as one independent "device" for edit-sync presence.
+const deviceId =
+    typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `dev-${Math.random().toString(36).slice(2)}`;
+export default {};
+</script>
+
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import MarkdownIt from "markdown-it";
@@ -1640,6 +1653,7 @@ import {
     fetchTags,
     generateAutoTags,
     pluginActionV2,
+    sendLiveMessage,
 } from "../api.js";
 import NoteTypeRenderer from "../components/NoteTypeRenderer.vue";
 import NoteAttachments from "../components/NoteAttachments.vue";
@@ -2051,6 +2065,7 @@ let liveRefreshTimer = null;
 let liveRefreshRunning = false;
 let liveRefreshQueued = false;
 let liveRefreshFullRequested = false;
+let presenceTimer = null;
 let liveRefreshSelectedRequested = false;
 let liveRefreshThreadRequested = false;
 let threadSidebarCtrlTapArmed = false;
@@ -3042,6 +3057,27 @@ const renderedBody = computed(() => {
 	    return postProcessMediaTags(md.render(editBody.value), selected.value?.attachments);
 });
 
+// Edit-sync presence: which notes (by id) other devices of this user are editing.
+const PRESENCE_TTL_MS = 30000;
+const presence = ref({}); // String(note_id) -> { editing: true, device_id, ts }
+const editingElsewhere = computed(() => {
+    const id = selected.value?.id;
+    if (!id) return false;
+    const p = presence.value[String(id)];
+    return Boolean(p && p.editing && p.device_id !== deviceId);
+});
+
+// Broadcast our edit-mode changes to other devices (same user) via the live socket.
+watch([isEditing, () => selected.value?.id], ([editing, noteID]) => {
+    if (!noteID) return; // new unsaved note has id null — nothing to sync
+    sendLiveMessage({
+        type: "edit.sync",
+        note_id: Number(noteID),
+        editing: Boolean(editing),
+        device_id: deviceId,
+    });
+});
+
 // Render any markdown body (used for child messages)
 function renderMarkdown(body, attachments) {
     if (!body)
@@ -3292,9 +3328,33 @@ function applyInlineUploadResolution(resolution) {
     }
 }
 
+function prunePresence() {
+    const now = Date.now();
+    for (const k of Object.keys(presence.value)) {
+        const p = presence.value[k];
+        if (!p || now - (p.ts || 0) > PRESENCE_TTL_MS) presence.value[k] = undefined;
+    }
+}
+
 function onLiveMessage(event) {
     const detail = event?.detail;
     if (!detail?.type) return;
+
+    prunePresence();
+
+    if (detail.type === "edit.sync") {
+        const noteID = Number(detail.note_id);
+        if (noteID > 0) {
+            if (detail.editing) {
+                presence.value[String(noteID)] = {
+                    editing: true, device_id: detail.device_id || "", ts: Date.now(),
+                };
+            } else {
+                presence.value[String(noteID)] = undefined;
+            }
+        }
+        return;
+    }
 
     if (detail.type === "live.ready") {
         scheduleLiveRefresh({
@@ -3380,12 +3440,17 @@ onMounted(() => {
     loadNotes();
     fetchAndMergeManifests(props.token);
     window.addEventListener("live:message", onLiveMessage);
+    presenceTimer = window.setInterval(prunePresence, 10000);
     // Resume any interrupted uploads from IndexedDB
     resumeStoredUploads(props.token);
 });
 
 onUnmounted(() => {
     window.removeEventListener("live:message", onLiveMessage);
+    if (presenceTimer) {
+        window.clearInterval(presenceTimer);
+        presenceTimer = null;
+    }
     if (liveRefreshTimer) {
         window.clearTimeout(liveRefreshTimer);
         liveRefreshTimer = null;
@@ -5582,6 +5647,13 @@ function onPopstate() {
     gap: 0.5rem;
     flex-shrink: 0;
     flex-wrap: wrap;
+}
+
+.edit-sync-banner {
+    align-self: center;
+    color: var(--header-title-color);
+    font-size: 0.9rem;
+    white-space: nowrap;
 }
 
 .btn-child {
