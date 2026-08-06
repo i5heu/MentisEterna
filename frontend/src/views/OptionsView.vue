@@ -148,6 +148,239 @@
                 </div>
             </section>
 
+            <!-- Section: Devices & Teleport -->
+            <section class="options-section">
+                <h2 class="section-title">Devices &amp; Teleport</h2>
+                <p class="section-desc">
+                    Pair this browser with your other devices and send text or
+                    files between them. Payloads are encrypted end to end — the
+                    server only relays opaque ciphertext.
+                </p>
+
+                <!-- My device -->
+                <div class="device-card">
+                    <div class="device-card-header">
+                        <span class="device-card-title">This device</span>
+                        <input
+                            v-model="myName"
+                            class="device-name-input"
+                            placeholder="Name this device"
+                            @change="saveMyName"
+                        />
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Fingerprint</span>
+                        <code class="status-value device-fp">{{
+                            shortFingerprint(myDeviceId)
+                        }}</code>
+                    </div>
+                    <div class="device-actions">
+                        <button
+                            class="btn-ghost"
+                            :disabled="myDeviceId === ''"
+                            @click="toggleQR"
+                        >
+                            {{ showQR ? "Hide QR" : "Show QR" }}
+                        </button>
+                        <button
+                            class="btn-ghost"
+                            :disabled="myDeviceId === ''"
+                            @click="copyShareCode"
+                        >
+                            Copy code
+                        </button>
+                    </div>
+                    <img
+                        v-if="showQR && qrDataUrl"
+                        :src="qrDataUrl"
+                        alt="Pairing QR code"
+                        class="device-qr"
+                    />
+                    <p v-if="myDeviceMsg" class="msg-ok">{{ myDeviceMsg }}</p>
+                </div>
+
+                <!-- Pair a device -->
+                <div class="device-card">
+                    <div class="device-card-header">
+                        <span class="device-card-title">Pair a device</span>
+                    </div>
+                    <textarea
+                        v-model="pairCode"
+                        class="pair-code-input"
+                        rows="3"
+                        placeholder='Paste the other device pairing code here (from its "Copy code" button or QR).'
+                    ></textarea>
+                    <div class="device-actions">
+                        <button
+                            class="btn-ghost"
+                            :disabled="pairing || !pairCode.trim()"
+                            @click="pairWithCode"
+                        >
+                            {{ pairing ? "Pairing…" : "Pair with code" }}
+                        </button>
+                        <button
+                            class="btn-ghost"
+                            :disabled="scanning"
+                            @click="scanQR"
+                        >
+                            {{ scanning ? "Scanning…" : "Scan QR" }}
+                        </button>
+                    </div>
+                    <canvas
+                        ref="scanCanvas"
+                        class="scan-canvas"
+                        style="display: none"
+                    ></canvas>
+                    <video
+                        ref="scanVideo"
+                        class="scan-video"
+                        style="display: none"
+                    ></video>
+                    <p v-if="pairOk" class="msg-ok">{{ pairOk }}</p>
+                    <p v-if="pairErr" class="msg-error">{{ pairErr }}</p>
+                </div>
+
+                <!-- Paired devices -->
+                <div v-if="peers.length" class="device-card">
+                    <div class="device-card-header">
+                        <span class="device-card-title">Paired devices</span>
+                    </div>
+                    <div
+                        v-for="peer in peers"
+                        :key="peer.id"
+                        class="peer-row"
+                    >
+                        <span
+                            class="peer-status-dot"
+                            :class="
+                                onlinePeerIds.has(peer.id)
+                                    ? 'peer-online'
+                                    : 'peer-offline'
+                            "
+                            :title="
+                                onlinePeerIds.has(peer.id)
+                                    ? 'Online'
+                                    : 'Offline'
+                            "
+                        ></span>
+                        <span class="peer-name">{{
+                            peer.name || "Device"
+                        }}</span>
+                        <code class="peer-fp">{{
+                            shortFingerprint(peer.id)
+                        }}</code>
+                        <button
+                            class="btn-ghost peer-remove"
+                            @click="removePaired(peer.id)"
+                        >
+                            Remove
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Teleport: send -->
+                <div v-if="onlinePeers.length" class="device-card">
+                    <div class="device-card-header">
+                        <span class="device-card-title">Send to device</span>
+                    </div>
+                    <div
+                        v-for="peer in onlinePeers"
+                        :key="peer.id"
+                        class="teleport-peer"
+                    >
+                        <div class="teleport-peer-header">
+                            <span class="peer-name">{{
+                                peer.name || "Device"
+                            }}</span>
+                            <span
+                                v-if="progress[peer.id]"
+                                class="teleport-progress"
+                                >{{ progress[peer.id] }}</span
+                            >
+                        </div>
+                        <textarea
+                            v-model="textDrafts[peer.id]"
+                            class="teleport-text"
+                            rows="2"
+                            placeholder="Message text…"
+                        ></textarea>
+                        <div class="device-actions">
+                            <button
+                                class="btn-ghost"
+                                :disabled="sendingTo[peer.id]"
+                                @click="sendTextTo(peer)"
+                            >
+                                Send text
+                            </button>
+                            <button
+                                class="btn-ghost"
+                                :disabled="sendingTo[peer.id]"
+                                @click="pickFileFor(peer)"
+                            >
+                                Send file…
+                            </button>
+                        </div>
+                        <p v-if="sendErrs[peer.id]" class="msg-error">{{
+                            sendErrs[peer.id]
+                        }}</p>
+                    </div>
+                    <input
+                        ref="fileInput"
+                        type="file"
+                        class="hidden-file-input"
+                        @change="fileChosen"
+                    />
+                </div>
+
+                <!-- Incoming -->
+                <div v-if="incomingItems.length" class="device-card">
+                    <div class="device-card-header">
+                        <span class="device-card-title">Incoming</span>
+                    </div>
+                    <div
+                        v-for="(item, idx) in incomingItems"
+                        :key="idx"
+                        class="incoming-item"
+                        :class="{ 'incoming-new': idx === 0 }"
+                    >
+                        <div class="incoming-head">
+                            <span class="incoming-kind">{{
+                                item.kind === "file" ? "File" : "Text"
+                            }}</span>
+                            <span class="peer-name">{{
+                                item.kind === "file"
+                                    ? item.name
+                                    : "Text message"
+                            }}</span>
+                            <span class="incoming-meta">{{
+                                item.kind === "file"
+                                    ? formatBytes(item.size)
+                                    : item.size + " chars"
+                            }}</span>
+                        </div>
+                        <pre v-if="item.kind === 'text'" class="incoming-text">{{
+                            item.text
+                        }}</pre>
+                        <div class="device-actions">
+                            <button
+                                v-if="item.kind === 'text'"
+                                class="btn-ghost"
+                                @click="copyIncoming(item)"
+                            >
+                                Copy
+                            </button>
+                            <button
+                                v-if="item.kind === 'file'"
+                                class="btn-ghost"
+                                @click="downloadIncoming(item)"
+                            >
+                                Download
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- Section: Printer Connection -->
             <section class="options-section">
                 <h2 class="section-title">Printer Connection</h2>
@@ -980,7 +1213,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import JobQueue from "../components/JobQueue.vue";
 import ShortcutHint from "../components/ShortcutHint.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
@@ -1000,7 +1233,28 @@ import {
     fetchPrinterStatus,
     fetchAIStatus,
     fetchServerStats,
+    sendLiveMessage,
 } from "../api.js";
+import {
+    getOrCreateDevice,
+    getMyName,
+    listPeers,
+    removePeer,
+    setMyName,
+} from "../device/store.js";
+import {
+    importPeerFromPayload,
+    renderQR,
+    scanQRFromCamera,
+    sharePayloadText,
+} from "../device/pairing.js";
+import {
+    handleDeviceMsg,
+    sendFile,
+    sendText,
+    setIncomingHandler,
+    setProgressHandler,
+} from "../device/teleport.js";
 import { useKeyboardShortcuts } from "../composables/useKeyboardShortcuts.js";
 
 const props = defineProps({
@@ -1084,6 +1338,221 @@ const deleteSearchLeftoversOk = ref("");
 	const fetchingStats = ref(false);
 	const serverStats = ref(null);
 	const serverStatsErr = ref("");
+
+	// Devices & Teleport
+	const myDeviceId = ref("");
+	const myName = ref("");
+	const myDeviceMsg = ref("");
+	const showQR = ref(false);
+	const qrDataUrl = ref("");
+	const pairCode = ref("");
+	const pairing = ref(false);
+	const scanning = ref(false);
+	const pairOk = ref("");
+	const pairErr = ref("");
+	const peers = ref([]);
+	const onlinePeerIds = ref(new Set());
+	const textDrafts = reactive({});
+	const sendingTo = reactive({});
+	const progress = reactive({});
+	const sendErrs = reactive({});
+	const incomingItems = ref([]);
+	const scanCanvas = ref(null);
+	const scanVideo = ref(null);
+	const fileInput = ref(null);
+	let pendingFilePeer = null;
+
+	const onlinePeers = computed(() =>
+		peers.value.filter((p) => onlinePeerIds.value.has(p.id)),
+	);
+
+	function shortFingerprint(id) {
+		if (!id) return "";
+		return id.slice(0, 8) + "…" + id.slice(-8);
+	}
+
+	function refreshPeers() {
+		peers.value = listPeers();
+	}
+
+	function saveMyName() {
+		setMyName(myName.value);
+		myDeviceMsg.value = "Device name saved.";
+	}
+
+	async function toggleQR() {
+		myDeviceMsg.value = "";
+		if (showQR.value) {
+			showQR.value = false;
+			return;
+		}
+		try {
+			qrDataUrl.value = await renderQR(await sharePayloadText());
+			showQR.value = true;
+		} catch (e) {
+			pairErr.value = e.message || "QR render failed";
+		}
+	}
+
+	async function copyShareCode() {
+		pairErr.value = "";
+		myDeviceMsg.value = "";
+		try {
+			const text = await sharePayloadText();
+			await navigator.clipboard.writeText(text);
+			myDeviceMsg.value = "Pairing code copied to clipboard.";
+		} catch (e) {
+			myDeviceMsg.value = "";
+			pairErr.value = e.message || "Clipboard copy failed";
+		}
+	}
+
+	async function pairWithCode() {
+		pairErr.value = "";
+		pairOk.value = "";
+		pairing.value = true;
+		try {
+			const peer = await importPeerFromPayload(
+				pairCode.value.trim(),
+				"Device",
+			);
+			pairCode.value = "";
+			pairOk.value = "Paired with " + (peer.name || "device") + ".";
+			refreshPeers();
+		} catch (e) {
+			pairErr.value = e.message || "Pairing failed";
+		} finally {
+			pairing.value = false;
+		}
+	}
+
+	async function scanQR() {
+		pairErr.value = "";
+		pairOk.value = "";
+		scanning.value = true;
+		try {
+			const text = await scanQRFromCamera(
+				scanCanvas.value,
+				scanVideo.value,
+			);
+			if (text) {
+				const peer = await importPeerFromPayload(text, "Device");
+				pairOk.value = "Paired with " + (peer.name || "device") + ".";
+				refreshPeers();
+			} else {
+				pairErr.value = "No QR code found.";
+			}
+		} catch (e) {
+			pairErr.value = e.message || "Camera scan failed";
+		} finally {
+			scanning.value = false;
+		}
+	}
+
+	function removePaired(id) {
+		removePeer(id);
+		const next = new Set(onlinePeerIds.value);
+		next.delete(id);
+		onlinePeerIds.value = next;
+		refreshPeers();
+	}
+
+	async function sendTextTo(peer) {
+		sendingTo[peer.id] = true;
+		sendErrs[peer.id] = "";
+		progress[peer.id] = "";
+		try {
+			await sendText(peer, textDrafts[peer.id] || "");
+			textDrafts[peer.id] = "";
+			progress[peer.id] = "Sent.";
+		} catch (e) {
+			sendErrs[peer.id] = e.message || "Send failed";
+		} finally {
+			sendingTo[peer.id] = false;
+		}
+	}
+
+	function pickFileFor(peer) {
+		pendingFilePeer = peer;
+		if (fileInput.value) {
+			fileInput.value.value = "";
+			fileInput.value.click();
+		}
+	}
+
+	async function fileChosen(event) {
+		const file = event.target.files && event.target.files[0];
+		if (fileInput.value) {
+			fileInput.value.value = "";
+		}
+		const peer = pendingFilePeer;
+		pendingFilePeer = null;
+		if (!file || !peer) {
+			return;
+		}
+		sendingTo[peer.id] = true;
+		sendErrs[peer.id] = "";
+		progress[peer.id] = "";
+		try {
+			await sendFile(peer, file);
+			progress[peer.id] = "Sent.";
+		} catch (e) {
+			sendErrs[peer.id] = e.message || "Send failed";
+		} finally {
+			sendingTo[peer.id] = false;
+		}
+	}
+
+	async function copyIncoming(item) {
+		try {
+			await navigator.clipboard.writeText(item.text);
+		} catch {
+			// Clipboard may be unavailable; nothing else to do.
+		}
+	}
+
+	function downloadIncoming(item) {
+		const url = URL.createObjectURL(
+			new Blob([item.bytes], { type: item.mime }),
+		);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = item.name || "teleport-file";
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
+	function onLiveMsg(event) {
+		const payload = event.detail;
+		if (!payload) {
+			return;
+		}
+		if (payload.type === "device.online") {
+			if (peers.value.some((p) => p.id === payload.device_id)) {
+				onlinePeerIds.value = new Set(onlinePeerIds.value).add(
+					payload.device_id,
+				);
+			}
+			return;
+		}
+		if (payload.type === "device.offline") {
+			const next = new Set(onlinePeerIds.value);
+			next.delete(payload.device_id);
+			onlinePeerIds.value = next;
+			return;
+		}
+		if (payload.type === "device.msg") {
+			handleDeviceMsg(payload).catch(() => {
+				// Undecryptable frames (unpaired during flight) are dropped.
+			});
+		}
+	}
+
+	function onTeleportProgress({ peerId, sent, total }) {
+		progress[peerId] = `Sent ${sent}/${total} chunks…`;
+	}
 
 function goBack() {
     if (showHotkeys.value) {
@@ -1475,8 +1944,32 @@ async function fetchStats() {
     }
 }
 
-onMounted(() => {
+onMounted(async () => {
     fetchStats();
+    window.addEventListener("live:message", onLiveMsg);
+    setIncomingHandler((item) => {
+        incomingItems.value.unshift({ ...item, receivedAt: Date.now() });
+    });
+    setProgressHandler(onTeleportProgress);
+    try {
+        const me = await getOrCreateDevice();
+        myDeviceId.value = me.id;
+        myName.value = getMyName();
+        // Re-announce so same-user peers learn this device is online right
+        // now (device.online broadcasts go to their connections, which this
+        // view listens for) — presence is only live while this section is
+        // mounted, and a fresh hello refreshes it on every open.
+        sendLiveMessage({ type: "device.hello", device_id: me.id });
+    } catch {
+        // Device identity unavailable (no WebCrypto); teleport stays disabled.
+    }
+    refreshPeers();
+});
+
+onUnmounted(() => {
+    window.removeEventListener("live:message", onLiveMsg);
+    setIncomingHandler(null);
+    setProgressHandler(null);
 });
 </script>
 
@@ -1729,6 +2222,192 @@ onMounted(() => {
     flex-direction: column;
     gap: 0.35rem;
     padding-left: 2rem;
+}
+
+/* Devices & Teleport */
+.device-card {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 0.9rem;
+}
+
+.device-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+}
+
+.device-card-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--font-color);
+}
+
+.device-name-input {
+    flex: 1;
+    max-width: 220px;
+    background: var(--bg-color, transparent);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--font-color);
+    font-size: 0.8rem;
+    padding: 0.3rem 0.5rem;
+}
+
+.device-fp {
+    word-break: break-all;
+}
+
+.device-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.device-qr {
+    display: block;
+    width: 256px;
+    height: 256px;
+    margin-top: 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.pair-code-input,
+.teleport-text {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-color, transparent);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--font-color);
+    font-size: 0.8rem;
+    padding: 0.4rem 0.5rem;
+    resize: vertical;
+}
+
+.peer-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.peer-row:last-child {
+    border-bottom: none;
+}
+
+.peer-status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.peer-status-dot.peer-online {
+    background: #22c55e;
+    box-shadow: 0 0 4px #22c55e;
+}
+
+.peer-status-dot.peer-offline {
+    background: #6b7280;
+}
+
+.peer-name {
+    font-size: 0.8rem;
+    color: var(--font-color);
+    font-weight: 500;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.peer-fp {
+    font-size: 0.7rem;
+    color: var(--font-color-secondary);
+    flex-shrink: 0;
+}
+
+.peer-remove {
+    flex-shrink: 0;
+}
+
+.teleport-peer {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.6rem 0.7rem;
+    margin-bottom: 0.6rem;
+}
+
+.teleport-peer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-bottom: 0.4rem;
+}
+
+.teleport-progress {
+    font-size: 0.72rem;
+    color: var(--accent-teal);
+}
+
+.hidden-file-input {
+    display: none;
+}
+
+.incoming-item {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.6rem 0.7rem;
+    margin-bottom: 0.6rem;
+}
+
+.incoming-new {
+    border-color: var(--accent-teal);
+}
+
+.incoming-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.incoming-kind {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent-teal);
+    flex-shrink: 0;
+}
+
+.incoming-meta {
+    font-size: 0.72rem;
+    color: var(--font-color-secondary);
+    flex-shrink: 0;
+}
+
+.incoming-text {
+    background: var(--bg-color, transparent);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.78rem;
+    color: var(--font-color);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 160px;
+    overflow-y: auto;
+    margin: 0.4rem 0 0;
 }
 
 /* Logout */

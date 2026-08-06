@@ -20,6 +20,10 @@ const (
 	liveReasonInlineUploadResolved = "inline_upload_resolved"
 	liveTypeEditSync               = "edit.sync"
 	liveTypeEditBody               = "edit.body"
+	liveTypeDeviceHello            = "device.hello"
+	liveTypeDeviceMsg              = "device.msg"
+	liveTypeDeviceOnline           = "device.online"
+	liveTypeDeviceOffline          = "device.offline"
 
 	wsWriteWait      = 10 * time.Second
 	wsPongWait       = 60 * time.Second
@@ -50,11 +54,16 @@ type liveMessage struct {
 	Editing            *bool                 `json:"editing,omitempty"`
 	DeviceID           string                `json:"device_id,omitempty"`
 	Body               string                `json:"body,omitempty"`
+	ToDeviceID         string                `json:"to_device_id,omitempty"`
+	FromDeviceID       string                `json:"from_device_id,omitempty"`
+	Channel            string                `json:"channel,omitempty"`
+	Data               string                `json:"data,omitempty"`
 }
 
 type liveHub struct {
 	mu       sync.RWMutex
 	clients  map[*liveClient]struct{}
+	devices  map[string]*liveClient
 	upgrader websocket.Upgrader
 }
 
@@ -63,11 +72,13 @@ type liveClient struct {
 	conn     *websocket.Conn
 	send     chan liveMessage
 	username string
+	deviceID string
 }
 
 func newLiveHub() *liveHub {
 	return &liveHub{
 		clients: make(map[*liveClient]struct{}),
+		devices: make(map[string]*liveClient),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 4096,
@@ -177,13 +188,42 @@ func (h *liveHub) register(client *liveClient) {
 	h.mu.Unlock()
 }
 
+func (h *liveHub) registerDevice(c *liveClient, deviceID string) {
+	h.mu.Lock()
+	if c.deviceID != "" && h.devices[c.deviceID] == c {
+		delete(h.devices, c.deviceID)
+	}
+	c.deviceID = deviceID
+	h.devices[deviceID] = c // last connection wins if the same id reconnects
+	h.mu.Unlock()
+	h.broadcastToUser(c.username, c, liveMessage{Type: liveTypeDeviceOnline, DeviceID: deviceID})
+}
+
+func (h *liveHub) routeToDevice(toDeviceID string, from *liveClient, msg liveMessage) {
+	h.mu.RLock()
+	target := h.devices[toDeviceID]
+	h.mu.RUnlock()
+	if target == nil || target == from || target.username != from.username {
+		return // unknown, self, or cross-user: silently drop
+	}
+	target.enqueueJSON(msg)
+}
+
 func (h *liveHub) unregister(client *liveClient) {
 	h.mu.Lock()
+	var gone *liveClient
 	if _, ok := h.clients[client]; ok {
 		delete(h.clients, client)
 		close(client.send)
 	}
+	if client.deviceID != "" && h.devices[client.deviceID] == client {
+		delete(h.devices, client.deviceID)
+		gone = client
+	}
 	h.mu.Unlock()
+	if gone != nil {
+		h.broadcastToUser(gone.username, nil, liveMessage{Type: liveTypeDeviceOffline, DeviceID: gone.deviceID})
+	}
 }
 
 func (h *liveHub) broadcast(msg liveMessage) {
@@ -251,6 +291,9 @@ func (c *liveClient) readLoop() {
 				Editing        *bool    `json:"editing"`
 				DeviceID       string   `json:"device_id"`
 				Body           string   `json:"body"`
+				ToDeviceID     string   `json:"to_device_id"`
+				Channel        string   `json:"channel"`
+				Data           string   `json:"data"`
 			}
 			if json.Unmarshal(msg, &m) != nil {
 				continue
@@ -282,6 +325,22 @@ func (c *liveClient) readLoop() {
 					NoteID: m.NoteID,
 					Body:   m.Body,
 					DeviceID: m.DeviceID,
+				})
+			case liveTypeDeviceHello:
+				if m.DeviceID == "" {
+					continue
+				}
+				c.hub.registerDevice(c, m.DeviceID)
+			case liveTypeDeviceMsg:
+				if m.ToDeviceID == "" {
+					continue
+				}
+				c.hub.routeToDevice(m.ToDeviceID, c, liveMessage{
+					Type:         liveTypeDeviceMsg,
+					ToDeviceID:   m.ToDeviceID,
+					FromDeviceID: c.deviceID,
+					Channel:      m.Channel,
+					Data:         m.Data,
 				})
 			}
 		}

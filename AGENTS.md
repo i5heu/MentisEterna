@@ -15,6 +15,7 @@ internal/server/ — HTTP handlers, WebAuthn, SPA static serving
 pkg/notetype/    — Note type plugin interface, registry, test harness, and built-in plugins
 frontend/        — Vue 3 + Vite app (dev proxy → :8080)
 frontend/src/note-types/ — Vue components per note type + shared registry
+frontend/src/device/ — E2E device channel: crypto, identity store, pairing, teleport
 FrontEndDist/    — Vite build output (served by Go server at runtime)
 lib/             — Pre-built SQLite extension: vec0.so (do NOT regenerate)
 ```
@@ -319,6 +320,49 @@ INSERT INTO vss_notes(rowid, body_embedding) VALUES (?, ?);
 **Auth**: Password-based (SHA-512, stored in `auth` table) + WebAuthn passkeys. Sessions last 24 hours. `initAdminPassword()` runs at server startup.
 
 **Static serving**: Go server serves `FrontEndDist/` as an SPA (falls back to `index.html` for unknown paths). Must `npm run build` to reflect frontend changes in production mode.
+
+## Device Channel & Teleport
+
+Same-user device-to-device channel over the existing `/ws` websocket relay, with
+app-layer E2E encryption (ECDH P-256 + AES-GCM-256 via WebCrypto; no WebRTC).
+Only teleport traffic is encrypted — `edit.sync`/`edit.body` stay plaintext.
+
+Wire protocol (server is transport-only, never parses the payload):
+
+- `device.hello` — client announces its device id (fingerprint of its ECDH public
+  key); the server registers it per user and broadcasts `device.online` to the
+  user's other connections. `device.offline` is broadcast on disconnect.
+- `device.msg` — `{ to_device_id, from_device_id, channel, data }` unicast relay.
+  The server routes to exactly one target connection and **silently drops** any
+  message whose target is unknown, the sender itself, or a different user
+  (cross-user guard in `liveHub.routeToDevice`).
+
+Key files:
+
+```
+internal/server/live.go            — relay: registerDevice, routeToDevice, readLoop cases
+internal/server/live_device_test.go — routing + presence tests (no VSS needed)
+frontend/src/device/crypto.js      — WebCrypto primitives (ECDH P-256, AES-GCM-256, fingerprint)
+frontend/src/device/store.js       — persisted device identity + peers (localStorage)
+frontend/src/device/pairing.js     — share payloads (paste code / QR via `qrcode` + `jsqr`)
+frontend/src/device/teleport.js    — the "DataChannel": chunked encrypted send/receive
+frontend/src/device/__tests__/crypto.test.js — key symmetry, round-trip, tamper rejection
+frontend/src/views/OptionsView.vue — "Devices & Teleport" section (pair, presence, send, inbox)
+frontend/src/api.js                — announces `device.hello` on every live (re)connect
+```
+
+Design notes:
+
+- The browser is the device: `localStorage` holds one ECDH keypair
+  (`mentis.device.key`), shared across tabs; last connection wins in the server
+  registry. Teleport targets the browser, not the tab.
+- Pairing is mutual: both sides import each other's public key; the shared AES
+  session key is derived locally (ECDH is commutative) and never crosses the wire.
+- Chunks are 256 KiB plaintext (~341 KiB base64 in the relay message, well under
+  the 4 MiB `wsMaxMessageSize`); sequential `await`ed sends over the single
+  ordered websocket need no ACK. Incomplete transfers are swept after 60 s.
+- The Devices & Teleport section refreshes presence on mount by re-sending
+  `device.hello`; presence is only live while OptionsView is mounted.
 
 ## Encrypted Backups
 

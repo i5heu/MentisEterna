@@ -1,3 +1,5 @@
+import { getOrCreateDevice } from "./device/store.js";
+
 async function request(path, options = {}) {
     const res = await fetch(path, {
         credentials: "include",
@@ -36,6 +38,20 @@ let liveWorker = null;
 function dispatchWindowEvent(name, detail) {
     if (typeof window === "undefined") return;
     window.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+// Every live:status transition funnels through here so the device announces
+// itself (device.hello) on each (re)connect — keeping the server's per-user
+// device registry fresh. sendLiveMessage is hoisted in this module.
+function dispatchLiveStatus(status) {
+    dispatchWindowEvent("live:status", status);
+    if (status && status.connected) {
+        getOrCreateDevice()
+            .then((me) =>
+                sendLiveMessage({ type: "device.hello", device_id: me.id }),
+            )
+            .catch(() => {});
+    }
 }
 
 function buildLiveURL() {
@@ -79,7 +95,7 @@ function buildLatencyDetail(payload, fallbackClientSentAt) {
 function handleLiveWorkerMessage(event) {
     const data = event.data || {};
     if (data.type === "status") {
-        dispatchWindowEvent("live:status", data.detail || {});
+        dispatchLiveStatus(data.detail || {});
         return;
     }
     if (data.type === "latency") {
@@ -137,7 +153,7 @@ function openLiveSocket() {
 
     const socket = new WebSocket(buildLiveURL());
     liveSocket = socket;
-    dispatchWindowEvent("live:status", { connected: false, connecting: true });
+    dispatchLiveStatus({ connected: false, connecting: true });
 
     socket.onopen = () => {
         if (liveSocket !== socket) {
@@ -145,7 +161,7 @@ function openLiveSocket() {
             return;
         }
         liveReconnectAttempt = 0;
-        dispatchWindowEvent("live:status", {
+        dispatchLiveStatus({
             connected: true,
             connecting: false,
         });
@@ -178,7 +194,7 @@ function openLiveSocket() {
             liveSocket = null;
         }
         stopLivePings();
-        dispatchWindowEvent("live:status", {
+        dispatchLiveStatus({
             connected: false,
             connecting: false,
         });
@@ -248,7 +264,7 @@ export function stopLiveUpdates() {
             socket.close();
         }
     }
-    dispatchWindowEvent("live:status", { connected: false, connecting: false });
+    dispatchLiveStatus({ connected: false, connecting: false });
 }
 
 export function sendLiveMessage(payload) {

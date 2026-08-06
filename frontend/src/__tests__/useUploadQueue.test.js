@@ -300,4 +300,43 @@ describe("useUploadQueue", () => {
         await uq.resumeStoredUploads("newtok");
         expect(workerInstance._posted).toHaveLength(1);
     });
+
+    test("multiple consumers share one worker without double-creating it", () => {
+        // Regression guard for the ref-counting fix: consumers that find the
+        // worker already created must still take their own ref (the previous
+        // `if (!worker)` guard skipped ensureWorker, so workerRefs stayed at 1
+        // while N consumers mounted and the first unmount's releaseWorker
+        // nulled the shared worker under the remaining consumers). The
+        // precondition of that fix is that every consumer really does share a
+        // single worker instance.
+        jest.resetModules();
+        workerInstance._handlers = {};
+        workerInstance._posted = [];
+        chunkStore = require("../workers/chunkStore.js");
+        chunkStore.listEntries.mockReset();
+        chunkStore.getChunkEntry.mockReset();
+        const mod = require("../composables/useUploadQueue.js");
+
+        const first = mod.useUploadQueue();
+        const second = mod.useUploadQueue();
+
+        // Both consumers drive the SAME fake worker instance.
+        const id1 = first.enqueue(file, 1, "tok", {});
+        const id2 = second.enqueue(file, 2, "tok", {});
+        expect(workerInstance._posted).toHaveLength(2);
+        expect(workerInstance._posted[0]).toMatchObject({
+            type: "upload",
+            uploadId: id1,
+            noteId: 1,
+        });
+        expect(workerInstance._posted[1]).toMatchObject({
+            type: "upload",
+            uploadId: id2,
+            noteId: 2,
+        });
+
+        // State stays per-composable.
+        expect(first.queueCount.value).toBe(0);
+        expect(second.queueCount.value).toBe(0);
+    });
 });

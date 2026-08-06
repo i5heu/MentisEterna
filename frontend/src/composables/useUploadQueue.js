@@ -46,9 +46,12 @@ export function useUploadQueue() {
     let completeTimer = null;
     const concurrency = ref(DEFAULT_CONCURRENCY);
 
-    if (!worker) {
-        ensureWorker();
-    }
+    // Every consumer takes its own ref on the shared worker, even when the
+    // worker already exists. (Previously the `if (!worker)` guard skipped
+    // ensureWorker for later consumers, so workerRefs stayed at 1 while N
+    // consumers mounted; on unmount the first releaseWorker nulled the shared
+    // worker and the next consumer's onUnmounted dereferenced null.)
+    ensureWorker();
 
     function handleWorkerMessage(event) {
         const msg = event.data || {};
