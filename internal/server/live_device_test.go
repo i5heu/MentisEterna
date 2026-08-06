@@ -61,6 +61,14 @@ func setupDeviceConns(t *testing.T, s *Server) (connA, connB, connBob *websocket
 	if onlineB.DeviceID != "devA" {
 		t.Fatalf("alice-B: unexpected online device %q", onlineB.DeviceID)
 	}
+	// Presence state sync: a hello also returns the current same-user
+	// registry to the announcing connection, so alice-B receives devA a
+	// second time (its own hello's snapshot). Drain that copy.
+	syncB := requireLiveMessageType(t, connB, liveTypeDeviceOnline)
+	if syncB.DeviceID != "devA" {
+		t.Fatalf("alice-B: unexpected presence-sync online device %q", syncB.DeviceID)
+	}
+	assertNoLiveMessage(t, connA, "alice-A must not get a presence snapshot for its own hello")
 	assertNoLiveMessage(t, connBob, "bob must not see alice device.online")
 	return connA, connB, connBob, url
 }
@@ -106,6 +114,54 @@ func TestWebSocketDeviceRouting(t *testing.T) {
 	}
 	assertNoLiveMessage(t, connA, "malformed device.msg check")
 	assertNoLiveMessage(t, connB, "malformed device.msg check 2")
+}
+
+func TestWebSocketPresenceSync(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	s.liveHub = newLiveHub()
+	connA, connB, connBob, wsURL := setupDeviceConns(t, s)
+	defer connA.Close()
+	defer connB.Close()
+	defer connBob.Close()
+
+	// A fresh connection announcing its device (the reload scenario) must
+	// receive the current same-user registry as device.online snapshots —
+	// presence is otherwise push-only and the announcer would not learn about
+	// devices that connected while it was away.
+	aliceToken, _, err := s.db.CreateSession("alice")
+	if err != nil {
+		t.Fatalf("create alice session: %v", err)
+	}
+	connC, _, err := dialLiveWebSocket(t, wsURL, aliceToken, "")
+	if err != nil {
+		t.Fatalf("dial alice-C: %v", err)
+	}
+	defer connC.Close()
+	requireLiveMessageType(t, connC, liveTypeReady)
+
+	if err := connC.WriteJSON(liveMessage{Type: liveTypeDeviceHello, DeviceID: "devC"}); err != nil {
+		t.Fatalf("alice-C device.hello: %v", err)
+	}
+	// The snapshot covers both existing same-user devices (map iteration
+	// order is random, so match as a set).
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		online := requireLiveMessageType(t, connC, liveTypeDeviceOnline)
+		seen[online.DeviceID] = true
+	}
+	if !seen["devA"] || !seen["devB"] {
+		t.Fatalf("alice-C presence sync must report devA and devB, got %v", seen)
+	}
+	assertNoLiveMessage(t, connC, "alice-C presence sync must not include itself")
+
+	// The existing same-user peer sees the new device via the broadcast, but
+	// must NOT receive a registry snapshot (that goes only to the announcer).
+	onlineB := requireLiveMessageType(t, connB, liveTypeDeviceOnline)
+	if onlineB.DeviceID != "devC" {
+		t.Fatalf("alice-B: expected devC announce, got %q", onlineB.DeviceID)
+	}
+	assertNoLiveMessage(t, connB, "alice-B must not get a presence snapshot for another device's hello")
+	assertNoLiveMessage(t, connBob, "bob must not see alice presence sync")
 }
 
 func TestWebSocketDevicePresence(t *testing.T) {

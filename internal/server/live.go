@@ -195,8 +195,27 @@ func (h *liveHub) registerDevice(c *liveClient, deviceID string) {
 	}
 	c.deviceID = deviceID
 	h.devices[deviceID] = c // last connection wins if the same id reconnects
+	// Presence state sync: snapshot the current same-user registry so the
+	// (re)announcing connection immediately learns who else is online.
+	// device.online broadcasts only fire when a device connects, so without
+	// this a fresh hello would know nothing about devices that announced
+	// while it was away (e.g. after a reload or right after pairing).
+	online := make([]string, 0, len(h.devices))
+	for id, cl := range h.devices {
+		if id != deviceID && cl.username == c.username {
+			online = append(online, id)
+		}
+	}
 	h.mu.Unlock()
+
 	h.broadcastToUser(c.username, c, liveMessage{Type: liveTypeDeviceOnline, DeviceID: deviceID})
+
+	// Deliver the snapshot to this connection only (its own writeLoop drains
+	// the send channel; do not broadcast — the peers already learned about
+	// this device via the broadcast above).
+	for _, id := range online {
+		c.enqueueJSON(liveMessage{Type: liveTypeDeviceOnline, DeviceID: id})
+	}
 }
 
 func (h *liveHub) routeToDevice(toDeviceID string, from *liveClient, msg liveMessage) {

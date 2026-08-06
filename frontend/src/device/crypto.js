@@ -7,6 +7,7 @@
 // node jest environment as-is.
 
 const ECDH_PARAMS = { name: "ECDH", namedCurve: "P-256" };
+const ECDSA_PARAMS = { name: "ECDSA", namedCurve: "P-256" };
 const AES_PARAMS = { name: "AES-GCM", length: 256 };
 const IV_BYTES = 12;
 
@@ -98,4 +99,80 @@ export function b64ToBuf(b64) {
         out[i] = bin.charCodeAt(i);
     }
     return out;
+}
+
+/**
+ * Canonical bytes a pairing payload is signed over: UTF-8 of
+ * JSON.stringify({ v, name, id, pub }). Both sides rebuild that exact object
+ * from the parsed fields, so key order is deterministic regardless of the
+ * wire representation (and unknown extra fields are excluded).
+ */
+function pairingCanonicalBytes(payload) {
+    return new TextEncoder().encode(
+        JSON.stringify({
+            v: payload.v,
+            name: payload.name,
+            id: payload.id,
+            pub: payload.pub,
+        }),
+    );
+}
+
+// WebCrypto exports JWKs with a key_ops member derived from the generating
+// algorithm (e.g. ["deriveKey"] for ECDH keys). Importing that same key
+// material under a second algorithm (ECDSA) with different usages fails the
+// key_ops check, so the member is stripped — the key material itself is
+// algorithm-neutral.
+function withoutKeyOps(jwk) {
+    const { key_ops, ...clean } = jwk;
+    return clean;
+}
+
+/**
+ * ECDSA-SHA-256 signature over a pairing payload, using this device's P-256
+ * private key. The same key material serves ECDH (key agreement) and ECDSA
+ * (identity) via separate algorithm imports; the pairing messages themselves
+ * are not secret, but the signature proves the sender holds the private key
+ * matching the advertised public key — the trust anchor of the confirmation
+ * flow (an attacker who claims a device id cannot impersonate it).
+ */
+export async function signPayload(privateKeyJwk, payload) {
+    const key = await crypto.subtle.importKey(
+        "jwk",
+        withoutKeyOps(privateKeyJwk),
+        ECDSA_PARAMS,
+        false,
+        ["sign"],
+    );
+    const sig = await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        key,
+        pairingCanonicalBytes(payload),
+    );
+    return bufToB64(new Uint8Array(sig));
+}
+
+/**
+ * Verify an ECDSA-SHA-256 signature over a pairing payload against the
+ * advertised public key. Returns false for any failure (bad signature format,
+ * unparseable key, wrong key) — inbound pairing traffic is untrusted.
+ */
+export async function verifyPayload(publicKeyJwk, payload, sigB64) {
+    try {
+        const key = await crypto.subtle.importKey(
+            "jwk",
+            withoutKeyOps(publicKeyJwk),
+            ECDSA_PARAMS,
+            false,
+            ["verify"],
+        );
+        return await crypto.subtle.verify(
+            { name: "ECDSA", hash: "SHA-256" },
+            key,
+            b64ToBuf(sigB64),
+            pairingCanonicalBytes(payload),
+        );
+    } catch {
+        return false;
+    }
 }

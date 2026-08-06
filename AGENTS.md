@@ -331,24 +331,48 @@ Wire protocol (server is transport-only, never parses the payload):
 
 - `device.hello` — client announces its device id (fingerprint of its ECDH public
   key); the server registers it per user and broadcasts `device.online` to the
-  user's other connections. `device.offline` is broadcast on disconnect.
+  user's other connections. **A hello also returns the current same-user
+  registry to the announcer as `device.online` snapshots** — presence sync, so
+  a device that reloaded or just paired learns who is online without waiting
+  for their next announcement (broadcasts alone are push-only). `device.offline`
+  is broadcast on disconnect.
 - `device.msg` — `{ to_device_id, from_device_id, channel, data }` unicast relay.
   The server routes to exactly one target connection and **silently drops** any
   message whose target is unknown, the sender itself, or a different user
   (cross-user guard in `liveHub.routeToDevice`).
+- `channel: "pairing"` — plaintext JSON (public data only), the mutual-consent
+  handshake: `pair.request` (signed with ECDSA-SHA-256 over `{v,name,id,pub}`,
+  proving the sender holds the advertised key) → the target shows a confirmation
+  prompt → `pair.response` `{accepted:true|false}` (accept is signed; decline and
+  requester cancel carry no identity claim). On accept BOTH sides persist each
+  other as peers — one confirmation connects both directions. Forged requests
+  (id≠fingerprint(pub), spoofed `from_device_id`, bad signature) are ignored;
+  a response that does not authenticate as the exact requested device is
+  rejected. Inbound `device.msg` is forwarded to the device channel by `api.js`
+  (single forwarder, dynamic import) so confirmations work from any view.
+- `channel: "teleport"` — E2E-encrypted frames (see below), only accepted from
+  paired peers.
 
 Key files:
 
 ```
 internal/server/live.go            — relay: registerDevice, routeToDevice, readLoop cases
 internal/server/live_device_test.go — routing + presence tests (no VSS needed)
-frontend/src/device/crypto.js      — WebCrypto primitives (ECDH P-256, AES-GCM-256, fingerprint)
+frontend/src/device/crypto.js      — WebCrypto primitives (ECDH P-256, AES-GCM-256,
+                                     fingerprint, ECDSA sign/verify for pairing)
 frontend/src/device/store.js       — persisted device identity + peers (localStorage)
 frontend/src/device/pairing.js     — share payloads (paste code / QR via `qrcode` + `jsqr`)
-frontend/src/device/teleport.js    — the "DataChannel": chunked encrypted send/receive
-frontend/src/device/__tests__/crypto.test.js — key symmetry, round-trip, tamper rejection
-frontend/src/views/OptionsView.vue — "Devices & Teleport" section (pair, presence, send, inbox)
-frontend/src/api.js                — announces `device.hello` on every live (re)connect
+frontend/src/device/teleport.js    — pairing handshake state + the "DataChannel":
+                                     chunked encrypted send/receive
+frontend/src/components/PairRequestModal.vue — global confirmation prompt
+frontend/src/device/__tests__/crypto.test.js — key symmetry, round-trip, tamper,
+                                     signature round-trip
+frontend/src/device/__tests__/pairing.test.js — handshake: accept/decline/cancel,
+                                     forged-request rejection, timeout, self-pair
+frontend/src/views/OptionsView.vue — "Devices & Teleport" section (pair, presence,
+                                     send, inbox)
+frontend/src/api.js                — announces `device.hello` on every live
+                                     (re)connect; forwards `device.msg` frames
 ```
 
 Design notes:
@@ -356,13 +380,22 @@ Design notes:
 - The browser is the device: `localStorage` holds one ECDH keypair
   (`mentis.device.key`), shared across tabs; last connection wins in the server
   registry. Teleport targets the browser, not the tab.
-- Pairing is mutual: both sides import each other's public key; the shared AES
-  session key is derived locally (ECDH is commutative) and never crosses the wire.
+- The same P-256 key material serves ECDH (key agreement) and ECDSA (pairing
+  identity) via separate algorithm imports; `key_ops` is stripped from JWKs
+  before the ECDSA import, which WebCrypto rejects otherwise.
+- Pairing is mutual-consent: scanning a code only sends a signed request; the
+  target must confirm. The shared AES session key is derived locally (ECDH is
+  commutative) and never crosses the wire. Requests time out after 60 s on the
+  requester side (the relay drops messages to offline targets silently).
 - Chunks are 256 KiB plaintext (~341 KiB base64 in the relay message, well under
   the 4 MiB `wsMaxMessageSize`); sequential `await`ed sends over the single
   ordered websocket need no ACK. Incomplete transfers are swept after 60 s.
 - The Devices & Teleport section refreshes presence on mount by re-sending
-  `device.hello`; presence is only live while OptionsView is mounted.
+  `device.hello` (which now returns the registry snapshot); a pairing accept
+  also re-announces on both sides so presence converges immediately. Presence
+  is only live while OptionsView is mounted. Teleport inbox delivery is also
+  OptionsView-bound (via its incoming handler); pairing confirmations are
+  global (modal lives in App.vue).
 
 ## Encrypted Backups
 

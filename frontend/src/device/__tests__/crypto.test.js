@@ -9,6 +9,8 @@ import {
     encryptJSON,
     fingerprint,
     generateDeviceKeyPair,
+    signPayload,
+    verifyPayload,
 } from "../crypto.js";
 
 describe("device ECDH + AES-GCM primitives", () => {
@@ -61,5 +63,56 @@ describe("device ECDH + AES-GCM primitives", () => {
         expect(a1).toBe(a2);
         expect(a1).toMatch(/^[0-9a-f]{64}$/);
         expect(a1).not.toBe(b1);
+    });
+
+    test("signPayload/verifyPayload round-trip: only the owning key verifies", async () => {
+        const a = await generateDeviceKeyPair();
+        const b = await generateDeviceKeyPair();
+
+        const request = {
+            kind: "pair.request",
+            v: 1,
+            request_id: "req-1",
+            name: "Dev A",
+            id: await fingerprint(a.publicKeyJwk),
+            pub: a.publicKeyJwk,
+        };
+        const sig = await signPayload(a.privateKeyJwk, request);
+
+        expect(typeof sig).toBe("string");
+        expect(await verifyPayload(a.publicKeyJwk, request, sig)).toBe(true);
+        // A different device's public key must not verify A's signature.
+        expect(await verifyPayload(b.publicKeyJwk, request, sig)).toBe(false);
+    });
+
+    test("tampered pairing payload fails verification", async () => {
+        const a = await generateDeviceKeyPair();
+
+        const request = {
+            kind: "pair.request",
+            v: 1,
+            request_id: "req-2",
+            name: "Dev A",
+            id: await fingerprint(a.publicKeyJwk),
+            pub: a.publicKeyJwk,
+        };
+        const sig = await signPayload(a.privateKeyJwk, request);
+
+        // Tampered name, extra fields, and garbage signatures all fail —
+        // extra fields are excluded from the canonical bytes, so only the
+        // signed identity fields matter.
+        expect(
+            await verifyPayload(a.publicKeyJwk, { ...request, name: "Evil" }, sig),
+        ).toBe(false);
+        expect(
+            await verifyPayload(a.publicKeyJwk, request, "AAAA"),
+        ).toBe(false);
+        expect(
+            await verifyPayload(
+                a.publicKeyJwk,
+                { ...request, kind: "pair.response" },
+                sig,
+            ),
+        ).toBe(true); // kind/request_id are not part of the signed identity
     });
 });

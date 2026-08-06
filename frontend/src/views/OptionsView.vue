@@ -153,8 +153,10 @@
                 <h2 class="section-title">Devices &amp; Teleport</h2>
                 <p class="section-desc">
                     Pair this browser with your other devices and send text or
-                    files between them. Payloads are encrypted end to end — the
-                    server only relays opaque ciphertext.
+                    files between them. The other device confirms each pairing
+                    — after that both devices are connected both ways.
+                    Payloads are encrypted end to end — the server only relays
+                    opaque ciphertext.
                 </p>
 
                 <!-- My device -->
@@ -213,14 +215,14 @@
                     <div class="device-actions">
                         <button
                             class="btn-ghost"
-                            :disabled="pairing || !pairCode.trim()"
+                            :disabled="pairing || pairingPending || !pairCode.trim()"
                             @click="pairWithCode"
                         >
                             {{ pairing ? "Pairing…" : "Pair with code" }}
                         </button>
                         <button
                             class="btn-ghost"
-                            :disabled="scanning"
+                            :disabled="scanning || pairingPending"
                             @click="scanQR"
                         >
                             {{ scanning ? "Scanning…" : "Scan QR" }}
@@ -236,6 +238,27 @@
                         class="scan-video"
                         style="display: none"
                     ></video>
+                    <p v-if="pairingState?.state === 'pending'" class="msg-info">
+                        Waiting for {{ pairingState.targetName }} to confirm the
+                        connection…
+                        <button
+                            class="btn-ghost btn-sm"
+                            @click="cancelPairing"
+                        >
+                            Cancel
+                        </button>
+                    </p>
+                    <p v-else-if="pairingState?.state === 'accepted'" class="msg-ok">
+                        Connected to {{ pairingState.targetName }} — both devices
+                        can now exchange data.
+                    </p>
+                    <p v-else-if="pairingState?.state === 'declined'" class="msg-error">
+                        {{ pairingState.targetName }} declined the connection
+                        request.
+                    </p>
+                    <p v-else-if="pairingState?.state === 'error'" class="msg-error">
+                        {{ pairingState.error }}
+                    </p>
                     <p v-if="pairOk" class="msg-ok">{{ pairOk }}</p>
                     <p v-if="pairErr" class="msg-error">{{ pairErr }}</p>
                 </div>
@@ -1213,7 +1236,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import JobQueue from "../components/JobQueue.vue";
 import ShortcutHint from "../components/ShortcutHint.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
@@ -1243,14 +1266,16 @@ import {
     setMyName,
 } from "../device/store.js";
 import {
-    importPeerFromPayload,
+    parseSharePayload,
     renderQR,
     scanQRFromCamera,
     sharePayloadText,
 } from "../device/pairing.js";
 import {
-    handleDeviceMsg,
+    cancelPairing,
+    pairingState,
     sendFile,
+    sendPairRequest,
     sendText,
     setIncomingHandler,
     setProgressHandler,
@@ -1407,18 +1432,20 @@ const deleteSearchLeftoversOk = ref("");
 		}
 	}
 
+	async function startPairingWith(payload) {
+		await sendPairRequest(payload);
+		pairOk.value = "";
+		pairErr.value = "";
+	}
+
 	async function pairWithCode() {
 		pairErr.value = "";
 		pairOk.value = "";
 		pairing.value = true;
 		try {
-			const peer = await importPeerFromPayload(
-				pairCode.value.trim(),
-				"Device",
-			);
+			const payload = await parseSharePayload(pairCode.value.trim());
+			await startPairingWith(payload);
 			pairCode.value = "";
-			pairOk.value = "Paired with " + (peer.name || "device") + ".";
-			refreshPeers();
 		} catch (e) {
 			pairErr.value = e.message || "Pairing failed";
 		} finally {
@@ -1436,9 +1463,8 @@ const deleteSearchLeftoversOk = ref("");
 				scanVideo.value,
 			);
 			if (text) {
-				const peer = await importPeerFromPayload(text, "Device");
-				pairOk.value = "Paired with " + (peer.name || "device") + ".";
-				refreshPeers();
+				const payload = await parseSharePayload(text);
+				await startPairingWith(payload);
 			} else {
 				pairErr.value = "No QR code found.";
 			}
@@ -1448,6 +1474,16 @@ const deleteSearchLeftoversOk = ref("");
 			scanning.value = false;
 		}
 	}
+
+	const pairingPending = computed(
+		() => pairingState.value?.state === "pending",
+	);
+
+	watch(pairingState, (s) => {
+		if (s && s.state === "accepted") {
+			refreshPeers();
+		}
+	});
 
 	function removePaired(id) {
 		removePeer(id);
@@ -1543,11 +1579,9 @@ const deleteSearchLeftoversOk = ref("");
 			onlinePeerIds.value = next;
 			return;
 		}
-		if (payload.type === "device.msg") {
-			handleDeviceMsg(payload).catch(() => {
-				// Undecryptable frames (unpaired during flight) are dropped.
-			});
-		}
+		// device.msg frames are forwarded to the device channel by api.js
+		// (single forwarder) — teleport reassembly and pairing confirmations
+		// work from any view; this component only reads their results.
 	}
 
 	function onTeleportProgress({ peerId, sent, total }) {
@@ -1947,6 +1981,7 @@ async function fetchStats() {
 onMounted(async () => {
     fetchStats();
     window.addEventListener("live:message", onLiveMsg);
+    window.addEventListener("device:peers-changed", refreshPeers);
     setIncomingHandler((item) => {
         incomingItems.value.unshift({ ...item, receivedAt: Date.now() });
     });
@@ -1968,6 +2003,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
     window.removeEventListener("live:message", onLiveMsg);
+    window.removeEventListener("device:peers-changed", refreshPeers);
     setIncomingHandler(null);
     setProgressHandler(null);
 });
@@ -2128,6 +2164,16 @@ onUnmounted(() => {
 }
 
 /* Messages */
+.msg-info {
+    color: var(--font-color-secondary);
+    font-size: 0.8rem;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
 .msg-error {
     color: var(--heading-color);
     font-size: 0.8rem;

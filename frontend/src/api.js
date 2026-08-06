@@ -40,6 +40,21 @@ function dispatchWindowEvent(name, detail) {
     window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
+// Every inbound live message funnels through here: the window event feeds
+// views (presence), and device.msg frames are forwarded into the device
+// channel module — exactly once, so pairing confirmations work from any view
+// and teleport frames are reassembled even when the Settings page is closed.
+// teleport.js is imported dynamically to avoid a static cycle (it imports
+// sendLiveMessage from this module).
+function dispatchLiveMessage(payload) {
+    dispatchWindowEvent("live:message", payload);
+    if (payload && payload.type === "device.msg") {
+        import("./device/teleport.js")
+            .then((m) => m.handleDeviceMsg(payload))
+            .catch(() => {});
+    }
+}
+
 // Every live:status transition funnels through here so the device announces
 // itself (device.hello) on each (re)connect — keeping the server's per-user
 // device registry fresh. sendLiveMessage is hoisted in this module.
@@ -103,7 +118,7 @@ function handleLiveWorkerMessage(event) {
         return;
     }
     if (data.type === "message") {
-        dispatchWindowEvent("live:message", data.detail);
+        dispatchLiveMessage(data.detail);
     }
 }
 
@@ -179,7 +194,7 @@ function openLiveSocket() {
                 }
                 return;
             }
-            dispatchWindowEvent("live:message", payload);
+            dispatchLiveMessage(payload);
         } catch (error) {
             console.error("live message parse failed", error);
         }

@@ -1,10 +1,13 @@
 // Public-key exchange payloads for pairing: the shareable "code" (paste or QR).
 //
 // A pairing payload is the JSON stringification of { v: 1, name, id, pub }
-// where pub is this device's ECDH public key as a JWK. The other device
-// imports it, stores the peer, and derives the shared session key from it.
+// where pub is this device's ECDH public key as a JWK and id is its
+// fingerprint. Importing a payload only validates it — actual pairing now
+// runs the mutual-consent handshake in teleport.js (the other device gets a
+// confirmation prompt and both sides connect on accept).
 
-import { getMyName, addPeer, getOrCreateDevice } from "./store.js";
+import { fingerprint } from "./crypto.js";
+import { getMyName, getOrCreateDevice } from "./store.js";
 
 /**
  * This device's share payload: { v: 1, name, id, pub }.
@@ -76,20 +79,35 @@ export async function scanQRFromCamera(canvas, video) {
 }
 
 /**
- * Validate a pairing payload and persist the peer. Throws a TypeError with a
- * readable message on malformed input.
+ * Validate a share payload (from paste code or QR) without pairing yet.
+ * Throws a TypeError with a readable message on malformed input. The
+ * advertised id must be the fingerprint of the advertised public key — a code
+ * whose id does not match its key is malformed or forged.
  */
-export async function importPeerFromPayload(text, fallbackName) {
+export async function parseSharePayload(text) {
     let payload;
     try {
         payload = JSON.parse(text);
     } catch {
         throw new TypeError("Pairing code is not valid JSON.");
     }
-    if (!payload || payload.v !== 1 || !payload.pub || !payload.pub.x) {
+    if (
+        !payload ||
+        payload.v !== 1 ||
+        !payload.pub ||
+        !payload.pub.x ||
+        typeof payload.id !== "string" ||
+        !/^[0-9a-f]{64}$/.test(payload.id)
+    ) {
         throw new TypeError(
             "Pairing code is not a valid device share (v=1 with a public key required).",
         );
     }
-    return addPeer(payload.name || fallbackName || "Device", payload.pub);
+    const actual = await fingerprint(payload.pub);
+    if (actual !== payload.id) {
+        throw new TypeError(
+            "Pairing code is inconsistent (its id does not match its key).",
+        );
+    }
+    return payload;
 }
