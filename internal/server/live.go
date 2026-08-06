@@ -19,11 +19,14 @@ const (
 	liveTypeJobsChange             = "jobs.changed"
 	liveReasonInlineUploadResolved = "inline_upload_resolved"
 	liveTypeEditSync               = "edit.sync"
+	liveTypeEditBody               = "edit.body"
 
 	wsWriteWait      = 10 * time.Second
 	wsPongWait       = 60 * time.Second
 	wsPingPeriod     = (wsPongWait * 9) / 10
-	wsMaxMessageSize = 1024
+	// Must accommodate live edit-body payloads (note markdown), which can be
+	// larger than tiny control messages.
+	wsMaxMessageSize = 4 << 20
 )
 
 type liveUploadResolution struct {
@@ -46,6 +49,7 @@ type liveMessage struct {
 	NoteID             int64                 `json:"note_id,omitempty"`
 	Editing            *bool                 `json:"editing,omitempty"`
 	DeviceID           string                `json:"device_id,omitempty"`
+	Body               string                `json:"body,omitempty"`
 }
 
 type liveHub struct {
@@ -246,6 +250,7 @@ func (c *liveClient) readLoop() {
 				NoteID         int64    `json:"note_id"`
 				Editing        *bool    `json:"editing"`
 				DeviceID       string   `json:"device_id"`
+				Body           string   `json:"body"`
 			}
 			if json.Unmarshal(msg, &m) != nil {
 				continue
@@ -266,6 +271,16 @@ func (c *liveClient) readLoop() {
 					Type:     liveTypeEditSync,
 					NoteID:   m.NoteID,
 					Editing:  m.Editing,
+					DeviceID: m.DeviceID,
+				})
+			case liveTypeEditBody:
+				if m.NoteID <= 0 {
+					continue // malformed: ignore silently
+				}
+				c.hub.broadcastToUser(c.username, c, liveMessage{
+					Type:   liveTypeEditBody,
+					NoteID: m.NoteID,
+					Body:   m.Body,
 					DeviceID: m.DeviceID,
 				})
 			}

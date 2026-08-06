@@ -190,10 +190,10 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
     - [x] Include notes types: if '.i' is written in the search bar, allow for selecting multiple note types.
     - [x] Include all note types with '.a'
 - [ ] Multi-Device Support
-  - [ ] Make MentisEterna usable with multiple devices at the same time per user.
-  - [ ] Create "Sync" via WebRTC to sync Edit Modes.
-  - [ ] Secure E2E mode via WebRTC DataChannel and public key exchange via QR code.
-  - [ ] Create DeviceTeleport which allows to teleport text and files between devices via WebRTC E2E encrypted.
+  - [x] Make MentisEterna usable with multiple devices at the same time per user.
+  - [x] Create "Sync" via websocket over server as relay to sync Edit Modes between two or more devices.
+  - [ ] Secure E2E mode via websocket over server as relay DataChannel and public key exchange via QR code or sharing a code.
+  - [ ] Create DeviceTeleport which allows to teleport text and files between devices via websocket over server as relay E2E encrypted.
 - [ ] SQLite AES-256 in OFB mode
 - [x] Task Overview NoteType: Make "Daily Tasks generation" aware of due dates, priorities and dificulty
 - [x] Remove legacy model config (chat/ocr/stt fallbacks)

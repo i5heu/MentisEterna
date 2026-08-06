@@ -3078,6 +3078,37 @@ watch([isEditing, () => selected.value?.id], ([editing, noteID]) => {
     });
 });
 
+// Live draft mirroring: when editing, debounce-send the in-progress body so
+// other devices of this user see changes as we type. The `lastEditBodySent`
+// equality guard also suppresses echoing bodies that we adopted from a peer.
+let editBodySendTimer = null;
+let lastEditBodySent = {}; // String(note_id) -> last body sent or adopted
+watch(editBody, (body) => {
+    const noteID = selected.value?.id;
+    if (!noteID || !isEditing.value) return;
+    const key = String(noteID);
+    if (body === lastEditBodySent[key]) return;
+    if (editBodySendTimer) clearTimeout(editBodySendTimer);
+    editBodySendTimer = setTimeout(() => {
+        editBodySendTimer = null;
+        lastEditBodySent[key] = body;
+        sendLiveMessage({ type: "edit.body", note_id: Number(noteID), body });
+    }, 300);
+});
+
+// Replace this note's editor body with the peer's latest draft (last-write-wins).
+// The peer's newer body is the authoritative live draft; we adopt it verbatim.
+// Echo is suppressed via lastEditBodySent so we don't re-broadcast a body we
+// just adopted.
+function applyRemoteBody(noteID, body, fromDeviceID) {
+    const target = selected.value;
+    if (!target || target.id !== noteID || fromDeviceID === deviceId) return;
+    if (editBody.value === body) return;
+    lastEditBodySent[String(noteID)] = body;
+    editBody.value = body;
+    dirty.value = true;
+}
+
 // Render any markdown body (used for child messages)
 function renderMarkdown(body, attachments) {
     if (!body)
@@ -3356,6 +3387,14 @@ function onLiveMessage(event) {
         return;
     }
 
+    if (detail.type === "edit.body") {
+        const noteID = Number(detail.note_id);
+        if (noteID > 0) {
+            applyRemoteBody(noteID, typeof detail.body === "string" ? detail.body : "", detail.device_id || "");
+        }
+        return;
+    }
+
     if (detail.type === "live.ready") {
         scheduleLiveRefresh({
             full: true,
@@ -3447,6 +3486,10 @@ onMounted(() => {
 
 onUnmounted(() => {
     window.removeEventListener("live:message", onLiveMessage);
+    if (editBodySendTimer) {
+        clearTimeout(editBodySendTimer);
+        editBodySendTimer = null;
+    }
     if (presenceTimer) {
         window.clearInterval(presenceTimer);
         presenceTimer = null;

@@ -121,3 +121,67 @@ func TestWebSocketEditSyncRelay(t *testing.T) {
 	}
 	assertNoLiveMessage(t, aliceB, "malformed relay check")
 }
+
+func TestWebSocketEditBodyRelay(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	s.liveHub = newLiveHub()
+
+	aliceA, _, err := s.db.CreateSession("alice")
+	if err != nil {
+		t.Fatalf("create alice session: %v", err)
+	}
+	aliceB, _, err := s.db.CreateSession("alice")
+	if err != nil {
+		t.Fatalf("create alice second session: %v", err)
+	}
+	bob, _, err := s.db.CreateSession("bob")
+	if err != nil {
+		t.Fatalf("create bob session: %v", err)
+	}
+
+	httpServer, wsURL := newLiveTestHTTPServer(t, s)
+	connA, _, err := dialLiveWebSocket(t, wsURL, aliceA, httpServer.URL)
+	if err != nil {
+		t.Fatalf("dial alice-A: %v", err)
+	}
+	defer connA.Close()
+	connB, _, err := dialLiveWebSocket(t, wsURL, aliceB, httpServer.URL)
+	if err != nil {
+		t.Fatalf("dial alice-B: %v", err)
+	}
+	defer connB.Close()
+	connBob, _, err := dialLiveWebSocket(t, wsURL, bob, httpServer.URL)
+	if err != nil {
+		t.Fatalf("dial bob: %v", err)
+	}
+	defer connBob.Close()
+
+	requireLiveMessageType(t, connA, liveTypeReady)
+	requireLiveMessageType(t, connB, liveTypeReady)
+	requireLiveMessageType(t, connBob, liveTypeReady)
+
+	body := "hello from device A\n\nsecond line"
+	if err := connA.WriteJSON(liveMessage{
+		Type: liveTypeEditBody, NoteID: 7, Body: body, DeviceID: "devA",
+	}); err != nil {
+		t.Fatalf("alice-A send edit.body: %v", err)
+	}
+
+	msg, ok := readLiveMessageTimeout(t, connB, 3*time.Second)
+	if !ok {
+		t.Fatal("alice-B: expected edit.body, got none")
+	}
+	if msg.Type != liveTypeEditBody || msg.NoteID != 7 || msg.Body != body || msg.DeviceID != "devA" {
+		t.Fatalf("alice-B: unexpected edit.body: %+v", msg)
+	}
+
+	// No self-echo, no cross-user leak.
+	assertNoLiveMessage(t, connA, "edit.body self-echo check")
+	assertNoLiveMessage(t, connBob, "edit.body cross-user isolation check")
+
+	// Malformed (missing note_id) is ignored.
+	if err := connA.WriteJSON(liveMessage{Type: liveTypeEditBody, Body: "boom"}); err != nil {
+		t.Fatalf("alice-A send malformed edit.body: %v", err)
+	}
+	assertNoLiveMessage(t, connB, "malformed edit.body check")
+}
