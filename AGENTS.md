@@ -365,12 +365,15 @@ frontend/src/device/pairing.js     — share payloads (paste code / QR via `qrco
 frontend/src/device/teleport.js    — pairing handshake state + the "DataChannel":
                                      chunked encrypted send/receive
 frontend/src/components/PairRequestModal.vue — global confirmation prompt
+frontend/src/components/DeviceTeleportModal.vue — global teleport UI (paired
+                                     devices, send, inbox), opened from the
+                                     app title (NotesView sidebar header)
 frontend/src/device/__tests__/crypto.test.js — key symmetry, round-trip, tamper,
                                      signature round-trip
 frontend/src/device/__tests__/pairing.test.js — handshake: accept/decline/cancel,
                                      forged-request rejection, timeout, self-pair
-frontend/src/views/OptionsView.vue — "Devices & Teleport" section (pair, presence,
-                                     send, inbox)
+frontend/src/views/OptionsView.vue — "Devices &amp; Teleport" section (pairing
+                                     only: this device, pair by code/QR)
 frontend/src/api.js                — announces `device.hello` on every live
                                      (re)connect; forwards `device.msg` frames
 ```
@@ -390,12 +393,12 @@ Design notes:
 - Chunks are 256 KiB plaintext (~341 KiB base64 in the relay message, well under
   the 4 MiB `wsMaxMessageSize`); sequential `await`ed sends over the single
   ordered websocket need no ACK. Incomplete transfers are swept after 60 s.
-- The Devices & Teleport section refreshes presence on mount by re-sending
-  `device.hello` (which now returns the registry snapshot); a pairing accept
-  also re-announces on both sides so presence converges immediately. Presence
-  is only live while OptionsView is mounted. Teleport inbox delivery is also
-  OptionsView-bound (via its incoming handler); pairing confirmations are
-  global (modal lives in App.vue).
+- The teleport UI (paired-devices list, send, inbox) lives in a global modal
+  opened by clicking the app title (NotesView sidebar); pairing lives in
+  Options → Devices &amp; Teleport. The modal re-announces `device.hello` on
+  open (presence sync) and registers the incoming/progress handlers only while
+  open — items sent while it is closed are dropped (as before). Pairing
+  confirmations are global (modal lives in App.vue).
 
 ## Encrypted Backups
 

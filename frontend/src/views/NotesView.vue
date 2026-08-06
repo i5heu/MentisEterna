@@ -23,7 +23,12 @@
                         :label="getHintLabel('show-shortcuts')"
                     />
                 </div>
-                <span class="app-title">MentisEterna</span>
+                <span
+                    class="app-title"
+                    title="Device Teleport"
+                    @click="openTeleportModal"
+                    >MentisEterna</span
+                >
                 <span class="ws-indicator" :class="{ connected: wsConnected, disconnected: !wsConnected }" :title="wsIndicatorTitle">
                     <span class="ws-dot"></span>
                     <span v-if="wsLatency != null" class="ws-latency">{{ wsLatency }} ms</span>
@@ -1663,6 +1668,7 @@ import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal
 import UploadModal from "../components/UploadModal.vue";
 import UploadProgress from "../components/UploadProgress.vue";
 import { useUploadQueue } from "../composables/useUploadQueue.js";
+import { openTeleportModal } from "../device/teleport.js";
 import {
     deleteAttachment,
 } from "../api.js";
@@ -5231,6 +5237,11 @@ function onPopstate() {
     font-weight: 700;
     color: var(--header-title-color);
     letter-spacing: 0.02em;
+    cursor: pointer;
+}
+
+.app-title:hover {
+    opacity: 0.8;
 }
 
 .ws-indicator {

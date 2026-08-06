@@ -52,6 +52,18 @@ export const pendingPairRequests = ref([]);
 //   targetName, targetId, error? } — null when idle.
 export const pairingState = ref(null);
 
+// Teleport modal visibility (opened from the app title; App.vue hosts the
+// modal). Module-level so any view can open it without prop drilling.
+export const teleportModalOpen = ref(false);
+
+export function openTeleportModal() {
+    teleportModalOpen.value = true;
+}
+
+export function closeTeleportModal() {
+    teleportModalOpen.value = false;
+}
+
 export function setIncomingHandler(fn) {
     incomingHandler = fn;
     if (fn && !sweepTimer) {

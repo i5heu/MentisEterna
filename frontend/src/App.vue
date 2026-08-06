@@ -20,16 +20,19 @@
         @navigate-options="currentView = 'options'"
     />
     <PairRequestModal />
+    <DeviceTeleportModal v-if="teleportModalOpen" />
 </template>
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import { fetchSession, startLiveUpdates, stopLiveUpdates } from "./api.js";
 import { useLiveStatus } from "./composables/useLiveStatus.js";
+import { teleportModalOpen } from "./device/teleport.js";
 import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
 import OptionsView from "./views/OptionsView.vue";
 import PairRequestModal from "./components/PairRequestModal.vue";
+import DeviceTeleportModal from "./components/DeviceTeleportModal.vue";
 
 const { wsConnected, wsLatency, wsLatencyDetail } = useLiveStatus();
 const token = ref("");
