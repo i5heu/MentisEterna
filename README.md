@@ -170,7 +170,7 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
       - [ ] Create Note from Voice Input
       - [ ] Create Note from Audio File
       - [ ] Live Transcription into Editor
-      - [ ] POST http endpoint to resive audio files (M4A) which will create a Note with the audio file and a transcription if possible. (secure with a secret token in the header)
+      - [x] POST http endpoint to resive audio files (M4A) which will create a Note with the audio file and a transcription if possible. (secure with a secret token in the header)
   - [x] UI General
     - [x] Better Keyboard Shortcuts
       - [x] Unified Keyboard Shortcuts System
