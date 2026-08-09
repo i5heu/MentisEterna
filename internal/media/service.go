@@ -27,6 +27,11 @@ type Service struct {
 	// EnqueueFunc is called after commit to schedule background repair/delete jobs.
 	// (pluginID, jobName, jsonPayload) -> (runID, error)
 	EnqueueFunc func(pluginID, jobName string, payload []byte) (int64, error)
+
+	// sttLocks serializes RunSTTForFile per file (key: int64 fileID -> *sync.Mutex),
+	// guaranteeing at most one in-flight STT transcription per file even across
+	// different job names (stt_file vs stt_to_note).
+	sttLocks sync.Map
 }
 
 // NewService creates a new media Service with defaults.

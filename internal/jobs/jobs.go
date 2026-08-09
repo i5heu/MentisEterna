@@ -336,6 +336,31 @@ func (m *Manager) Stop() {
 	}
 }
 
+// insertPlannedRun inserts a planned run for jobID with the given payload.
+// If an identical run (same job_id + payload) is already planned or running,
+// it returns that run's ID with duplicate=true instead of inserting.
+// The unique partial index idx_job_runs_active_unique makes this race-free.
+func (m *Manager) insertPlannedRun(jobID int64, payload *string) (runID int64, duplicate bool, err error) {
+	res, err := m.db.Exec(
+		`INSERT INTO job_runs (job_id, status, payload) VALUES (?, ?, ?)`,
+		jobID, StatusPlanned, payload,
+	)
+	if err == nil {
+		id, _ := res.LastInsertId()
+		return id, false, nil
+	}
+	// The unique index rejected the insert: an identical active run exists.
+	// `payload IS ?` matches both NULL (never a conflict, defensive) and TEXT payloads.
+	var existing int64
+	if lookupErr := m.db.QueryRow(
+		`SELECT id FROM job_runs WHERE job_id = ? AND payload IS ? AND status IN (?, ?) LIMIT 1`,
+		jobID, payload, StatusPlanned, StatusRunning,
+	).Scan(&existing); lookupErr == nil {
+		return existing, true, nil
+	}
+	return 0, false, err
+}
+
 // Enqueue creates a new planned job run and returns the run ID.
 // payload can be nil for cron-triggered jobs.
 func (m *Manager) Enqueue(pluginID, jobName string, payload []byte) (int64, error) {
@@ -354,15 +379,15 @@ func (m *Manager) Enqueue(pluginID, jobName string, payload []byte) (int64, erro
 		payloadStr = &s
 	}
 
-	res, err := m.db.Exec(
-		`INSERT INTO job_runs (job_id, status, payload) VALUES (?, ?, ?)`,
-		jobID, StatusPlanned, payloadStr,
-	)
+	id, duplicate, err := m.insertPlannedRun(jobID, payloadStr)
 	if err != nil {
 		return 0, fmt.Errorf("enqueue job run: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	meta := m.lookupDefinition(jobID)
+	if duplicate {
+		log.Printf("jobs: enqueue skipped run=%d %s (identical active run exists)", id, formatJobMeta(meta))
+		return id, nil
+	}
 	log.Printf("jobs: enqueued run=%d %s payload_bytes=%d payload_preview=%q", id, formatJobMeta(meta), len(payload), previewText(string(payload), 160))
 	m.emitEvent(RunEvent{Type: "enqueued", RunID: id, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
 	return id, nil
@@ -443,15 +468,15 @@ func (m *Manager) RetryRun(runID int64) (int64, error) {
 		return 0, fmt.Errorf("retry: run %d has status %q, can only retry errored or cancelled runs", runID, status)
 	}
 
-	res, err := m.db.Exec(
-		`INSERT INTO job_runs (job_id, status, payload) VALUES (?, ?, ?)`,
-		jobID, StatusPlanned, payload,
-	)
+	id, duplicate, err := m.insertPlannedRun(jobID, payload)
 	if err != nil {
 		return 0, fmt.Errorf("retry insert: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	meta := m.lookupDefinition(jobID)
+	if duplicate {
+		log.Printf("jobs: retry skipped run=%d (identical active run=%d exists)", runID, id)
+		return id, nil
+	}
 	log.Printf("jobs: retried run=%d as run=%d %s payload_bytes=%d payload_preview=%q", runID, id, formatJobMeta(meta), len(derefString(payload)), previewText(derefString(payload), 160))
 	m.emitEvent(RunEvent{Type: "retried", RunID: id, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
 	return id, nil

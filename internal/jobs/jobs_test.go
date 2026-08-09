@@ -54,6 +54,10 @@ func migrateTestDB(d *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_job_runs_status ON job_runs(status);
 		CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id);
 		CREATE INDEX IF NOT EXISTS idx_job_runs_created ON job_runs(created_at);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_job_runs_active_unique
+		ON job_runs(job_id, payload)
+		WHERE status IN ('planned','running');
 	`)
 	return err
 }
@@ -727,4 +731,165 @@ func TestListRuns(t *testing.T) {
 		t.Errorf("expected 1 pending, got %d", resp.PendingCount)
 	}
 	t.Logf("list: %d runs, %d pending", len(resp.Runs), resp.PendingCount)
+}
+
+// registerDedupeJob registers an ad-hoc job whose identity is irrelevant to
+// the dedupe tests (payload equality is what matters).
+func registerDedupeJob(t *testing.T, m *Manager) {
+	t.Helper()
+	if err := m.RegisterAdHoc("test", []CronJob{{
+		Name: "dedupe_job",
+		Task: func(db *sql.DB, payload []byte) (string, error) {
+			return "ok", nil
+		},
+	}}); err != nil {
+		t.Fatalf("register ad-hoc: %v", err)
+	}
+}
+
+func TestEnqueueDeduplicatesActiveRuns(t *testing.T) {
+	d := openTestDB(t)
+	m := NewManager(d, 1)
+	registerDedupeJob(t, m)
+
+	payload7 := []byte(`{"file_id":7}`)
+	firstID, err := m.Enqueue("test", "dedupe_job", payload7)
+	if err != nil {
+		t.Fatalf("enqueue 1: %v", err)
+	}
+	secondID, err := m.Enqueue("test", "dedupe_job", payload7)
+	if err != nil {
+		t.Fatalf("enqueue 2: %v", err)
+	}
+	if secondID != firstID {
+		t.Errorf("expected duplicate enqueue to return the same run ID (%d), got %d", firstID, secondID)
+	}
+	var count int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs WHERE job_id = 1 AND payload = ?`, string(payload7)).Scan(&count); err != nil {
+		t.Fatalf("count payload 7: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 row for payload %s, got %d", payload7, count)
+	}
+
+	// Different payload → distinct run.
+	payload8 := []byte(`{"file_id":8}`)
+	thirdID, err := m.Enqueue("test", "dedupe_job", payload8)
+	if err != nil {
+		t.Fatalf("enqueue 3: %v", err)
+	}
+	if thirdID == firstID {
+		t.Error("expected different payload to get a different run ID")
+	}
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs WHERE job_id = 1 AND payload = ?`, string(payload7)).Scan(&count); err != nil {
+		t.Fatalf("count payload 7 after 8: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected still 1 row for payload %s, got %d", payload7, count)
+	}
+	var count8 int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs WHERE job_id = 1 AND payload = ?`, string(payload8)).Scan(&count8); err != nil {
+		t.Fatalf("count payload 8: %v", err)
+	}
+	if count8 != 1 {
+		t.Errorf("expected 1 row for payload %s, got %d", payload8, count8)
+	}
+
+	// NULL payloads stay distinct (SQLite unique indexes treat NULLs as distinct).
+	nilA, err := m.Enqueue("test", "dedupe_job", nil)
+	if err != nil {
+		t.Fatalf("enqueue nil 1: %v", err)
+	}
+	nilB, err := m.Enqueue("test", "dedupe_job", nil)
+	if err != nil {
+		t.Fatalf("enqueue nil 2: %v", err)
+	}
+	if nilA == nilB {
+		t.Error("expected two distinct rows for nil payloads")
+	}
+	var nilCount int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs WHERE job_id = 1 AND payload IS NULL`).Scan(&nilCount); err != nil {
+		t.Fatalf("count nil payloads: %v", err)
+	}
+	if nilCount != 2 {
+		t.Errorf("expected 2 nil-payload rows, got %d", nilCount)
+	}
+}
+
+func TestEnqueueConcurrentDedupe(t *testing.T) {
+	d := openTestDB(t)
+	m := NewManager(d, 1)
+	registerDedupeJob(t, m)
+
+	payload := []byte(`{"file_id":7}`)
+	const n = 8
+	ids := make(chan int64, n)
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id, err := m.Enqueue("test", "dedupe_job", payload)
+			if err != nil {
+				t.Errorf("concurrent enqueue: %v", err)
+				return
+			}
+			ids <- id
+		}()
+	}
+	wg.Wait()
+	close(ids)
+
+	seen := make(map[int64]bool)
+	for id := range ids {
+		seen[id] = true
+	}
+	if len(seen) != 1 {
+		t.Errorf("expected all %d concurrent enqueues to share one run ID, got %d distinct: %v", n, len(seen), seen)
+	}
+
+	var count int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs WHERE job_id = 1 AND payload = ?`, string(payload)).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 row for payload %s, got %d", payload, count)
+	}
+}
+
+func TestRetryRunReturnsActiveDuplicate(t *testing.T) {
+	d := openTestDB(t)
+	m := NewManager(d, 1)
+	registerDedupeJob(t, m)
+
+	// Errored run with a payload — the one we retry.
+	res, err := d.Exec(`INSERT INTO job_runs (job_id, status, payload, error) VALUES (1, 'errored', ?, 'test error')`, `{"file_id":7}`)
+	if err != nil {
+		t.Fatalf("insert errored run: %v", err)
+	}
+	erroredID, _ := res.LastInsertId()
+
+	// A planned run with the same payload already exists.
+	plannedRes, err := d.Exec(`INSERT INTO job_runs (job_id, status, payload) VALUES (1, 'planned', ?)`, `{"file_id":7}`)
+	if err != nil {
+		t.Fatalf("insert planned run: %v", err)
+	}
+	plannedID, _ := plannedRes.LastInsertId()
+
+	// Retrying the errored run must be a no-op returning the active duplicate.
+	newID, err := m.RetryRun(erroredID)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if newID != plannedID {
+		t.Errorf("expected retry to return active duplicate run %d, got %d", plannedID, newID)
+	}
+
+	var count int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected exactly 2 rows (errored + planned), got %d", count)
+	}
 }

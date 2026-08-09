@@ -1,8 +1,12 @@
 package db
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
+
+	// Use standard sqlite3 for the pre-migration fixture (no VSS needed).
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func openTestDB(t *testing.T) *DB {
@@ -273,5 +277,116 @@ func TestFilesOCRErrorColumn(t *testing.T) {
 	}
 	if errorMsg != "OCR failed: timeout" {
 		t.Errorf("expected error message, got %q", errorMsg)
+	}
+}
+
+// TestJobDedupeMigration verifies that opening a pre-migration database
+// collapses duplicate active job runs (same job_id + payload) to the oldest
+// row and installs the unique partial index.
+func TestJobDedupeMigration(t *testing.T) {
+	// Build a pre-migration database with duplicate active runs (old schema,
+	// no unique index).
+	prePath := filepath.Join(t.TempDir(), "pre.db")
+	pre, err := sql.Open("sqlite3", prePath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open pre db: %v", err)
+	}
+	oldSchema := `
+		CREATE TABLE job_definitions (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			plugin_id   TEXT    NOT NULL,
+			name        TEXT    NOT NULL,
+			schedule    TEXT    NOT NULL,
+			enabled     INTEGER NOT NULL DEFAULT 1,
+			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(plugin_id, name)
+		);
+		CREATE TABLE job_runs (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id      INTEGER NOT NULL REFERENCES job_definitions(id) ON DELETE CASCADE,
+			status      TEXT    NOT NULL DEFAULT 'planned',
+			payload     TEXT,
+			started_at  DATETIME,
+			finished_at DATETIME,
+			error       TEXT,
+			result      TEXT,
+			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+	`
+	if _, err := pre.Exec(oldSchema); err != nil {
+		pre.Close()
+		t.Fatalf("create old schema: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO job_definitions (plugin_id, name, schedule) VALUES ('test', 'dedupe_job', '')`); err != nil {
+		pre.Close()
+		t.Fatalf("insert definition: %v", err)
+	}
+	// 3 planned rows with payload A (ids 1-3), 2 running rows with payload B
+	// (ids 4-5), 1 planned NULL-payload row (id 6), 1 done row with payload A
+	// (id 7).
+	for i := range 3 {
+		if _, err := pre.Exec(`INSERT INTO job_runs (job_id, status, payload) VALUES (1, 'planned', 'A')`); err != nil {
+			pre.Close()
+			t.Fatalf("insert planned A %d: %v", i, err)
+		}
+	}
+	for i := range 2 {
+		if _, err := pre.Exec(`INSERT INTO job_runs (job_id, status, payload) VALUES (1, 'running', 'B')`); err != nil {
+			pre.Close()
+			t.Fatalf("insert running B %d: %v", i, err)
+		}
+	}
+	if _, err := pre.Exec(`INSERT INTO job_runs (job_id, status) VALUES (1, 'planned')`); err != nil {
+		pre.Close()
+		t.Fatalf("insert NULL-payload row: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO job_runs (job_id, status, payload) VALUES (1, 'done', 'A')`); err != nil {
+		pre.Close()
+		t.Fatalf("insert done row: %v", err)
+	}
+	pre.Close()
+
+	// db.Open runs the migration (dedupe cleanup + unique index) on open.
+	d, err := Open(prePath)
+	if err != nil {
+		t.Fatalf("open (migrate): %v", err)
+	}
+	defer d.Close()
+
+	// Payload A: exactly one active row, the MIN(id) of the originals (id 1).
+	var count, id int64
+	if err := d.QueryRow(`SELECT COUNT(*), MIN(id) FROM job_runs WHERE status IN ('planned','running') AND payload = 'A'`).Scan(&count, &id); err != nil {
+		t.Fatalf("query A: %v", err)
+	}
+	if count != 1 || id != 1 {
+		t.Errorf("payload A: expected 1 active row with id 1, got count=%d id=%d", count, id)
+	}
+	// Payload B: exactly one active row, the MIN(id) of the originals (id 4).
+	if err := d.QueryRow(`SELECT COUNT(*), MIN(id) FROM job_runs WHERE status IN ('planned','running') AND payload = 'B'`).Scan(&count, &id); err != nil {
+		t.Fatalf("query B: %v", err)
+	}
+	if count != 1 || id != 4 {
+		t.Errorf("payload B: expected 1 active row with id 4, got count=%d id=%d", count, id)
+	}
+	// NULL-payload planned row survives untouched.
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs WHERE status = 'planned' AND payload IS NULL`).Scan(&count); err != nil {
+		t.Fatalf("query NULL: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 NULL-payload planned row, got %d", count)
+	}
+	// Done row with payload A survives (outside the index scope).
+	if err := d.QueryRow(`SELECT COUNT(*) FROM job_runs WHERE status = 'done' AND payload = 'A'`).Scan(&count); err != nil {
+		t.Fatalf("query done: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 done row with payload A, got %d", count)
+	}
+	// Unique partial index exists.
+	if err := d.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_job_runs_active_unique'`).Scan(&count); err != nil {
+		t.Fatalf("query index: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected unique index idx_job_runs_active_unique, got %d", count)
 	}
 }

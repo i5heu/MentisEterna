@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/i5heu/MentisEterna/internal/llm"
@@ -44,6 +45,15 @@ func IsSTTable(mimeType string) bool {
 // RunSTTForFile runs STT on a file. It decrypts the file, sends the plaintext
 // audio to the STT model, and stores the result in files_stt.
 func (s *Service) RunSTTForFile(ctx context.Context, fileID int64, sttClient llm.STTer) (*STTResult, error) {
+	// Serialize STT per file: at most one in-flight transcription per file,
+	// regardless of which job name enqueued it. LoadOrStore is race-safe:
+	// both racers receive the same stored mutex. Entries live for the
+	// process lifetime (bounded by file count).
+	muIface, _ := s.sttLocks.LoadOrStore(fileID, &sync.Mutex{})
+	mu := muIface.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Load file record to check MIME type and get keys.
 	rec, err := s.loadFileRecord(fileID)
 	if err != nil {

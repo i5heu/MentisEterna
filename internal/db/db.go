@@ -257,6 +257,29 @@ func (d *DB) ensureJobTables() error {
 		CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id);
 		CREATE INDEX IF NOT EXISTS idx_job_runs_created ON job_runs(created_at);
 	`)
+	if err != nil {
+		return err
+	}
+
+	// Dedupe cleanup: collapse pre-existing duplicate active runs (same job +
+	// payload) before installing the unique partial index below. Keeps the
+	// oldest row per (job_id, payload); a running row is the in-progress one
+	// and the newer planned duplicate is the waste. Both statements are
+	// idempotent. SQLite treats NULLs as distinct in unique indexes, so
+	// multiple active rows with NULL payload (cron-scheduled jobs) stay legal.
+	_, err = d.Exec(`
+		DELETE FROM job_runs
+		WHERE status IN ('planned','running') AND payload IS NOT NULL
+		  AND id NOT IN (
+			SELECT MIN(id) FROM job_runs
+			WHERE status IN ('planned','running') AND payload IS NOT NULL
+			GROUP BY job_id, payload
+		  );
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_job_runs_active_unique
+		ON job_runs(job_id, payload)
+		WHERE status IN ('planned','running');
+	`)
 	return err
 }
 
