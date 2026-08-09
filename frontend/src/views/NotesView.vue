@@ -407,7 +407,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div v-if="selected.id" class="tag-row">
+                        <div v-if="selected.id" class="tag-row auto-tags">
                             <span class="parent-label">Auto Tags:</span>
                             <div class="tag-list auto-tag-list">
                                 <span
@@ -5204,8 +5204,9 @@ function onPopstate() {
 
 /* Sidebar */
 .sidebar {
-    width: 260px;
-    min-width: 220px;
+    width: 18em;
+    min-width: min(18em, 100%);
+    flex-shrink: 0;
     background: var(--panel-bg);
     border-right: 1px solid var(--border-color);
     display: flex;
@@ -5627,12 +5628,13 @@ function onPopstate() {
        reassign the area inside the grid-template-areas map. Columns are:
        left (mobile back button), middle (title + metadata), right (actions). */
     grid-template-areas:
-        "back title actions"
-        ".    type   actions"
-        ".    tags   actions"
-        ".    auto   actions"
-        ".    parent actions"
-        ".    bread  actions";
+        "back  bread actions"
+        "title title title"
+        "type type type"
+        "tags tags tags"
+        "tagsauto tagsauto tagsauto"
+        "auto auto auto"
+        "parent parent parent";
     align-items: start;
     min-height: 7.4em;
     gap: 0.75rem;
@@ -5663,6 +5665,9 @@ function onPopstate() {
 }
 .tag-row {
     grid-area: tags;
+}
+.tag-row.auto-tags {
+    grid-area: tagsauto;
 }
 .parent-row {
     grid-area: parent;
@@ -6848,6 +6853,7 @@ function onPopstate() {
             "actions actions actions"
             "type type type"
             "tags tags tags"
+            "tagsauto tagsauto tagsauto"
             "auto auto auto"
             "parent parent parent";
         align-items: start;
