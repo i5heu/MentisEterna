@@ -810,20 +810,20 @@ func (s *Server) handleReindexSTT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.Query(`
+	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT f.id, COALESCE(fstt.stt_text, '')
 		FROM files f
 		LEFT JOIN files_stt fstt ON fstt.file_id = f.id
 		LEFT JOIN vss_files_stt v ON v.rowid = f.id
 		WHERE f.deleted_at IS NULL
-		  AND f.mime_type IN ('audio/mpeg','audio/mp3','audio/wav','audio/ogg','audio/flac','audio/aac','audio/wma','audio/m4a')
+		  AND f.mime_type IN (%s)
 		  AND (
 		    fstt.file_id IS NULL
 		    OR fstt.error IS NOT NULL
 		    OR (fstt.stt_text != '' AND v.rowid IS NULL)
 		  )
 		ORDER BY f.id ASC
-	`)
+	`, media.STTMIMETypeList()))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files: %v", err)})
 		return
@@ -917,13 +917,13 @@ func (s *Server) handleReindexAllSTT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.Query(`
+	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT f.id
 		FROM files f
 		WHERE f.deleted_at IS NULL
-		  AND f.mime_type IN ('audio/mpeg','audio/mp3','audio/wav','audio/ogg','audio/flac','audio/aac','audio/wma','audio/m4a')
+		  AND f.mime_type IN (%s)
 		ORDER BY f.id ASC
-	`)
+	`, media.STTMIMETypeList()))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("query files: %v", err)})
 		return

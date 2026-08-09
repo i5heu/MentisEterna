@@ -22,24 +22,42 @@ type STTResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// audioMIMETypes is the set of MIME types for which STT is attempted.
-var audioMIMETypes = map[string]bool{
-	"audio/mpeg":  true,
-	"audio/mp3":   true,
-	"audio/wav":   true,
-	"audio/wave":  true,
-	"audio/x-wav": true,
-	"audio/ogg":   true,
-	"audio/mp4":   true,
-	"audio/m4a":   true,
-	"audio/webm":  true,
-	"audio/flac":  true,
-	"audio/aac":   true,
+// audioMIMETypeList is the canonical, ordered list of MIME types for which STT
+// is attempted. audioMIMETypes derives from it, and STTMIMETypeList() renders
+// it as a SQL IN-list so maintenance queries (e.g. the reindex handlers) can
+// never drift from the set of files STT actually runs on.
+var audioMIMETypeList = []string{
+	"audio/mpeg",
+	"audio/mp3",
+	"audio/wav",
+	"audio/wave",
+	"audio/x-wav",
+	"audio/ogg",
+	"audio/mp4",
+	"audio/m4a",
+	"audio/webm",
+	"audio/flac",
+	"audio/aac",
 }
+
+// audioMIMETypes is the set of MIME types for which STT is attempted.
+var audioMIMETypes = func() map[string]bool {
+	m := make(map[string]bool, len(audioMIMETypeList))
+	for _, t := range audioMIMETypeList {
+		m[t] = true
+	}
+	return m
+}()
 
 // IsSTTable returns true if the given MIME type is an audio file that can be transcribed.
 func IsSTTable(mimeType string) bool {
 	return audioMIMETypes[mimeType]
+}
+
+// STTMIMETypeList returns the MIME types STT is attempted for as a
+// single-quoted, comma-separated SQL IN-list for `WHERE mime_type IN (...)`.
+func STTMIMETypeList() string {
+	return "'" + strings.Join(audioMIMETypeList, "','") + "'"
 }
 
 // RunSTTForFile runs STT on a file. It decrypts the file, sends the plaintext
