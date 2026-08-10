@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/i5heu/MentisEterna/internal/config"
 )
 
 type backendLeaseClient interface {
@@ -26,8 +29,9 @@ func BeginBackendUse(client any) func() {
 }
 
 type backendUseRegistry struct {
-	mu     sync.Mutex
-	counts map[string]int
+	mu      sync.Mutex
+	counts  map[string]int
+	pending map[string]*time.Timer // scheduled idle-stops, keyed like counts
 }
 
 var sharedBackendUseRegistry backendUseRegistry
@@ -60,8 +64,15 @@ func (r *backendUseRegistry) begin(baseURL, model string, httpClient *http.Clien
 	r.mu.Lock()
 	if r.counts == nil {
 		r.counts = make(map[string]int)
+		r.pending = make(map[string]*time.Timer)
 	}
 	r.counts[key]++
+	// A new request for this model cancels any scheduled idle-stop so the
+	// backend stays loaded (avoiding an expensive model reload).
+	if t := r.pending[key]; t != nil {
+		t.Stop()
+		delete(r.pending, key)
+	}
 	r.mu.Unlock()
 
 	var once sync.Once
@@ -76,15 +87,42 @@ func (r *backendUseRegistry) begin(baseURL, model string, httpClient *http.Clien
 				return
 			case count == 1:
 				delete(r.counts, key)
-				r.mu.Unlock()
 			default:
 				r.mu.Unlock()
 				return
 			}
 
-			if err := shutdownBackend(baseURL, model, httpClient); err != nil {
-				log.Printf("llm: shutdown backend for model %q: %v", model, err)
+			stop := func() {
+				if err := shutdownBackend(baseURL, model, httpClient); err != nil {
+					log.Printf("llm: shutdown backend for model %q: %v", model, err)
+					return
+				}
+				log.Printf("llm: stopped backend model %q (idle)", model)
 			}
+
+			if !config.Get().LLM.StopBackendOnIdle {
+				r.mu.Unlock()
+				return
+			}
+			delay := config.Get().LLM.StopDelayMS
+			if delay <= 0 {
+				r.mu.Unlock()
+				stop()
+				return
+			}
+			r.pending[key] = time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
+				// Re-check under the lock: a begin() may have cancelled this
+				// stop in the meantime.
+				r.mu.Lock()
+				if r.pending[key] == nil {
+					r.mu.Unlock()
+					return
+				}
+				delete(r.pending, key)
+				r.mu.Unlock()
+				stop()
+			})
+			r.mu.Unlock()
 		})
 	}
 }
@@ -99,7 +137,11 @@ func shutdownBackend(baseURL, model string, httpClient *http.Client) error {
 		return fmt.Errorf("marshal shutdown request: %w", err)
 	}
 
-	url := strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/backend/shutdown"
+	endpoint := strings.TrimRight(strings.TrimSpace(config.Get().LLM.BackendStopEndpoint), "/")
+	if endpoint == "" {
+		endpoint = "/backend/shutdown"
+	}
+	url := strings.TrimRight(strings.TrimSpace(baseURL), "/") + endpoint
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("create shutdown request: %w", err)
@@ -116,6 +158,13 @@ func shutdownBackend(baseURL, model string, httpClient *http.Client) error {
 		return fmt.Errorf("send shutdown request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// LocalAI returns 404 for an already-unloaded model (e.g. swapped out by a
+	// different-model request); that is not an error.
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)

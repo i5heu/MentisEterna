@@ -53,6 +53,22 @@ embedding_max_chars = 16384
 # Set true to skip TLS verification for the LLM backend (self-signed certs).
 tls_insecure = false
 
+# Max concurrent requests to the LLM backend per host (scheme://host).
+# Set 1 when the inference machine can serve only a single model at a time. 0 = unlimited.
+max_concurrency = 1
+# Minimum gap in ms between the end of one request and the start of the next (per host);
+# gives the backend time to switch models. 0 = no gap.
+request_cooldown_ms = 1000
+# Retries AFTER the first attempt (3 = up to 4 total calls) on connection errors and HTTP
+# 429/5xx, with retry_delay_ms between attempts. 0 = no retry.
+retry_attempts = 3
+retry_delay_ms = 3000
+# Stop the backend model when idle. stop_delay_ms is the grace window: a new request for the
+# SAME model within it cancels the stop so the model stays loaded. 0 = stop immediately on idle.
+stop_backend_on_idle = true
+backend_stop_endpoint = "/backend/shutdown"
+stop_delay_ms = 5000
+
 
 # Single-purpose OCR/STT models, taking precedence over the tier model.
 # Leave empty to disable the dedicated override.

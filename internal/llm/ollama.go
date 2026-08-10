@@ -80,16 +80,18 @@ type SubTaskItem struct {
 
 // newLLMHTTPClient returns an *http.Client configured for LLM backend requests.
 // When [llm] tls_insecure is true, TLS certificate verification is skipped —
-// useful for self-signed certificates on internal LAN addresses.
+// useful for self-signed certificates on internal LAN addresses. All requests
+// pass through throttledTransport, which applies the [llm] concurrency cap,
+// cooldown gap, and retry settings; with those knobs at their defaults it is a
+// pass-through.
 func newLLMHTTPClient() *http.Client {
+	base := http.RoundTripper(http.DefaultTransport)
 	if config.Get().LLM.TLSInsecure {
-		return &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		base = tr
 	}
-	return &http.Client{}
+	return &http.Client{Transport: &throttledTransport{base: base}}
 }
 
 // llmBaseURL returns the LocalAI base URL, configurable via config.toml

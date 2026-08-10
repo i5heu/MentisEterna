@@ -44,6 +44,13 @@ type LLMConfig struct {
 	TLSInsecure       bool                     `toml:"tls_insecure"`          // was LOCALAI_TLS_INSECURE
 	OCRDedicatedModel string                   `toml:"ocr_dedicated_model"`   // was LLM_OCR_MODEL
 	STTDedicatedModel string                   `toml:"stt_dedicated_model"`   // was LLM_STT_MODEL
+	MaxConcurrency    int                      `toml:"max_concurrency"`       // 0 = unlimited
+	RequestCooldownMS int                      `toml:"request_cooldown_ms"`   // 0 = no gap
+	RetryAttempts     int                      `toml:"retry_attempts"`        // retries AFTER the first attempt; 0 = no retry
+	RetryDelayMS      int                      `toml:"retry_delay_ms"`        // 0 = retry immediately
+	StopBackendOnIdle bool                     `toml:"stop_backend_on_idle"`  // default true
+	BackendStopEndpoint string                 `toml:"backend_stop_endpoint"` // default "/backend/shutdown"
+	StopDelayMS       int                      `toml:"stop_delay_ms"`         // idle-stop grace window; default 5000
 	Tiers             map[string]TierConfig    `toml:"tiers"`                 // was LLM_TIER_<NAME>_MODEL
 	Features          map[string]FeatureConfig `toml:"features"`              // was LLM_FEATURE_<NAME>_TIER
 }
@@ -109,6 +116,9 @@ func DefaultConfig() Config {
 			EmbeddingMaxChars: 16 * 1024,
 			OCRDedicatedModel: "GLM-OCR-GGUF",
 			STTDedicatedModel: "vibevoice-cpp-asr",
+			StopBackendOnIdle: true,
+			BackendStopEndpoint: "/backend/shutdown",
+			StopDelayMS:        5000,
 			Tiers: map[string]TierConfig{
 				"smart":  {Model: "Qwen3.6-27B-MTP-GGUF"},
 				"medium": {Model: "gemma-4-e2b-it-qat-q4_0"},
