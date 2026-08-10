@@ -34,10 +34,23 @@
                         >{{ statusIcon(run.status) }}</span
                     >
                     <div class="job-info">
-                        <span class="job-name"
-                            >{{ run.plugin_id ? run.plugin_id + "/" : ""
-                            }}{{ run.job_name }}</span
-                        >
+                        <div class="job-title-row">
+                            <span class="job-name"
+                                >{{ run.plugin_id ? run.plugin_id + "/" : ""
+                                }}{{ run.job_name }}</span
+                            >
+                            <span
+                                class="job-attempt-count"
+                                title="Attempt number (retries + 1)"
+                                >#{{ run.retry_count + 1 }}</span
+                            >
+                            <span
+                                v-if="run.retry_count > 0"
+                                class="job-retry-count"
+                                title="Retries so far"
+                                >↻{{ run.retry_count }}</span
+                            >
+                        </div>
                         <span class="job-time">{{
                             fmtTime(run.created_at)
                         }}</span>
@@ -324,8 +337,36 @@ onUnmounted(() => {
     min-width: 0;
 }
 
+.job-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.job-attempt-count {
+    flex-shrink: 0;
+    font-size: 11px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: var(--tag-bg-color);
+    color: var(--html-bg);
+}
+
+.job-retry-count {
+    flex-shrink: 0;
+    font-size: 11px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: var(--raised-bg);
+    color: var(--font-color-secondary);
+}
+
 .job-name {
     display: block;
+    min-width: 0;
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;

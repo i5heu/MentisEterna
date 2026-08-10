@@ -40,6 +40,7 @@ type Run struct {
 	PluginID   string          `json:"plugin_id"`
 	JobName    string          `json:"job_name"`
 	Status     string          `json:"status"`
+	RetryCount int             `json:"retry_count"`
 	Payload    json.RawMessage `json:"payload,omitempty"`
 	StartedAt  *time.Time      `json:"started_at,omitempty"`
 	FinishedAt *time.Time      `json:"finished_at,omitempty"`
@@ -336,14 +337,14 @@ func (m *Manager) Stop() {
 	}
 }
 
-// insertPlannedRun inserts a planned run for jobID with the given payload.
-// If an identical run (same job_id + payload) is already planned or running,
-// it returns that run's ID with duplicate=true instead of inserting.
+// insertPlannedRun inserts a planned run for jobID with the given payload and
+// retry count. If an identical run (same job_id + payload) is already planned
+// or running, it returns that run's ID with duplicate=true instead of inserting.
 // The unique partial index idx_job_runs_active_unique makes this race-free.
-func (m *Manager) insertPlannedRun(jobID int64, payload *string) (runID int64, duplicate bool, err error) {
+func (m *Manager) insertPlannedRun(jobID int64, payload *string, retryCount int) (runID int64, duplicate bool, err error) {
 	res, err := m.db.Exec(
-		`INSERT INTO job_runs (job_id, status, payload) VALUES (?, ?, ?)`,
-		jobID, StatusPlanned, payload,
+		`INSERT INTO job_runs (job_id, status, payload, retry_count) VALUES (?, ?, ?, ?)`,
+		jobID, StatusPlanned, payload, retryCount,
 	)
 	if err == nil {
 		id, _ := res.LastInsertId()
@@ -379,7 +380,7 @@ func (m *Manager) Enqueue(pluginID, jobName string, payload []byte) (int64, erro
 		payloadStr = &s
 	}
 
-	id, duplicate, err := m.insertPlannedRun(jobID, payloadStr)
+	id, duplicate, err := m.insertPlannedRun(jobID, payloadStr, 0)
 	if err != nil {
 		return 0, fmt.Errorf("enqueue job run: %w", err)
 	}
@@ -400,7 +401,7 @@ func (m *Manager) ListRuns(limit int) (*ListResponse, error) {
 	}
 
 	rows, err := m.db.Query(
-		`SELECT jr.id, jd.plugin_id, jd.name, jr.status, jr.payload,
+		`SELECT jr.id, jd.plugin_id, jd.name, jr.status, jr.retry_count, jr.payload,
 		        jr.started_at, jr.finished_at, jr.error, jr.result, jr.created_at
 		 FROM job_runs jr
 		 JOIN job_definitions jd ON jd.id = jr.job_id
@@ -417,7 +418,7 @@ func (m *Manager) ListRuns(limit int) (*ListResponse, error) {
 		var r Run
 		var pluginID, jobName, status string
 		var startedAt, finishedAt, errStr, resultStr, payloadStr *string
-		if err := rows.Scan(&r.ID, &pluginID, &jobName, &status, &payloadStr,
+		if err := rows.Scan(&r.ID, &pluginID, &jobName, &status, &r.RetryCount, &payloadStr,
 			&startedAt, &finishedAt, &errStr, &resultStr, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan job run: %w", err)
 		}
@@ -453,14 +454,16 @@ func (m *Manager) ListRuns(limit int) (*ListResponse, error) {
 	return &ListResponse{Runs: runs, PendingCount: pendingCount}, nil
 }
 
-// RetryRun re-queues an errored or cancelled run by inserting a new planned row.
+// RetryRun re-queues an errored or cancelled run by inserting a new planned row
+// carrying one more retry than the run it replaces.
 func (m *Manager) RetryRun(runID int64) (int64, error) {
 	var jobID int64
 	var status string
 	var payload *string
+	var retryCount int
 	err := m.db.QueryRow(
-		`SELECT job_id, status, payload FROM job_runs WHERE id = ?`, runID,
-	).Scan(&jobID, &status, &payload)
+		`SELECT job_id, status, payload, retry_count FROM job_runs WHERE id = ?`, runID,
+	).Scan(&jobID, &status, &payload, &retryCount)
 	if err != nil {
 		return 0, fmt.Errorf("retry: %w", err)
 	}
@@ -468,7 +471,7 @@ func (m *Manager) RetryRun(runID int64) (int64, error) {
 		return 0, fmt.Errorf("retry: run %d has status %q, can only retry errored or cancelled runs", runID, status)
 	}
 
-	id, duplicate, err := m.insertPlannedRun(jobID, payload)
+	id, duplicate, err := m.insertPlannedRun(jobID, payload, retryCount+1)
 	if err != nil {
 		return 0, fmt.Errorf("retry insert: %w", err)
 	}

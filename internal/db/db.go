@@ -246,6 +246,7 @@ func (d *DB) ensureJobTables() error {
 			job_id      INTEGER NOT NULL REFERENCES job_definitions(id) ON DELETE CASCADE,
 			status      TEXT    NOT NULL DEFAULT 'planned',
 			payload     TEXT,
+			retry_count INTEGER NOT NULL DEFAULT 0,
 			started_at  DATETIME,
 			finished_at DATETIME,
 			error       TEXT,
@@ -280,7 +281,21 @@ func (d *DB) ensureJobTables() error {
 		ON job_runs(job_id, payload)
 		WHERE status IN ('planned','running');
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migrate pre-existing job_runs tables that lack retry_count.
+	cols, cerr := d.tableColumns("job_runs")
+	if cerr == nil {
+		if !cols["retry_count"] {
+			if _, err := d.Exec(`ALTER TABLE job_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (d *DB) migrateNotes() error {

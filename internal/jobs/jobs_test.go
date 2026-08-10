@@ -45,6 +45,7 @@ func migrateTestDB(d *sql.DB) error {
 			job_id      INTEGER NOT NULL REFERENCES job_definitions(id) ON DELETE CASCADE,
 			status      TEXT    NOT NULL DEFAULT 'planned',
 			payload     TEXT,
+			retry_count INTEGER NOT NULL DEFAULT 0,
 			started_at  DATETIME,
 			finished_at DATETIME,
 			error       TEXT,
@@ -277,8 +278,8 @@ func TestRetry(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// Insert an errored run.
-	res, err := d.Exec(`INSERT INTO job_runs (job_id, status, error) VALUES (1, 'errored', 'test error')`)
+	// Insert an errored run that is itself the result of 2 prior retries.
+	res, err := d.Exec(`INSERT INTO job_runs (job_id, status, error, retry_count) VALUES (1, 'errored', 'test error', 2)`)
 	if err != nil {
 		t.Fatalf("insert errored run: %v", err)
 	}
@@ -296,14 +297,27 @@ func TestRetry(t *testing.T) {
 
 	var status string
 	var pld *string
-	err = d.QueryRow(`SELECT status, payload FROM job_runs WHERE id = ?`, newID).Scan(&status, &pld)
+	var retryCount int
+	err = d.QueryRow(`SELECT status, payload, retry_count FROM job_runs WHERE id = ?`, newID).Scan(&status, &pld, &retryCount)
 	if err != nil {
 		t.Fatalf("query new run: %v", err)
 	}
 	if status != StatusPlanned {
 		t.Errorf("expected status planned, got %q", status)
 	}
-	t.Logf("retry: old=%d new=%d status=%s", oldID, newID, status)
+	if retryCount != 3 {
+		t.Errorf("expected retry_count 3 (prior retries + 1), got %d", retryCount)
+	}
+
+	// The original run keeps its own count.
+	var oldRetry int
+	if err := d.QueryRow(`SELECT retry_count FROM job_runs WHERE id = ?`, oldID).Scan(&oldRetry); err != nil {
+		t.Fatalf("query old run: %v", err)
+	}
+	if oldRetry != 2 {
+		t.Errorf("original run retry_count = %d, want 2", oldRetry)
+	}
+	t.Logf("retry: old=%d new=%d status=%s retry_count=%d", oldID, newID, status, retryCount)
 }
 
 func TestCancel(t *testing.T) {
