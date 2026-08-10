@@ -165,7 +165,7 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
     - [ ] Brainstorm and Research mode
     - [ ] Fast note creation with LLM parent selection
   - [ ] New Input Methods
-    - [ ] Create Note from hand written note image via /ingest/handwritten endpoint 
+    - [x] Create Note from hand written note image via /ingest/handwritten endpoint 
     - [ ] Quick Voice Input
       - [ ] Create Note from Voice Input
       - [ ] Create Note from Audio File

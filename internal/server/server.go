@@ -242,6 +242,7 @@ func (s *Server) Start(ctx context.Context) error {
 			{Name: "ocr_file", Task: s.ocrFileTask},
 			{Name: "stt_file", Task: s.sttFileTask},
 			{Name: "stt_to_note", Task: s.ingestSTTToNoteTask},
+			{Name: "ocr_to_note", Task: s.ingestOCRToNoteTask},
 		}); err != nil {
 			log.Fatalf("Failed to register media ad-hoc jobs: %v", err)
 		}
@@ -440,6 +441,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/ingest/audio", s.handleAudioIngest)
 	mux.HandleFunc("/ingest/audio/{parent_id}", s.handleAudioIngest)
 	mux.HandleFunc("/ingest/audio/{parent_id}/{flag}", s.handleAudioIngest)
+
+	mux.HandleFunc("/ingest/handwritten", s.handleHandwrittenIngest)
+	mux.HandleFunc("/ingest/handwritten/{parent_id}", s.handleHandwrittenIngest)
+	mux.HandleFunc("/ingest/handwritten/{parent_id}/{flag}", s.handleHandwrittenIngest)
 
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 
