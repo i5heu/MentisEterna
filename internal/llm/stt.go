@@ -16,19 +16,26 @@ type STTer interface {
 	RunSTT(audioData []byte, filename string) (string, error)
 }
 
-// STTClient communicates with a LocalAI instance to perform transcription using
-// a whisper model via the OpenAI-compatible /v1/audio/transcriptions endpoint.
+// STTClient communicates with an OpenAI-compatible /v1/audio/transcriptions
+// endpoint — either a local LocalAI instance or an external hosted provider —
+// to transcribe audio with a whisper-class model.
 type STTClient struct {
 	BaseURL string
 	Model   string
-	http    *http.Client
+	// APIKey is optional. When set, requests carry an Authorization: Bearer
+	// header for external hosted providers (OpenAI, Groq, ...). Empty means no
+	// auth header, as local unauthenticated backends need.
+	APIKey string
+	http   *http.Client
 }
 
-// NewSTTClient creates an STT client for the given base URL and model.
-func NewSTTClient(baseURL, model string) *STTClient {
+// NewSTTClient creates an STT client for the given base URL and model. apiKey
+// may be empty for unauthenticated (local) backends.
+func NewSTTClient(baseURL, model, apiKey string) *STTClient {
 	return &STTClient{
 		BaseURL: baseURL,
 		Model:   model,
+		APIKey:  apiKey,
 		http:    newLLMHTTPClient(),
 	}
 }
@@ -72,6 +79,9 @@ func (c *STTClient) RunSTT(audioData []byte, filename string) (string, error) {
 		return "", fmt.Errorf("create STT request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

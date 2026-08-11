@@ -65,6 +65,8 @@ retry_attempts = 3
 retry_delay_ms = 3000
 # Stop the backend model when idle. stop_delay_ms is the grace window: a new request for the
 # SAME model within it cancels the stop so the model stays loaded. 0 = stop immediately on idle.
+# The STT model follows the same rules, with one guarantee: the model is NEVER stopped between
+# retry attempts of a transcription — the idle-stop fires only after the final attempt finishes.
 stop_backend_on_idle = true
 backend_stop_endpoint = "/backend/shutdown"
 stop_delay_ms = 5000
@@ -74,6 +76,13 @@ stop_delay_ms = 5000
 # Leave empty to disable the dedicated override.
 ocr_dedicated_model = "GLM-OCR-GGUF"
 stt_dedicated_model = "vibevoice-cpp-asr"
+#
+# External hosted STT provider (no local LocalAI): point the stt feature's
+# tier base_url at the provider's OpenAI-compatible endpoint, set
+# stt_dedicated_model to the provider's model name (e.g. "whisper-1"), and set
+# the STT_API_KEY environment variable to your key. The client then sends
+# Authorization: Bearer on every transcription request and skips the local
+# idle-stop behavior.
 
 # Four named model tiers. A tier's model is used by every feature bound to that
 # tier; empty = fall back to the feature's default model. A tier's base_url
@@ -134,4 +143,8 @@ write_delay_ms = 25           # 0 = default inter-chunk delay
 #   MEDIA_S3_<ID>_ACCESS_KEY_ID    — per-endpoint S3 access key (ID = endpoint id)
 #   MEDIA_S3_<ID>_SECRET_ACCESS_KEY — per-endpoint S3 secret access key
 #   INGEST_TOKEN                   — secret bearer token for POST /ingest/audio
+#   STT_API_KEY                    — bearer token for an external hosted STT
+#                                     provider (OpenAI, Groq, ...); empty = no
+#                                     auth header (local LocalAI). See the
+#                                     stt_dedicated_model comment above.
 # ---------------------------------------------------------------------------

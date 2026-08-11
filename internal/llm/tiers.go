@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"os"
 	"strings"
 
 	"github.com/i5heu/MentisEterna/internal/config"
@@ -104,6 +105,9 @@ func NewTieredOCRClient() *OCRClient {
 }
 
 // NewTieredSTTClient returns an STT client bound to the stt feature's tier.
+// When STT_API_KEY is set, the client authenticates to an external hosted
+// provider via Authorization: Bearer; the key stays in the environment, never
+// in config.toml.
 func NewTieredSTTClient() *STTClient {
-	return NewSTTClient(FeatureBaseURL("stt"), FeatureModel("stt"))
+	return NewSTTClient(FeatureBaseURL("stt"), FeatureModel("stt"), os.Getenv("STT_API_KEY"))
 }

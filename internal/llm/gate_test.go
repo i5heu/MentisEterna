@@ -18,6 +18,7 @@ func TestThrottledTransportMaxConcurrency(t *testing.T) {
 	config.Reset()
 	t.Cleanup(config.Reset)
 	config.Get().LLM.MaxConcurrency = 1
+	config.Get().LLM.RequestCooldownMS = 0 // isolate the concurrency cap from the cooldown default
 
 	var inFlight, maxInFlight atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

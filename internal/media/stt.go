@@ -129,7 +129,10 @@ func (s *Service) RunSTTForFile(ctx context.Context, fileID int64, sttClient llm
 		}
 	}
 
-	// Send to STT model.
+	// Send to STT model. The lease must span the ENTIRE RunSTT call: retries
+	// happen inside the client's single http.Do (gate transport), so holding
+	// the lease here keeps the model loaded between retry attempts. The
+	// idle-stop fires only after the final attempt releases the lease.
 	release := llm.BeginBackendUse(sttClient)
 	defer release()
 	sttText, err := sttClient.RunSTT(plainBuf.Bytes(), rec.Filename)

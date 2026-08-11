@@ -100,15 +100,23 @@ func TestNewEmbeddingClientDoesNotRetry4xx(t *testing.T) {
 	}
 }
 
-func TestNewEmbeddingClientNoRetryByDefault(t *testing.T) {
-	// Defaults leave RetryAttempts at 0: one attempt, immediate failure.
+func TestNewEmbeddingClientRetriesByDefault(t *testing.T) {
+	// The built-in defaults (matching config.default.toml) retry 5xx up to
+	// RetryAttempts times: a deployment with no [llm] section (e.g. the
+	// container image) still gets retries without any config.
 	config.Reset()
 	t.Cleanup(config.Reset)
-	config.Get().LLM.BaseURL = "http://127.0.0.1:0" // connection refused
+	srv, hits := embeddingServer(t, 1)
 
-	_, err := NewEmbeddingClient().GenerateEmbedding("hello")
-	if err == nil {
-		t.Fatal("expected error against a dead backend")
+	vec, err := newEmbeddingClientFor(t, srv).GenerateEmbedding("hello")
+	if err != nil {
+		t.Fatalf("GenerateEmbedding: %v", err)
+	}
+	if len(vec) != 3 || vec[0] != 0.1 || vec[2] != 0.3 {
+		t.Fatalf("unexpected embedding: %v", vec)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts with default retries (1 + 1), got %d", got)
 	}
 }
 
@@ -213,7 +221,7 @@ func TestNewSTTClientRetriesOn5xx(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	text, err := NewSTTClient(srv.URL, "stt-model").RunSTT([]byte("fake-audio-bytes"), "clip.wav")
+	text, err := NewSTTClient(srv.URL, "stt-model", "").RunSTT([]byte("fake-audio-bytes"), "clip.wav")
 	if err != nil {
 		t.Fatalf("RunSTT: %v", err)
 	}

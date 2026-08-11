@@ -49,6 +49,16 @@ func (c *OCRClient) BeginBackendUse() func() {
 }
 
 func (c *STTClient) BeginBackendUse() func() {
+	// An API-keyed STT client targets an external hosted provider: the
+	// idle-stop machinery is a LocalAI-only behavior (POST /backend/shutdown)
+	// and must not fire against a third-party endpoint.
+	if c.APIKey != "" {
+		return func() {}
+	}
+	// Local backend: the lease spans the WHOLE retry cycle (RunSTT is a single
+	// http.Do whose gate transport retries internally), so the model is never
+	// stopped between retry attempts. The idle-stop fires only after the final
+	// attempt releases the lease.
 	return sharedBackendUseRegistry.begin(c.BaseURL, c.Model, c.http)
 }
 

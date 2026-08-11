@@ -57,6 +57,23 @@ func TestTiers(t *testing.T) {
 		if got := FeatureModel("stt"); got != "vibevoice-cpp-asr" {
 			t.Errorf("FeatureModel(stt) = %q, want vibevoice-cpp-asr (dedicated default)", got)
 		}
+
+		// Gate/retry defaults must match config.default.toml: they are the
+		// behavior any deployment gets without an explicit [llm] section
+		// (Docker image, config files predating the retry feature).
+		llmCfg := config.Get().LLM
+		if llmCfg.MaxConcurrency != 1 {
+			t.Errorf("MaxConcurrency = %d, want 1", llmCfg.MaxConcurrency)
+		}
+		if llmCfg.RequestCooldownMS != 1000 {
+			t.Errorf("RequestCooldownMS = %d, want 1000", llmCfg.RequestCooldownMS)
+		}
+		if llmCfg.RetryAttempts != 3 {
+			t.Errorf("RetryAttempts = %d, want 3", llmCfg.RetryAttempts)
+		}
+		if llmCfg.RetryDelayMS != 3000 {
+			t.Errorf("RetryDelayMS = %d, want 3000", llmCfg.RetryDelayMS)
+		}
 	})
 
 	t.Run("TierModelOverride", func(t *testing.T) {
