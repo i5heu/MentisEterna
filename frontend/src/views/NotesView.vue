@@ -5418,6 +5418,7 @@ function onPopstate() {
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
 }
 
 .note-list-scroll {
@@ -6634,9 +6635,10 @@ function onPopstate() {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    padding: 0.9rem 1.1rem;
+    padding: 0.9rem 1rem;
     border-radius: 12px;
     background: var(--panel-bg);
+    overflow-wrap: break-word;
     border: 1px solid var(--border-color);
     box-shadow: 0 1px 4px var(--shadow-color, rgba(0, 0, 0, 0.15));
     max-width: 100%;
@@ -6654,9 +6656,16 @@ function onPopstate() {
 
 /* Child messages – slightly inset, visually subordinate */
 .chat-message-child {
-    max-width: 88%;
+    max-width: 80%;
     align-self: flex-start;
     border-left: 3px solid var(--border-color);
+}
+
+@media only screen and (max-width: 700px) {
+    .chat-message,
+    .chat-message-child {
+        max-width: 100%;
+    }
 }
 
 .chat-message-child:hover {
