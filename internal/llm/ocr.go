@@ -51,9 +51,10 @@ type visionImageURL struct {
 }
 
 type visionCompletionRequest struct {
-	Model    string          `json:"model"`
-	Messages []visionMessage `json:"messages"`
-	Stream   bool            `json:"stream"`
+	Model           string          `json:"model"`
+	Messages        []visionMessage `json:"messages"`
+	Stream          bool            `json:"stream"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 }
 
 type visionCompletionResponse struct {
@@ -73,26 +74,27 @@ func (c *OCRClient) RunOCR(imageData []byte) (string, error) {
 	dataURL := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(imageData)
 
 	reqBody := visionCompletionRequest{
-		Model: c.Model,
+		Model:           c.Model,
+		ReasoningEffort: "low",
+		Stream:          false,
 		Messages: []visionMessage{
 			{
 				Role: "user",
 				Content: []visionPart{
 					{
 						Type: "text",
-						Text: "Please extract all visible text from this image. Return only the extracted text, with no additional commentary or formatting.",
+						Text: "Please extract the information from this image. Return only the extracted text as markdown, with table (etc) formatting if applicable.",
 					},
 					{
 						Type: "image_url",
 						ImageURL: &visionImageURL{
 							URL:    dataURL,
-							Detail: "high",
+							Detail: "original",
 						},
 					},
 				},
 			},
 		},
-		Stream: false,
 	}
 
 	payload, err := json.Marshal(reqBody)

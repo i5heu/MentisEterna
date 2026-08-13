@@ -154,6 +154,8 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
 
 ## TODO
 - [ ] socratic Questionnaire Mode
+- [ ] Use multi modal LLM for OCR
+- [ ] Split STT files into 30s chunks that overlap by 3s and then merge the transcriptions into one file.
 - [ ] delte stall upload chunks after a timeout (12h)
 - [ ] delete embeddings for deleted notes and files
 - [ ] Setup building pipeline
