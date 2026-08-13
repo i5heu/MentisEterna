@@ -446,6 +446,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/ingest/handwritten/{parent_id}", s.handleHandwrittenIngest)
 	mux.HandleFunc("/ingest/handwritten/{parent_id}/{flag}", s.handleHandwrittenIngest)
 
+	mux.Handle("/ingest/token", protected(s.handleIngestToken))
+
 	mux.Handle("/", newSPAHandler("./FrontEndDist"))
 
 	srv := &http.Server{

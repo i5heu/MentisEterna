@@ -128,6 +128,78 @@ func TestHandleAudioIngestSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleAudioIngestAcceptsWebM(t *testing.T) {
+	s, _ := newTestServerWithMedia(t)
+	s.ingestToken = "secret"
+	s.sttClient = mockSTT{text: "hello world"}
+
+	ct, body := ingestMultipartBody("recording.webm", fakeWebM(), nil)
+	req := httptest.NewRequest(http.MethodPost, "/ingest/audio", body)
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+	s.handleAudioIngest(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Note NoteDetail     `json:"note"`
+		File media.NoteFile `json:"file"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Note.ID <= 0 {
+		t.Fatalf("expected note.id > 0, got %d", resp.Note.ID)
+	}
+	if resp.File.MimeType != "audio/webm" {
+		t.Fatalf("expected mime audio/webm (normalized from video/webm), got %q", resp.File.MimeType)
+	}
+}
+
+func TestHandleIngestToken(t *testing.T) {
+	s := newTestServer(t)
+	s.ingestToken = "secret"
+	token := createTestSession(t, s)
+
+	handler := s.requireAuth(http.HandlerFunc(s.handleIngestToken))
+	r := httptest.NewRequest(http.MethodGet, "/ingest/token", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Token != "secret" {
+		t.Fatalf("expected token %q, got %q", "secret", resp.Token)
+	}
+}
+
+func TestHandleIngestTokenNotConfigured(t *testing.T) {
+	s := newTestServer(t)
+	s.ingestToken = ""
+	token := createTestSession(t, s)
+
+	handler := s.requireAuth(http.HandlerFunc(s.handleIngestToken))
+	r := httptest.NewRequest(http.MethodGet, "/ingest/token", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestIngestSTTToNoteTaskAppendsTranscript(t *testing.T) {
 	s, _ := newTestServerWithMedia(t)
 	s.ingestToken = "secret"
@@ -284,6 +356,13 @@ func TestIngestSTTToNoteTaskSTTFailureSkipsTitleAndTag(t *testing.T) {
 
 func fakeM4A() []byte {
 	return []byte{0, 0, 0, 0, 'f', 't', 'y', 'p', 'M', '4', 'A', ' '}
+}
+
+// fakeWebM is an EBML header (the container MediaRecorder emits); Go's
+// http.DetectContentType labels it video/webm even though it carries only
+// audio. handleAudioIngest normalizes it to audio/webm.
+func fakeWebM() []byte {
+	return []byte{0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 }
 
 func TestHandleAudioIngestParentFromPath(t *testing.T) {

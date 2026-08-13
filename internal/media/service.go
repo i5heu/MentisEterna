@@ -72,6 +72,19 @@ func (s *Service) CreatePendingInline(ctx context.Context, noteID int64, filenam
 	return rec, results, nil
 }
 
+// UpdateFileMIMEType corrects the stored MIME type of an existing file.
+// createFile always classifies by content sniff, which labels MediaRecorder's
+// audio-only WebM output "video/webm" (EBML container). Ingest knows the
+// recording is audio and reclassifies it to "audio/webm" so the STT pipeline
+// dispatches on it; the caller is responsible for updating its FileRecord copy
+// to match.
+func (s *Service) UpdateFileMIMEType(ctx context.Context, fileID int64, mime string) error {
+	if _, err := s.DB.ExecContext(ctx, `UPDATE files SET mime_type = ? WHERE id = ?`, mime, fileID); err != nil {
+		return fmt.Errorf("update file %d mime_type: %w", fileID, err)
+	}
+	return nil
+}
+
 // createFile is the shared upload path: encrypt, insert DB rows, upload to S3 replicas.
 func (s *Service) createFile(ctx context.Context, origNoteID int64, pendingAt *time.Time, filename, mime string, src io.Reader, refKind RefKind) (FileRecord, []ReplicaResult, error) {
 	// Generate encryption material

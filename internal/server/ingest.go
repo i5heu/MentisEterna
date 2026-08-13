@@ -72,6 +72,12 @@ func (s *Server) handleAudioIngest(w http.ResponseWriter, r *http.Request) {
 	n, _ := io.ReadFull(file, sniff[:])
 	src := io.MultiReader(bytes.NewReader(sniff[:n]), file)
 	mime := media.DetectMIME(sniff[:n])
+	if mime == "video/webm" {
+		// MediaRecorder (Chrome/Firefox) emits EBML WebM; Go's http.DetectContentType
+		// labels it video/webm even when it holds only audio. The STT pipeline
+		// accepts WebM audio, so normalize before the IsSTTable gate.
+		mime = "audio/webm"
+	}
 	if !media.IsSTTable(mime) {
 		http.Error(w, "file is not a supported audio type", http.StatusUnsupportedMediaType)
 		return
@@ -118,6 +124,17 @@ func (s *Server) handleAudioIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if rec.MimeType == "video/webm" {
+		// createFile re-sniffs the content, and the EBML container of
+		// MediaRecorder's audio-only WebM sniffs as video/webm. Correct the
+		// stored record so the STT pipeline and the response treat it as audio.
+		rec.MimeType = "audio/webm"
+		if err := s.mediaService.UpdateFileMIMEType(r.Context(), rec.ID, rec.MimeType); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+
 	s.enqueueSTTToNote(rec.ID, noteID, datePrefix)
 
 	s.writeIngestResponse(w, noteID, rec, results)
@@ -157,6 +174,17 @@ func (s *Server) writeIngestResponse(w http.ResponseWriter, noteID int64, rec me
 
 	s.notifyNotesChanged("created", noteID)
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"note": note, "file": nf, "results": results})
+}
+
+// handleIngestToken exposes the ingest bearer token to an authenticated browser
+// session so the in-app audio recorder can POST to /ingest/audio. A session can
+// already create notes and upload files, so this adds no capability.
+func (s *Server) handleIngestToken(w http.ResponseWriter, r *http.Request) {
+	if s.ingestToken == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "audio ingest not configured"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": s.ingestToken})
 }
 
 // handleHandwrittenIngest accepts a handwritten-note image upload over HTTP,

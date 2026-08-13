@@ -1,36 +1,41 @@
 <template>
-    <div v-if="!authReady" class="app-loading">Loading…</div>
-    <LoginView v-else-if="!token" @logged-in="onLogin" />
-    <OptionsView
-        v-else-if="currentView === 'options'"
-        :token="token"
-        :ws-connected="wsConnected"
-        :ws-latency="wsLatency"
-        :ws-latency-detail="wsLatencyDetail"
-        @logout="onLogout"
-        @back="currentView = 'notes'"
-    />
-    <NotesView
-        v-else
-        :token="token"
-        :ws-connected="wsConnected"
-        :ws-latency="wsLatency"
-        :ws-latency-detail="wsLatencyDetail"
-        @logout="onLogout"
-        @navigate-options="currentView = 'options'"
-    />
-    <PairRequestModal />
-    <DeviceTeleportModal v-if="teleportModalOpen" />
+    <RecordAudioView v-if="isRecordAudioPage()" />
+    <template v-else>
+        <div v-if="!authReady" class="app-loading">Loading…</div>
+        <LoginView v-else-if="!token" @logged-in="onLogin" />
+        <OptionsView
+            v-else-if="currentView === 'options'"
+            :token="token"
+            :ws-connected="wsConnected"
+            :ws-latency="wsLatency"
+            :ws-latency-detail="wsLatencyDetail"
+            @logout="onLogout"
+            @back="currentView = 'notes'"
+        />
+        <NotesView
+            v-else
+            :token="token"
+            :ws-connected="wsConnected"
+            :ws-latency="wsLatency"
+            :ws-latency-detail="wsLatencyDetail"
+            @logout="onLogout"
+            @navigate-options="currentView = 'options'"
+        />
+        <PairRequestModal />
+        <DeviceTeleportModal v-if="teleportModalOpen" />
+    </template>
 </template>
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import { fetchSession, startLiveUpdates, stopLiveUpdates } from "./api.js";
+import { flushPendingAudio } from "./audio/audioQueue.js";
 import { useLiveStatus } from "./composables/useLiveStatus.js";
 import { teleportModalOpen } from "./device/teleport.js";
 import LoginView from "./views/LoginView.vue";
 import NotesView from "./views/NotesView.vue";
 import OptionsView from "./views/OptionsView.vue";
+import RecordAudioView from "./views/RecordAudioView.vue";
 import PairRequestModal from "./components/PairRequestModal.vue";
 import DeviceTeleportModal from "./components/DeviceTeleportModal.vue";
 
@@ -38,6 +43,10 @@ const { wsConnected, wsLatency, wsLatencyDetail } = useLiveStatus();
 const token = ref("");
 const authReady = ref(false);
 const currentView = ref("notes");
+
+function isRecordAudioPage() {
+    return window.location.pathname.startsWith("/recordaudio/");
+}
 
 function onLogin() {
     token.value = "cookie-auth";
@@ -54,11 +63,27 @@ function onAuthUnauthorized() {
     onLogout();
 }
 
+function onOnline() {
+    // Upload recordings left pending by earlier sessions. On the recorder page
+    // App's token stays "" (bootstrap early-returns), so this no-ops there; the
+    // view has its own listener.
+    if (token.value) {
+        flushPendingAudio().catch(() => {});
+    }
+}
+
 async function bootstrapSession() {
+    if (isRecordAudioPage()) {
+        // The recorder page handles its own session/token boot; skip the
+        // duplicate session fetch and websocket churn.
+        return;
+    }
     authReady.value = false;
     try {
         await fetchSession();
         token.value = "cookie-auth";
+        // Retry recordings left pending by previous sessions.
+        flushPendingAudio().catch(() => {});
     } catch (e) {
         token.value = "";
     } finally {
@@ -80,11 +105,13 @@ watch(
 
 onMounted(() => {
     window.addEventListener("auth:unauthorized", onAuthUnauthorized);
+    window.addEventListener("online", onOnline);
     bootstrapSession();
 });
 
 onUnmounted(() => {
     window.removeEventListener("auth:unauthorized", onAuthUnauthorized);
+    window.removeEventListener("online", onOnline);
     stopLiveUpdates();
 });
 </script>

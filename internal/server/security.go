@@ -32,7 +32,14 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 			h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		}
 		if h.Get("Permissions-Policy") == "" {
-			h.Set("Permissions-Policy", "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()")
+			pp := "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+			if strings.HasPrefix(cleanedPath, "/recordaudio/") {
+				// The in-app recorder page captures microphone audio, so the
+				// top-level document must be allowed to use it. Everything
+				// else (cross-origin iframes, other pages) stays blocked.
+				pp = "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(self), payment=(), usb=()"
+			}
+			h.Set("Permissions-Policy", pp)
 		}
 		if s.cfg.CookieSecure && h.Get("Strict-Transport-Security") == "" {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
