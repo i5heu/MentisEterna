@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -129,19 +131,81 @@ func (s *Service) RunSTTForFile(ctx context.Context, fileID int64, sttClient llm
 		}
 	}
 
-	// Send to STT model. The lease must span the ENTIRE RunSTT call: retries
-	// happen inside the client's single http.Do (gate transport), so holding
-	// the lease here keeps the model loaded between retry attempts. The
-	// idle-stop fires only after the final attempt releases the lease.
+	// Send to STT model. The lease must span the ENTIRE transcription
+	// sequence — every chunk request plus the whole-file fallback: holding
+	// the lease here keeps the model loaded between chunk requests and
+	// retry attempts (retries happen inside the client's single http.Do
+	// gate transport). The idle-stop fires only after the final request
+	// releases the lease.
 	release := llm.BeginBackendUse(sttClient)
 	defer release()
-	sttText, err := sttClient.RunSTT(plainBuf.Bytes(), rec.Filename)
+	sttText, err := s.transcribeFile(ctx, sttClient, plainBuf.Bytes(), rec.Filename, fileID)
 	if err != nil {
 		return s.saveSTTError(fileID, model, fmt.Errorf("stt: model error: %w", err))
 	}
 
 	// Store successful result.
 	return s.saveSTTResult(fileID, sttText, model)
+}
+
+// transcribeFile runs STT on plaintext audio, preferring ffmpeg chunking when
+// available. Any chunking failure (missing binary, unprobeable/corrupt audio,
+// cut error) falls back to a single whole-file request — never an error — so
+// behavior is unchanged on hosts without ffmpeg and for odd files.
+func (s *Service) transcribeFile(ctx context.Context, sttClient llm.STTer, data []byte, filename string, fileID int64) (string, error) {
+	if sttChunkAvailable() {
+		text, err := s.transcribeChunked(ctx, sttClient, data, filename)
+		if err == nil {
+			return text, nil
+		}
+		log.Printf("media/stt: chunked transcription for file %d failed (%v); falling back to whole-file", fileID, err)
+	}
+	text, err := sttClient.RunSTT(data, filename)
+	if err != nil {
+		return "", fmt.Errorf("stt: model error: %w", err)
+	}
+	return text, nil
+}
+
+// transcribeChunked splits the audio into overlapping 30-second chunks, runs
+// STT on each, and merges the per-chunk transcripts. The source file is
+// written to a temp dir with the original extension so ffmpeg can probe its
+// content (the extension may be empty); chunks are cut to the whisper-standard
+// mono 16 kHz 16-bit WAV format.
+func (s *Service) transcribeChunked(ctx context.Context, sttClient llm.STTer, data []byte, filename string) (string, error) {
+	tmp, err := os.MkdirTemp("", "mentis-stt-*")
+	if err != nil {
+		return "", fmt.Errorf("stt: temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	srcPath := filepath.Join(tmp, "input"+filepath.Ext(filename)) // ext may be ""; ffmpeg probes content
+	if err := os.WriteFile(srcPath, data, 0o600); err != nil {
+		return "", fmt.Errorf("stt: write temp input: %w", err)
+	}
+
+	dur, err := probeAudioDuration(ctx, srcPath)
+	if err != nil {
+		return "", err
+	}
+
+	var parts []string
+	for i, w := range sttChunkWindows(dur) {
+		outPath := filepath.Join(tmp, fmt.Sprintf("chunk_%03d.wav", i))
+		if err := cutAudioChunk(ctx, srcPath, outPath, w.Start, w.Length); err != nil {
+			return "", err
+		}
+		chunkBytes, err := os.ReadFile(outPath)
+		if err != nil {
+			return "", fmt.Errorf("stt: read chunk %d: %w", i, err)
+		}
+		text, err := sttClient.RunSTT(chunkBytes, filepath.Base(outPath))
+		if err != nil {
+			return "", fmt.Errorf("stt: chunk %d: %w", i, err)
+		}
+		parts = append(parts, text)
+	}
+	return mergeTranscriptions(parts), nil
 }
 
 // saveSTTResult stores a successful STT result in the database.

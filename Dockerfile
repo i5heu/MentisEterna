@@ -38,6 +38,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         sqlite3 \
+        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=go-builder /out/mentis-server /app/mentis-server
