@@ -83,23 +83,36 @@ export async function removePendingAudio(id) {
 /**
  * Upload one recording to the ingest endpoint. The endpoint requires the
  * secret ingest bearer token, which the recorder obtains from /ingest/token.
+ * Uses XMLHttpRequest (not fetch) so upload progress is observable.
+ * @param {Function} [onProgress] called with 0..100 as the request body uploads
  * @returns {Promise<object>} the parsed 201 response (contains the created note)
- * @throws {Error} on any non-2xx response
+ * @throws {Error} on any non-2xx response or network failure
  */
-export async function uploadAudioRecording(token, parentId, dateFlag, blob, filename) {
-    const fd = new FormData();
-    fd.append("file", blob, filename);
+export async function uploadAudioRecording(token, parentId, dateFlag, blob, filename, onProgress) {
     const url = dateFlag ? `/ingest/audio/${parentId}/date` : `/ingest/audio/${parentId}`;
-    const res = await fetch(url, {
-        method: "POST",
-        credentials: "include",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        xhr.responseType = "json";
+        xhr.upload.onprogress = (e) => {
+            if (onProgress && e.lengthComputable && e.total > 0) {
+                onProgress(Math.round((e.loaded / e.total) * 100));
+            }
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(xhr.response);
+            } else {
+                reject(new Error(`upload failed: ${xhr.status}`));
+            }
+        };
+        xhr.onerror = () => reject(new Error("upload failed: network error"));
+        xhr.onabort = () => reject(new Error("upload failed: aborted"));
+        const fd = new FormData();
+        fd.append("file", blob, filename);
+        xhr.send(fd);
     });
-    if (!res.ok) {
-        throw new Error(`upload failed: ${res.status}`);
-    }
-    return res.json();
 }
 
 let flushPromise = null;

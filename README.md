@@ -156,7 +156,7 @@ in `config.toml` to a reachable endpoint for your LocalAI instance.
 - [ ] socratic Questionnaire Mode
 - [x] Use multi modal LLM for OCR
 - [x] Split STT files into 30s chunks that overlap by 3s and then merge the transcriptions into one file.
-- [ ] Audio recorder that opens if /recordaudio/[parent ID]/[optional "date"] is opened that will store audio as if the audio was send to the /ingest/audio endpoint. It should start recording as soon as the page opens, store the content in the indexedDB and upload the audio as soon as recording finished or if no connection is possible or failed, retry it on a later time.
+- [x] Audio recorder that opens if /recordaudio/[parent ID]/[optional "date"] is opened that will store audio as if the audio was send to the /ingest/audio endpoint. It should start recording as soon as the page opens, store the content in the indexedDB and upload the audio as soon as recording finished or if no connection is possible or failed, retry it on a later time.
 - [ ] delte stall upload chunks after a timeout (12h)
 - [ ] delete embeddings for deleted notes and files
 - [ ] Setup building pipeline

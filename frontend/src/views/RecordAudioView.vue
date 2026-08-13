@@ -32,19 +32,27 @@
         <div v-else-if="state === 'recording'" class="card recording">
             <div class="rec-dot" aria-hidden="true"></div>
             <p class="elapsed">{{ elapsed }}</p>
+            <div class="mic-level" :class="{ speaking }" role="status" aria-live="polite">
+                <div class="level-track" aria-hidden="true">
+                    <div class="level-fill" :style="{ width: levelPct + '%' }"></div>
+                </div>
+                <span class="level-label">{{ speaking ? "Speaking…" : "Mic ready" }}</span>
+            </div>
             <button class="btn stop" type="button" @click="stopRecording">Stop recording</button>
         </div>
 
         <div v-else-if="state === 'uploading'" class="card">
             <h1>Uploading…</h1>
             <p>Your recording is saved and being uploaded.</p>
+            <div class="upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="uploadPct">
+                <div class="upload-fill" :style="{ width: uploadPct + '%' }"></div>
+            </div>
+            <p class="upload-pct">{{ uploadPct }}%</p>
         </div>
 
         <div v-else-if="state === 'done'" class="card">
             <h1>Note created</h1>
-            <p v-if="noteId">Saved as note <a :href="`/note/${noteId}`">#{{ noteId }}</a>.</p>
-            <p v-else>Uploaded successfully.</p>
-            <a class="btn" href="/">Back to notes</a>
+            <button class="btn" type="button" @click="openCreatedNote">{{ noteId ? "Open note" : "Back to notes" }}</button>
         </div>
 
         <div v-else-if="state === 'queued'" class="card">
@@ -76,6 +84,9 @@ import {
 const state = ref("booting");
 const noteId = ref(null);
 const elapsed = ref("00:00");
+const levelPct = ref(0); // 0..100, bar fill width
+const speaking = ref(false);
+const uploadPct = ref(0); // 0..100, upload progress
 
 // URL parse, once: /recordaudio/<parentId>[/date]
 const m = window.location.pathname.match(/^\/recordaudio\/(\d+)(?:\/(date))?\/?$/);
@@ -93,6 +104,10 @@ let token = "";
 let savedEntry = null;
 let startTime = 0;
 let booted = false;
+let audioCtx = null;
+let analyserNode = null;
+let sourceNode = null;
+let rafId = null;
 
 const EXT_BY_MIME = {
     "audio/webm": "webm",
@@ -147,6 +162,57 @@ async function requestMic() {
     }
 }
 
+function setupLevelMeter(stream) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return; // old browsers: no meter, recording unaffected
+    audioCtx = new AC();
+    sourceNode = audioCtx.createMediaStreamSource(stream);
+    analyserNode = audioCtx.createAnalyser();
+    analyserNode.fftSize = 1024;
+    // Connect ONLY to the analyser — never to destination (no mic monitoring/echo).
+    sourceNode.connect(analyserNode);
+    audioCtx.resume().catch(() => {});
+    const buf = new Uint8Array(analyserNode.fftSize);
+    const tick = () => {
+        if (!analyserNode) return;
+        analyserNode.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+            const v = (buf[i] - 128) / 128;
+            sum += v * v;
+        }
+        const rms = Math.sqrt(sum / buf.length);
+        const db = rms > 1e-4 ? 20 * Math.log10(rms) : -100;
+        // -50 dB -> 0%, -10 dB -> 100%
+        levelPct.value = Math.max(0, Math.min(100, Math.round(((db + 50) / 40) * 100)));
+        // Hysteresis: enter "speaking" above -36 dB, leave below -42 dB (no flicker)
+        if (!speaking.value && db > -36) speaking.value = true;
+        else if (speaking.value && db < -42) speaking.value = false;
+        rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+}
+
+function teardownLevelMeter() {
+    if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+    }
+    if (sourceNode) {
+        try {
+            sourceNode.disconnect();
+        } catch (e) {}
+        sourceNode = null;
+    }
+    if (audioCtx) {
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+    }
+    analyserNode = null;
+    levelPct.value = 0;
+    speaking.value = false;
+}
+
 function startRecorder(stream) {
     const mime = pickRecorderMime();
     recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -162,6 +228,7 @@ function startRecorder(stream) {
     timerHandle = setInterval(updateElapsed, 500);
     updateElapsed();
     state.value = "recording";
+    setupLevelMeter(stream);
 }
 
 function stopRecording() {
@@ -174,6 +241,7 @@ function onStop() {
     if (stream) {
         stream.getTracks().forEach((t) => t.stop());
     }
+    teardownLevelMeter();
     if (timerHandle) {
         clearInterval(timerHandle);
         timerHandle = null;
@@ -206,14 +274,21 @@ async function persistAndUpload(entry) {
 
 async function uploadEntry(entry) {
     state.value = "uploading";
+    uploadPct.value = 0;
     try {
-        const res = await uploadAudioRecording(token, entry.parentId, entry.dateFlag, entry.blob, entry.filename);
+        const res = await uploadAudioRecording(token, entry.parentId, entry.dateFlag, entry.blob, entry.filename, (pct) => {
+            uploadPct.value = pct;
+        });
         await removePendingAudio(entry.id);
         noteId.value = res && res.note && res.note.id ? res.note.id : null;
         state.value = "done";
     } catch (e) {
         state.value = "queued";
     }
+}
+
+function openCreatedNote() {
+    window.location.href = noteId.value ? `/note/${noteId.value}` : "/";
 }
 
 async function retrySave() {
@@ -281,6 +356,7 @@ onMounted(() => {
 
 onUnmounted(() => {
     window.removeEventListener("online", handleOnline);
+    teardownLevelMeter();
     if (timerHandle) {
         clearInterval(timerHandle);
         timerHandle = null;
@@ -400,5 +476,53 @@ onUnmounted(() => {
 
 .card a:not(.btn) {
     color: #9ad1ff;
+}
+
+.mic-level {
+    max-width: 260px;
+    margin: 0 auto 20px;
+}
+.level-track {
+    height: 8px;
+    border-radius: 4px;
+    background: #1d3350;
+    overflow: hidden;
+}
+.level-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: #2b6cb0;
+    transition: width 60ms linear;
+}
+.mic-level.speaking .level-fill {
+    background: #4ade80;
+}
+.level-label {
+    display: block;
+    margin-top: 8px;
+    font-size: 13px;
+    color: #a9bcd4;
+}
+.mic-level.speaking .level-label {
+    color: #4ade80;
+    font-weight: 600;
+}
+
+.upload-progress {
+    max-width: 260px;
+    margin: 0 auto 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: #1d3350;
+    overflow: hidden;
+}
+.upload-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: #2b6cb0;
+    transition: width 120ms linear;
+}
+.upload-pct {
+    font-size: 13px;
 }
 </style>
