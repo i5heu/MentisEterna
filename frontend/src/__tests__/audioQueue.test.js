@@ -158,4 +158,30 @@ describe("audioQueue", () => {
         const err = await AudioQueue.getIngestToken().catch((e) => e);
         expect(err.status).toBe(401);
     });
+
+    describe("ingestTokenFromURL", () => {
+        test("extracts the token from ?token=...", () => {
+            expect(AudioQueue.ingestTokenFromURL("?token=abc123")).toBe("abc123");
+        });
+
+        test("coexists with other query params", () => {
+            expect(AudioQueue.ingestTokenFromURL("?token=abc123&x=1")).toBe("abc123");
+        });
+
+        test("absent param yields empty string (session flow)", () => {
+            expect(AudioQueue.ingestTokenFromURL("")).toBe("");
+        });
+
+        test("empty value yields empty string (session flow)", () => {
+            expect(AudioQueue.ingestTokenFromURL("?token=")).toBe("");
+        });
+
+        test("unrelated param yields empty string", () => {
+            expect(AudioQueue.ingestTokenFromURL("?parent=5")).toBe("");
+        });
+
+        test("URL-decodes the token value", () => {
+            expect(AudioQueue.ingestTokenFromURL("?token=a%2Bb%20c")).toBe("a+b c");
+        });
+    });
 });

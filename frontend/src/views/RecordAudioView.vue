@@ -74,6 +74,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { fetchSession } from "../api.js";
 import {
     getIngestToken,
+    ingestTokenFromURL,
     addPendingAudio,
     removePendingAudio,
     listPendingAudio,
@@ -95,6 +96,10 @@ const dateFlag = m ? m[2] === "date" : false;
 if (!m) {
     state.value = "invalid";
 }
+
+// Optional ?token=<ingest token> lets this page boot without a session
+// (shared recorder link). Empty/absent -> session flow below.
+const urlToken = ingestTokenFromURL(window.location.search);
 
 let recorder = null;
 let stream = null;
@@ -332,17 +337,21 @@ async function boot() {
         return;
     }
     booted = true;
-    try {
-        await fetchSession();
-    } catch (e) {
-        state.value = "needs-auth";
-        return;
-    }
-    try {
-        token = await getIngestToken();
-    } catch (e) {
-        state.value = e && e.status === 401 ? "needs-auth" : "unconfigured";
-        return;
+    if (urlToken) {
+        token = urlToken;
+    } else {
+        try {
+            await fetchSession();
+        } catch (e) {
+            state.value = "needs-auth";
+            return;
+        }
+        try {
+            token = await getIngestToken();
+        } catch (e) {
+            state.value = e && e.status === 401 ? "needs-auth" : "unconfigured";
+            return;
+        }
     }
     // Retry recordings left pending by earlier sessions.
     flushPendingAudio(token).catch(() => {});

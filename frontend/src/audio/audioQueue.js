@@ -42,6 +42,16 @@ export async function getIngestToken() {
     return body.token;
 }
 
+/**
+ * Extract the ingest bearer token from a /recordaudio URL query string
+ * (?token=...), letting the recorder page boot without a session.
+ * Returns "" when the param is absent or empty.
+ * @param {string} [search] query string, e.g. window.location.search
+ */
+export function ingestTokenFromURL(search = "") {
+    return new URLSearchParams(search).get("token") || "";
+}
+
 /** Persist (or overwrite) a pending recording entry. */
 export async function addPendingAudio(entry) {
     const db = await openDB();
