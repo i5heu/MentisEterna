@@ -3056,6 +3056,8 @@ async function doParentSearch() {
     parentSearchCollapsedSections.value = {};
     await runStreamedSearch({
         query: q,
+        token: props.token,
+        streamSearchNotes,
         sectionsRef: parentSearchSections,
         statusRef: parentSearchStatusMessage,
         searchingRef: parentSearching,
@@ -3692,6 +3694,8 @@ async function doSearch() {
     activeSearchSectionKey.value = "";
     await runStreamedSearch({
         query: q,
+        token: props.token,
+        streamSearchNotes,
         types: mode.types,
         tagOnly: mode.tagOnly,
         sectionsRef: searchSections,
@@ -4587,6 +4591,7 @@ function onPopstate() {
 
 .editor-header {
     display: grid;
+    z-index: 100;
     grid-template-columns: auto minmax(0, 1fr) auto;
     /* Named grid areas let header blocks be repositioned freely. To move a
        block (e.g. the tag row), either change its `grid-area` below or
