@@ -1626,18 +1626,8 @@
     </div>
 </template>
 
-<script>
-// Module-scope: stable across component remounts within this tab, so each tab
-// acts as one independent "device" for edit-sync presence.
-const deviceId =
-    typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `dev-${Math.random().toString(36).slice(2)}`;
-export default {};
-</script>
-
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import MarkdownIt from "markdown-it";
 import markdownItFootnote from "markdown-it-footnote";
 import spoilerPlugin from "../spoilerPlugin.js";
@@ -1683,6 +1673,22 @@ import {
     isEditableElement,
     useKeyboardShortcuts,
 } from "../composables/useKeyboardShortcuts.js";
+import {
+    abortSearchRequest,
+    buildSectionGroups,
+    flattenVisibleSectionGroups,
+    formatSearchTags,
+    normalizeSearchTypes,
+    noteTypeLabel,
+    parseSearchMode,
+    relevancePct,
+    runStreamedSearch,
+    sectionKeyForFlatIndex,
+    setCollapsedSection,
+    toggleCollapsedSection,
+} from "./notesViewSearch.js";
+import { useNoteLinkSearch } from "../composables/useNoteLinkSearch.js";
+import { useNotesLiveSync } from "../composables/useNotesLiveSync.js";
 
 const props = defineProps({
     token: String,
@@ -1711,8 +1717,8 @@ const noteType = ref("standard");
 const customData = ref(null);
 const dirty = ref(false);
 const saving = ref(false);
-const liveRefreshPending = ref(false);
 const isMobile = ref(false);
+const isEditing = ref(false);
 
 // Mobile breakpoint matching (same 767px as the CSS media query + innerWidth < 768 checks).
 let mobileMQ = null;
@@ -1784,274 +1790,6 @@ const searchResults = computed(() =>
 let searchTimeout = null;
 const sidebarSearchRequest = { controller: null };
 
-// [[ and // link search state
-const linkSearchQuery = ref("");
-const linkSearchSections = ref([]);
-const linkSearchCollapsedSections = ref({});
-const linkSearchStatusMessage = ref("");
-const linkSearchResults = computed(() =>
-    flattenVisibleSectionGroups(linkSearchSectionGroups.value),
-);
-const linkSearching = ref(false);
-const linkKeyboardMode = ref(false);
-const linkSearchIndex = ref(-1);
-const linkSearchVisible = ref(false);
-const linkSearchTarget = ref(null);
-const linkSearchTriggerType = ref(null);
-const linkSearchTriggerStart = ref(-1);
-const linkPopupStyle = ref({ left: "20px", top: "20px" });
-let linkSearchTimeout = null;
-const linkSearchRequest = { controller: null };
-
-const linkHintMode = ref(false);
-const linkHintTyped = ref("");
-const linkHintEntries = ref([]);
-const LINK_HINT_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-let linkHintRefreshFrame = 0;
-
-function getLinkSearchContext(target = linkSearchTarget.value) {
-    switch (target) {
-        case "body":
-            return {
-                textarea: bodyTextarea,
-                text: editBody,
-                onChange: () => {
-                    dirty.value = true;
-                },
-            };
-        case "reply":
-            return {
-                textarea: newReplyTextarea,
-                text: newReplyBody,
-            };
-        case "threadReply":
-            return {
-                textarea: threadReplyTextarea,
-                text: threadReplyBody,
-            };
-        default:
-            return null;
-    }
-}
-
-function normalizeLinkHintKey(key) {
-    if (!key) return "";
-    return key.length === 1 ? key.toUpperCase() : key;
-}
-
-function linkHintAlphaPrefix(index) {
-    let value = Number(index) + 1;
-    let label = "";
-    while (value > 0) {
-        const remainder = (value - 1) % 26;
-        label = String.fromCharCode(65 + remainder) + label;
-        value = Math.floor((value - 1) / 26);
-    }
-    return label;
-}
-
-function linkHintLabelForIndex(index) {
-    if (index < LINK_HINT_DIGITS.length) {
-        return LINK_HINT_DIGITS[index];
-    }
-    const offset = index - LINK_HINT_DIGITS.length;
-    const prefixIndex = Math.floor(offset / LINK_HINT_DIGITS.length);
-    const digit = LINK_HINT_DIGITS[offset % LINK_HINT_DIGITS.length];
-    return `${linkHintAlphaPrefix(prefixIndex)}${digit}`;
-}
-
-function isVisibleLinkHintElement(anchor) {
-    if (!(anchor instanceof HTMLElement)) return false;
-    const rect = anchor.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
-    const style = window.getComputedStyle(anchor);
-    if (
-        style.display === "none" ||
-        style.visibility === "hidden" ||
-        style.pointerEvents === "none"
-    ) {
-        return false;
-    }
-    return !(
-        rect.bottom < 0 ||
-        rect.right < 0 ||
-        rect.top > window.innerHeight ||
-        rect.left > window.innerWidth
-    );
-}
-
-function collectLinkHintEntries() {
-    const roots = [mainChatFeedEl.value, threadChatFeedEl.value].filter(Boolean);
-    const entries = [];
-
-    for (const root of roots) {
-        const anchors = root.querySelectorAll(".markdown-body a[href]");
-        for (const anchor of anchors) {
-            if (!isVisibleLinkHintElement(anchor)) continue;
-            const rect = anchor.getBoundingClientRect();
-            const top = rect.top <= 28 ? rect.bottom + 6 : rect.top;
-            entries.push({
-                id: `link-hint-${entries.length}`,
-                label: linkHintLabelForIndex(entries.length),
-                top: Math.max(8, top),
-                left: Math.max(8, Math.min(rect.left, window.innerWidth - 16)),
-                element: anchor,
-                href: anchor.getAttribute("href") || "",
-            });
-        }
-    }
-
-    return entries;
-}
-
-function cancelLinkHintRefresh() {
-    if (!linkHintRefreshFrame) return;
-    window.cancelAnimationFrame(linkHintRefreshFrame);
-    linkHintRefreshFrame = 0;
-}
-
-function closeLinkHintMode() {
-    linkHintMode.value = false;
-    linkHintTyped.value = "";
-    linkHintEntries.value = [];
-    cancelLinkHintRefresh();
-}
-
-function refreshLinkHintEntries() {
-    if (!linkHintMode.value) return;
-    const entries = collectLinkHintEntries();
-    linkHintEntries.value = entries;
-    if (entries.length === 0) {
-        closeLinkHintMode();
-        return;
-    }
-    if (
-        linkHintTyped.value &&
-        !entries.some((entry) => entry.label.startsWith(linkHintTyped.value))
-    ) {
-        linkHintTyped.value = "";
-    }
-}
-
-function scheduleLinkHintRefresh() {
-    if (!linkHintMode.value) return;
-    cancelLinkHintRefresh();
-    linkHintRefreshFrame = window.requestAnimationFrame(() => {
-        linkHintRefreshFrame = 0;
-        refreshLinkHintEntries();
-    });
-}
-
-async function openLinkHintMode() {
-    hideHintOverlay();
-    closeLinkSearch();
-    linkHintTyped.value = "";
-    linkHintMode.value = true;
-    await nextTick();
-    refreshLinkHintEntries();
-}
-
-function toggleLinkHintMode() {
-    if (linkHintMode.value) {
-        closeLinkHintMode();
-        return;
-    }
-    openLinkHintMode();
-}
-
-function prefixLinkHintMatches(prefix) {
-    if (!prefix) return linkHintEntries.value;
-    return linkHintEntries.value.filter((entry) =>
-        entry.label.startsWith(prefix),
-    );
-}
-
-function openLinkHintEntry(entry) {
-    const target = entry?.element;
-    closeLinkHintMode();
-    if (!target || !document.contains(target)) return;
-    target.focus?.({ preventScroll: true });
-    target.click();
-}
-
-function applyLinkHintInput(nextLabel) {
-    const exact = linkHintEntries.value.find((entry) => entry.label === nextLabel);
-    if (exact) {
-        openLinkHintEntry(exact);
-        return true;
-    }
-    const prefixMatches = prefixLinkHintMatches(nextLabel);
-    if (prefixMatches.length > 0) {
-        linkHintTyped.value = nextLabel;
-        return true;
-    }
-    return false;
-}
-
-function onLinkHintKeyDown(event) {
-    if (!linkHintMode.value || event.defaultPrevented) return;
-
-    const normalizedKey = normalizeLinkHintKey(event.key);
-    if (
-        normalizedKey === "L" &&
-        (event.ctrlKey || event.metaKey) &&
-        !event.altKey
-    ) {
-        event.preventDefault();
-        event.stopPropagation();
-        closeLinkHintMode();
-        return;
-    }
-
-    if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
-        return;
-    }
-
-    if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeLinkHintMode();
-        return;
-    }
-
-    if (event.key === "Backspace") {
-        event.preventDefault();
-        event.stopPropagation();
-        linkHintTyped.value = linkHintTyped.value.slice(0, -1);
-        return;
-    }
-
-    if (event.key === "Enter") {
-        const matches = prefixLinkHintMatches(linkHintTyped.value);
-        if (matches.length === 1) {
-            event.preventDefault();
-            event.stopPropagation();
-            openLinkHintEntry(matches[0]);
-        }
-        return;
-    }
-
-    if (!/^[A-Z0-9]$/.test(normalizedKey)) {
-        return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (applyLinkHintInput(`${linkHintTyped.value}${normalizedKey}`)) {
-        return;
-    }
-    if (applyLinkHintInput(normalizedKey)) {
-        return;
-    }
-
-    linkHintTyped.value = "";
-}
-
-function onLinkHintWindowBlur() {
-    closeLinkHintMode();
-}
-
 // Children state
 const children = ref([]);
 const childrenLoading = ref(false);
@@ -2067,13 +1805,6 @@ const threadReplyTitle = ref("");
 const threadReplyBody = ref("");
 const threadSendingReply = ref(false);
 const DOUBLE_CONTROL_OPEN_MS = 350;
-let liveRefreshTimer = null;
-let liveRefreshRunning = false;
-let liveRefreshQueued = false;
-let liveRefreshFullRequested = false;
-let presenceTimer = null;
-let liveRefreshSelectedRequested = false;
-let liveRefreshThreadRequested = false;
 let threadSidebarCtrlTapArmed = false;
 let lastThreadSidebarCtrlTapAt = 0;
 let threadSidebarCtrlChordUsed = false;
@@ -2155,7 +1886,9 @@ const rootNotes = computed(() =>
 
 // The list currently shown in the sidebar (search results or root notes)
 const allSearchTypeValues = computed(() => typeOptions.map((opt) => opt.value));
-const searchMode = computed(() => parseSearchMode(searchQuery.value));
+const searchMode = computed(() =>
+    parseSearchMode(searchQuery.value, searchSelectedTypes.value),
+);
 const hasSidebarSearch = computed(() => Boolean(searchMode.value.query));
 const searchSelectableEntries = computed(() => {
     const entries = [];
@@ -2199,7 +1932,9 @@ const searchFilterSummary = computed(() => {
         return "Including all note types.";
     }
     if (searchMode.value.useTypePicker) {
-        const labels = searchMode.value.types.map(noteTypeLabel);
+        const labels = searchMode.value.types.map((type) =>
+            noteTypeLabel(type, typeOptions),
+        );
         if (labels.length <= 3) {
             return `Including: ${labels.join(", ")}`;
         }
@@ -2239,33 +1974,66 @@ const parentSelectableEntries = computed(() => {
     }
     return entries;
 });
-const linkSearchSectionGroups = computed(() =>
-    buildSectionGroups(linkSearchSections.value, {
-        collapsedMap: linkSearchCollapsedSections.value,
-    }),
-);
-const linkSelectableEntries = computed(() => {
-    const entries = [];
-    for (const section of linkSearchSectionGroups.value) {
-        if (section.collapsed) {
-            entries.push({
-                kind: "section",
-                key: section.key,
-                collapsed: true,
-                section,
-            });
-            continue;
-        }
-        for (const item of section.items) {
-            entries.push({
-                kind: "result",
-                key: item.key,
-                item,
-                section,
-            });
-        }
-    }
-    return entries;
+const {
+    closeLinkHintMode,
+    closeLinkSearch,
+    collapseActiveLinkSection,
+    expandActiveLinkSection,
+    linkHintEntries,
+    linkHintMode,
+    linkHintTyped,
+    linkKeyboardMode,
+    linkPopupStyle,
+    linkSearchIndex,
+    linkSearchQuery,
+    linkSearchResults,
+    linkSearchSectionGroups,
+    linkSearchStatusMessage,
+    linkSearchTarget,
+    linkSearchVisible,
+    linkSearching,
+    linkSelectableEntries,
+    onLinkEditorCaretMove,
+    onLinkEditorInput,
+    onLinkEditorKeydown,
+    onLinkEditorScroll,
+    scheduleLinkHintRefresh,
+    selectLinkResult,
+    toggleLinkHintMode,
+    toggleLinkSearchSection,
+} = useNoteLinkSearch({
+    token: props.token,
+    streamSearchNotes,
+    bodyTextarea,
+    newReplyTextarea,
+    threadReplyTextarea,
+    editBody,
+    newReplyBody,
+    threadReplyBody,
+    mainChatFeedEl,
+    threadChatFeedEl,
+    hideHintOverlay: () => hideHintOverlay?.(),
+    onBodyChange: () => {
+        dirty.value = true;
+    },
+    hintRefreshSources: [
+        selectedRendererKey,
+        threadRendererKey,
+        () => selected.value?.id ?? 0,
+        () => threadNote.value?.id ?? 0,
+        isEditing,
+        () =>
+            children.value
+                .map((child) => `${child.id}:${child.updated_at || child.created_at || ""}`)
+                .join("|"),
+        () =>
+            threadChildren.value
+                .map(
+                    (child) =>
+                        `${child.id}:${child.updated_at || child.created_at || ""}`,
+                )
+                .join("|"),
+    ],
 });
 
 watch(searchTypePickerVisible, (visible) => {
@@ -2273,52 +2041,6 @@ watch(searchTypePickerVisible, (visible) => {
         searchSelectedTypes.value = ["standard"];
     }
 });
-
-function normalizeSearchTypes(types) {
-    const normalized = [
-        ...new Set((types || []).map((t) => String(t).trim())),
-    ].filter(Boolean);
-    return normalized.length > 0 ? normalized : ["standard"];
-}
-
-function parseSearchMode(rawQuery) {
-    const tokens = String(rawQuery || "")
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-    const cleaned = [];
-    let includeAllTypes = false;
-    let useTypePicker = false;
-    let tagOnly = false;
-
-    for (const token of tokens) {
-        if (token === ".a") {
-            includeAllTypes = true;
-            continue;
-        }
-        if (token === ".i") {
-            useTypePicker = true;
-            continue;
-        }
-        if (token === ".t") {
-            tagOnly = true;
-            continue;
-        }
-        cleaned.push(token);
-    }
-
-    return {
-        query: cleaned.join(" ").trim(),
-        includeAllTypes,
-        useTypePicker: useTypePicker && !includeAllTypes,
-        tagOnly,
-        types: includeAllTypes
-            ? null
-            : useTypePicker
-              ? normalizeSearchTypes(searchSelectedTypes.value)
-              : ["standard"],
-    };
-}
 
 function setSearchTypes(types) {
     searchSelectedTypes.value = normalizeSearchTypes(types);
@@ -2337,61 +2059,6 @@ function toggleSearchType(type, enabled) {
         searchSelectedTypes.value = ["standard"];
     }
     onSearchInput();
-}
-
-function noteTypeLabel(type) {
-    return typeOptions.find((opt) => opt.value === type)?.label || type;
-}
-
-function formatSearchTags(tags) {
-    return tags.map((tag) => `#${tag}`).join(" ");
-}
-
-function flattenSearchSections(sections) {
-    return (sections || []).flatMap((section) => section?.results || []);
-}
-
-function flattenVisibleSectionGroups(groups) {
-    return (groups || []).flatMap((section) =>
-        section?.collapsed ? [] : (section?.items || []).map((item) => item.result),
-    );
-}
-
-function buildSectionGroups(
-    sections,
-    { includeFlatIndex = true, collapsedMap = {} } = {},
-) {
-    let flatIndex = 0;
-    return (sections || []).map((section, sectionIndex) => {
-        const collapsed = Boolean(collapsedMap?.[section?.key]);
-        const items = (section?.results || []).map((result, itemIndex) => {
-            const currentFlatIndex = includeFlatIndex ? flatIndex : itemIndex;
-            if (!collapsed && includeFlatIndex) {
-                flatIndex += 1;
-            }
-            return {
-                key: `${section?.key || sectionIndex}:${result.id}:${itemIndex}`,
-                result,
-                flatIndex: currentFlatIndex,
-            };
-        });
-        return {
-            ...section,
-            collapsed,
-            items,
-        };
-    });
-}
-
-function setCollapsedSection(collapsedRef, key, collapsed) {
-    collapsedRef.value = {
-        ...collapsedRef.value,
-        [key]: collapsed,
-    };
-}
-
-function toggleCollapsedSection(collapsedRef, key) {
-    setCollapsedSection(collapsedRef, key, !collapsedRef.value?.[key]);
 }
 
 function toggleSearchSection(key) {
@@ -2447,55 +2114,6 @@ function expandActiveParentSection() {
     return parentHighlightedIndex.value >= 0;
 }
 
-function toggleLinkSearchSection(key) {
-    toggleCollapsedSection(linkSearchCollapsedSections, key);
-    linkSearchIndex.value = -1;
-}
-
-function collapseActiveLinkSection() {
-    if (!linkKeyboardMode.value || linkSearchIndex.value < 0) return false;
-    const entry = linkSelectableEntries.value[linkSearchIndex.value];
-    const key = entry?.kind === "section" ? entry.key : entry?.section?.key;
-    if (!key || linkSearchCollapsedSections.value?.[key]) return false;
-    setCollapsedSection(linkSearchCollapsedSections, key, true);
-    linkSearchIndex.value = linkSelectableEntries.value.findIndex(
-        (candidate) => candidate.kind === "section" && candidate.key === key,
-    );
-    return linkSearchIndex.value >= 0;
-}
-
-function expandActiveLinkSection() {
-    if (!linkKeyboardMode.value || linkSearchIndex.value < 0) return false;
-    const entry = linkSelectableEntries.value[linkSearchIndex.value];
-    const key = entry?.kind === "section" ? entry.key : entry?.section?.key;
-    if (!key || !linkSearchCollapsedSections.value?.[key]) return false;
-    setCollapsedSection(linkSearchCollapsedSections, key, false);
-    linkSearchIndex.value = linkSelectableEntries.value.findIndex(
-        (candidate) => candidate.kind === "result" && candidate.section?.key === key,
-    );
-    return linkSearchIndex.value >= 0;
-}
-
-function sectionKeyForFlatIndex(groups, flatIndex) {
-    if (flatIndex == null || flatIndex < 0) return "";
-    for (const section of groups || []) {
-        if (section?.collapsed) continue;
-        for (const item of section?.items || []) {
-            if (item.flatIndex === flatIndex) {
-                return section.key || "";
-            }
-        }
-    }
-    return "";
-}
-
-function firstFlatIndexForSection(groups, key) {
-    for (const section of groups || []) {
-        if (section?.key !== key || section?.collapsed) continue;
-        return section?.items?.[0]?.flatIndex ?? -1;
-    }
-    return -1;
-}
 
 function collapseActiveSearchSection() {
     if (!searchKeyboardMode.value || highlightedIndex.value < 0) return false;
@@ -2582,116 +2200,6 @@ function onParentFieldKeydown(event) {
     }
 }
 
-function normalizeSearchSection(section, { filterResult = null } = {}) {
-    const results = Array.isArray(section?.results)
-        ? section.results.filter((result) =>
-              filterResult ? filterResult(result) : true,
-          )
-        : [];
-    if (results.length === 0) {
-        return null;
-    }
-    return {
-        key: section?.key || `section-${results[0]?.id || "results"}`,
-        label: section?.label || "Results",
-        description: section?.description || "",
-        results,
-    };
-}
-
-function abortSearchRequest(store) {
-    if (store?.controller) {
-        store.controller.abort();
-        store.controller = null;
-    }
-}
-
-async function runStreamedSearch({
-    query,
-    types = null,
-    tagOnly = false,
-    sectionsRef,
-    statusRef,
-    searchingRef,
-    requestStore,
-    errorRef = null,
-    filterResult = null,
-    onFirstResult = null,
-    onReset = null,
-    onDone = null,
-}) {
-    const trimmed = String(query || "").trim();
-    abortSearchRequest(requestStore);
-
-    if (!trimmed) {
-        sectionsRef.value = [];
-        statusRef.value = "";
-        searchingRef.value = false;
-        if (errorRef) {
-            errorRef.value = "";
-        }
-        onReset?.();
-        return;
-    }
-
-    const controller = new AbortController();
-    requestStore.controller = controller;
-    sectionsRef.value = [];
-    statusRef.value = "Searching exact matches…";
-    if (errorRef) {
-        errorRef.value = "";
-    }
-    searchingRef.value = true;
-    let firstResultDelivered = false;
-
-    try {
-        await streamSearchNotes(props.token, trimmed, {
-            types,
-            tagOnly,
-            signal: controller.signal,
-            onStatus(event) {
-                if (requestStore.controller !== controller) return;
-                statusRef.value = event?.message || "";
-            },
-            onSection(section) {
-                if (requestStore.controller !== controller) return;
-                const normalized = normalizeSearchSection(section, {
-                    filterResult,
-                });
-                if (!normalized) return;
-                sectionsRef.value = [...sectionsRef.value, normalized];
-                if (!firstResultDelivered) {
-                    firstResultDelivered = true;
-                    onFirstResult?.();
-                }
-            },
-            onError(event) {
-                if (requestStore.controller !== controller || !errorRef) return;
-                errorRef.value = event?.message || "Search failed";
-            },
-            onDone(event) {
-                if (requestStore.controller !== controller) return;
-                statusRef.value = event?.message || "";
-                onDone?.(event);
-            },
-        });
-    } catch (e) {
-        if (e?.name === "AbortError") {
-            return;
-        }
-        sectionsRef.value = [];
-        statusRef.value = "";
-        if (errorRef) {
-            errorRef.value = e?.message || "Search failed";
-        }
-        onReset?.();
-    } finally {
-        if (requestStore.controller === controller) {
-            requestStore.controller = null;
-            searchingRef.value = false;
-        }
-    }
-}
 
 function hasUnsavedSelectedChanges() {
     return Boolean(selected.value) && dirty.value;
@@ -3056,64 +2564,11 @@ const {
 });
 
 // Edit / View toggle
-const isEditing = ref(false);
 const renderedBody = computed(() => {
     if (!editBody.value)
         return '<p style="color: var(--font-color-secondary);">Nothing to preview</p>';
 	    return postProcessMediaTags(md.render(editBody.value), selected.value?.attachments);
 });
-
-// Edit-sync presence: which notes (by id) other devices of this user are editing.
-const PRESENCE_TTL_MS = 30000;
-const presence = ref({}); // String(note_id) -> { editing: true, device_id, ts }
-const editingElsewhere = computed(() => {
-    const id = selected.value?.id;
-    if (!id) return false;
-    const p = presence.value[String(id)];
-    return Boolean(p && p.editing && p.device_id !== deviceId);
-});
-
-// Broadcast our edit-mode changes to other devices (same user) via the live socket.
-watch([isEditing, () => selected.value?.id], ([editing, noteID]) => {
-    if (!noteID) return; // new unsaved note has id null — nothing to sync
-    sendLiveMessage({
-        type: "edit.sync",
-        note_id: Number(noteID),
-        editing: Boolean(editing),
-        device_id: deviceId,
-    });
-});
-
-// Live draft mirroring: when editing, debounce-send the in-progress body so
-// other devices of this user see changes as we type. The `lastEditBodySent`
-// equality guard also suppresses echoing bodies that we adopted from a peer.
-let editBodySendTimer = null;
-let lastEditBodySent = {}; // String(note_id) -> last body sent or adopted
-watch(editBody, (body) => {
-    const noteID = selected.value?.id;
-    if (!noteID || !isEditing.value) return;
-    const key = String(noteID);
-    if (body === lastEditBodySent[key]) return;
-    if (editBodySendTimer) clearTimeout(editBodySendTimer);
-    editBodySendTimer = setTimeout(() => {
-        editBodySendTimer = null;
-        lastEditBodySent[key] = body;
-        sendLiveMessage({ type: "edit.body", note_id: Number(noteID), body });
-    }, 300);
-});
-
-// Replace this note's editor body with the peer's latest draft (last-write-wins).
-// The peer's newer body is the authoritative live draft; we adopt it verbatim.
-// Echo is suppressed via lastEditBodySent so we don't re-broadcast a body we
-// just adopted.
-function applyRemoteBody(noteID, body, fromDeviceID) {
-    const target = selected.value;
-    if (!target || target.id !== noteID || fromDeviceID === deviceId) return;
-    if (editBody.value === body) return;
-    lastEditBodySent[String(noteID)] = body;
-    editBody.value = body;
-    dirty.value = true;
-}
 
 // Render any markdown body (used for child messages)
 function renderMarkdown(body, attachments) {
@@ -3241,67 +2696,6 @@ async function refreshThreadNoteInPlace(noteId = threadNote.value?.id) {
     }
 }
 
-async function runLiveRefresh() {
-    if (liveRefreshRunning) {
-        liveRefreshQueued = true;
-        return;
-    }
-    liveRefreshRunning = true;
-    const refreshFull = liveRefreshFullRequested;
-    const refreshSelected = refreshFull || liveRefreshSelectedRequested;
-    const refreshThread = refreshFull || liveRefreshThreadRequested;
-    liveRefreshFullRequested = false;
-    liveRefreshSelectedRequested = false;
-    liveRefreshThreadRequested = false;
-    try {
-        if (refreshFull) {
-            await loadNotes();
-            if (hasSidebarSearch.value) {
-                await doSearch();
-            }
-        }
-        const selectedNoteID = selected.value?.id;
-        if (refreshSelected && selectedNoteID) {
-            if (activeUploads.value && activeUploads.value.length > 0) {
-                // Uploads are in progress; skip the in-place refresh to avoid
-                // disrupting the attachments array. The onComplete callbacks
-                // handle the UI updates directly.
-                liveRefreshPending.value = false;
-            } else if (dirty.value || saving.value) {
-                liveRefreshPending.value = true;
-                await refreshSelectedCollections(selectedNoteID);
-            } else {
-                await refreshSelectedInPlace(selectedNoteID);
-            }
-        }
-        if (refreshThread && threadNote.value?.id) {
-            await refreshThreadNoteInPlace(threadNote.value.id);
-        }
-    } finally {
-        liveRefreshRunning = false;
-        if (
-            liveRefreshQueued ||
-            liveRefreshFullRequested ||
-            liveRefreshSelectedRequested ||
-            liveRefreshThreadRequested
-        ) {
-            liveRefreshQueued = false;
-            scheduleLiveRefresh();
-        }
-    }
-}
-
-function scheduleLiveRefresh({ full = false, selected: refreshSelected = false, thread: refreshThread = false } = {}) {
-    liveRefreshFullRequested = liveRefreshFullRequested || full;
-    liveRefreshSelectedRequested = liveRefreshSelectedRequested || refreshSelected;
-    liveRefreshThreadRequested = liveRefreshThreadRequested || refreshThread;
-    if (liveRefreshTimer) return;
-    liveRefreshTimer = window.setTimeout(() => {
-        liveRefreshTimer = null;
-        runLiveRefresh();
-    }, 100);
-}
-
 function escapeMarkdownLabel(text) {
     return String(text || "")
         .replace(/\\/g, "\\\\")
@@ -3365,115 +2759,24 @@ function applyInlineUploadResolution(resolution) {
     }
 }
 
-function prunePresence() {
-    const now = Date.now();
-    for (const k of Object.keys(presence.value)) {
-        const p = presence.value[k];
-        if (!p || now - (p.ts || 0) > PRESENCE_TTL_MS) presence.value[k] = undefined;
-    }
-}
-
-function onLiveMessage(event) {
-    const detail = event?.detail;
-    if (!detail?.type) return;
-
-    prunePresence();
-
-    if (detail.type === "edit.sync") {
-        const noteID = Number(detail.note_id);
-        if (noteID > 0) {
-            if (detail.editing) {
-                presence.value[String(noteID)] = {
-                    editing: true, device_id: detail.device_id || "", ts: Date.now(),
-                };
-            } else {
-                presence.value[String(noteID)] = undefined;
-            }
-        }
-        return;
-    }
-
-    if (detail.type === "edit.body") {
-        const noteID = Number(detail.note_id);
-        if (noteID > 0) {
-            applyRemoteBody(noteID, typeof detail.body === "string" ? detail.body : "", detail.device_id || "");
-        }
-        return;
-    }
-
-    if (detail.type === "live.ready") {
-        scheduleLiveRefresh({
-            full: true,
-            selected: Boolean(selected.value?.id),
-            thread: Boolean(threadNote.value?.id),
-        });
-        return;
-    }
-
-    if (detail.type !== "notes.changed") return;
-
-    if (
-        detail.reason === "inline_upload_resolved" &&
-        detail.upload_resolution?.note_id
-    ) {
-        applyInlineUploadResolution(detail.upload_resolution);
-        scheduleLiveRefresh({ full: true, selected: false, thread: false });
-        return;
-    }
-
-    const changedIDs = new Set(
-        Array.isArray(detail.note_ids)
-            ? detail.note_ids
-                  .map((id) => Number(id))
-                  .filter((id) => Number.isInteger(id) && id > 0)
-            : [],
-    );
-    const selectedNoteID = selected.value?.id;
-    const threadNoteID = threadNote.value?.id;
-    scheduleLiveRefresh({
-        full: true,
-        selected:
-            Boolean(selectedNoteID) &&
-            (changedIDs.size === 0 || changedIDs.has(selectedNoteID)),
-        thread:
-            Boolean(threadNoteID) &&
-            (changedIDs.size === 0 || changedIDs.has(threadNoteID)),
-    });
-}
-
-watch([dirty, saving], ([isDirty, isSaving]) => {
-    if (!liveRefreshPending.value || isDirty || isSaving) {
-        return;
-    }
-    scheduleLiveRefresh({ selected: true });
-});
-
-watch(
-    [
-        linkHintMode,
-        selectedRendererKey,
-        threadRendererKey,
-        () => selected.value?.id ?? 0,
-        () => threadNote.value?.id ?? 0,
+const { editingElsewhere, liveRefreshPending, scheduleLiveRefresh } =
+    useNotesLiveSync({
+        selected,
+        threadNote,
         isEditing,
-        () =>
-            children.value
-                .map((child) => `${child.id}:${child.updated_at || child.created_at || ""}`)
-                .join("|"),
-        () =>
-            threadChildren.value
-                .map(
-                    (child) =>
-                        `${child.id}:${child.updated_at || child.created_at || ""}`,
-                )
-                .join("|"),
-    ],
-    async ([active]) => {
-        if (!active) return;
-        await nextTick();
-        scheduleLinkHintRefresh();
-    },
-);
+        editBody,
+        dirty,
+        saving,
+        hasSidebarSearch,
+        activeUploads,
+        sendLiveMessage,
+        loadNotes,
+        refreshSidebarSearch: doSearch,
+        refreshSelectedCollections,
+        refreshSelectedInPlace,
+        refreshThreadNoteInPlace,
+        applyInlineUploadResolution,
+    });
 
 watch([showHotkeys, showDeleteModal], ([hotkeysOpen, deleteOpen]) => {
     if (hotkeysOpen || deleteOpen) {
@@ -3484,26 +2787,8 @@ watch([showHotkeys, showDeleteModal], ([hotkeysOpen, deleteOpen]) => {
 onMounted(() => {
     loadNotes();
     fetchAndMergeManifests(props.token);
-    window.addEventListener("live:message", onLiveMessage);
-    presenceTimer = window.setInterval(prunePresence, 10000);
     // Resume any interrupted uploads from IndexedDB
     resumeStoredUploads(props.token);
-});
-
-onUnmounted(() => {
-    window.removeEventListener("live:message", onLiveMessage);
-    if (editBodySendTimer) {
-        clearTimeout(editBodySendTimer);
-        editBodySendTimer = null;
-    }
-    if (presenceTimer) {
-        window.clearInterval(presenceTimer);
-        presenceTimer = null;
-    }
-    if (liveRefreshTimer) {
-        window.clearTimeout(liveRefreshTimer);
-        liveRefreshTimer = null;
-    }
 });
 
 async function loadNotes() {
@@ -4433,316 +3718,6 @@ async function doSearch() {
     });
 }
 
-function relevancePct(distance) {
-    if (distance == null) return "";
-    const pct = Math.max(0, Math.round((1 - distance / 2) * 100));
-    return pct + "% match";
-}
-
-// ── [[ Link search helpers ──
-function onLinkEditorInput(target) {
-    const context = getLinkSearchContext(target);
-    if (!context) return;
-    linkSearchTarget.value = target;
-    context.onChange?.();
-    updateLinkSearchFromCursor();
-}
-
-function onLinkEditorCaretMove(target, e) {
-    if (
-        e?.type === "keyup" &&
-        ["ArrowUp", "ArrowDown", "Enter", "Escape", "Tab"].includes(e.key)
-    ) {
-        return;
-    }
-    linkSearchTarget.value = target;
-    updateLinkSearchFromCursor();
-}
-
-function onLinkEditorScroll(target) {
-    if (!linkSearchVisible.value || linkSearchTarget.value !== target) return;
-    updateLinkPopupPosition();
-}
-
-function onLinkEditorKeydown(target, event) {
-    if (
-        !linkSearchVisible.value ||
-        linkSearchTarget.value !== target ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey
-    ) {
-        return;
-    }
-
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        linkKeyboardMode.value = true;
-        handleArrowShortcut(event);
-        return;
-    }
-    if (event.key === "Enter") {
-        handleEnterShortcut(event);
-        return;
-    }
-    if (event.key === "Escape") {
-        handleEscapeShortcut(event);
-        return;
-    }
-    if (!linkKeyboardMode.value) {
-        return;
-    }
-    if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        collapseActiveLinkSection();
-        return;
-    }
-    if (event.key === "ArrowRight") {
-        event.preventDefault();
-        expandActiveLinkSection();
-    }
-}
-
-function detectLinkSearchTrigger(textBefore) {
-    const lastOpen = textBefore.lastIndexOf("[[");
-    const lastClose = textBefore.lastIndexOf("]]"
-    );
-    if (lastOpen !== -1 && lastOpen > lastClose) {
-        const query = textBefore.slice(lastOpen + 2);
-        if (!query.includes("]]"
-        ) && !query.includes("\n")) {
-            return {
-                type: "wiki",
-                start: lastOpen,
-                query,
-            };
-        }
-    }
-
-    const lineStart = textBefore.lastIndexOf("\n") + 1;
-    const line = textBefore.slice(lineStart);
-    const slashMatch = line.match(/^(\s*)\/\/([^\n]*)$/);
-    if (slashMatch) {
-        return {
-            type: "slash",
-            start: lineStart + slashMatch[1].length,
-            query: slashMatch[2],
-        };
-    }
-
-    return null;
-}
-
-function resetLinkSearchResults() {
-    abortSearchRequest(linkSearchRequest);
-    linkSearching.value = false;
-    linkSearchSections.value = [];
-    linkSearchCollapsedSections.value = {};
-    linkSearchStatusMessage.value = "";
-    linkSearchIndex.value = -1;
-}
-
-function updateLinkSearchFromCursor() {
-    const context = getLinkSearchContext();
-    const el = context?.textarea.value;
-    if (!context || !el) {
-        closeLinkSearch();
-        return;
-    }
-    const pos = el.selectionStart ?? 0;
-    const textBefore = context.text.value.slice(0, pos);
-    const trigger = detectLinkSearchTrigger(textBefore);
-    if (!trigger) {
-        closeLinkSearch();
-        return;
-    }
-
-    const queryUnchanged =
-        linkSearchVisible.value &&
-        trigger.type === linkSearchTriggerType.value &&
-        trigger.start === linkSearchTriggerStart.value &&
-        trigger.query === linkSearchQuery.value;
-
-    linkSearchTriggerType.value = trigger.type;
-    linkSearchTriggerStart.value = trigger.start;
-    linkSearchQuery.value = trigger.query;
-    linkSearchVisible.value = true;
-    updateLinkPopupPosition();
-
-    if (queryUnchanged) {
-        return;
-    }
-
-    clearTimeout(linkSearchTimeout);
-    if (!trigger.query.trim()) {
-        resetLinkSearchResults();
-        return;
-    }
-    linkSearchTimeout = setTimeout(doLinkSearch, 150);
-}
-
-function getTextareaCaretPosition(textarea, position) {
-    const div = document.createElement("div");
-    const span = document.createElement("span");
-    const style = window.getComputedStyle(textarea);
-    const props = [
-        "boxSizing",
-        "width",
-        "height",
-        "overflowX",
-        "overflowY",
-        "borderTopWidth",
-        "borderRightWidth",
-        "borderBottomWidth",
-        "borderLeftWidth",
-        "paddingTop",
-        "paddingRight",
-        "paddingBottom",
-        "paddingLeft",
-        "fontStyle",
-        "fontVariant",
-        "fontWeight",
-        "fontStretch",
-        "fontSize",
-        "fontSizeAdjust",
-        "lineHeight",
-        "fontFamily",
-        "textAlign",
-        "textTransform",
-        "textIndent",
-        "textDecoration",
-        "letterSpacing",
-        "wordSpacing",
-        "tabSize",
-        "MozTabSize",
-    ];
-
-    div.style.position = "absolute";
-    div.style.visibility = "hidden";
-    div.style.whiteSpace = "pre-wrap";
-    div.style.wordWrap = "break-word";
-    div.style.top = "0";
-    div.style.left = "0";
-
-    for (const prop of props) {
-        div.style[prop] = style[prop];
-    }
-
-    div.textContent = textarea.value.slice(0, position);
-    span.textContent = textarea.value.slice(position) || ".";
-    div.appendChild(span);
-    document.body.appendChild(div);
-
-    const left = span.offsetLeft - textarea.scrollLeft;
-    const top = span.offsetTop - textarea.scrollTop;
-
-    document.body.removeChild(div);
-    return { left, top };
-}
-
-function updateLinkPopupPosition() {
-    const el = getLinkSearchContext()?.textarea.value;
-    if (!el || !linkSearchVisible.value) return;
-
-    const { left: caretLeft, top: caretTop } = getTextareaCaretPosition(
-        el,
-        el.selectionStart ?? 0,
-    );
-    const style = window.getComputedStyle(el);
-    const lineHeight =
-        parseFloat(style.lineHeight) || parseFloat(style.fontSize) || 18;
-    const popupWidth = 320;
-    const popupHeight = 220;
-    const gap = 8;
-    const pad = 8;
-
-    let left = Math.max(pad, caretLeft);
-    let top = caretTop + lineHeight + gap;
-
-    const maxLeft = Math.max(pad, el.clientWidth - popupWidth - pad);
-    left = Math.min(left, maxLeft);
-
-    const rect = el.getBoundingClientRect();
-    const popupBottom = rect.top + top + popupHeight;
-    if (popupBottom > window.innerHeight - 12) {
-        top = Math.max(pad, caretTop - popupHeight - gap);
-    }
-
-    linkPopupStyle.value = {
-        left: `${left}px`,
-        top: `${top}px`,
-    };
-}
-
-async function doLinkSearch() {
-    const q = linkSearchQuery.value.trim();
-    linkSearchCollapsedSections.value = {};
-    await runStreamedSearch({
-        query: q,
-        sectionsRef: linkSearchSections,
-        statusRef: linkSearchStatusMessage,
-        searchingRef: linkSearching,
-        requestStore: linkSearchRequest,
-        onFirstResult: () => {
-            if (linkSearchIndex.value < 0 && linkSearchResults.value.length > 0) {
-                linkSearchIndex.value = 0;
-            }
-        },
-        onReset: () => {
-            linkSearchSections.value = [];
-            linkSearchCollapsedSections.value = {};
-            linkSearchStatusMessage.value = "";
-            linkKeyboardMode.value = false;
-            linkSearchIndex.value = -1;
-        },
-        onDone: () => {
-            linkSearchStatusMessage.value = "";
-        },
-    });
-}
-
-function closeLinkSearch() {
-    linkSearchVisible.value = false;
-    linkSearchQuery.value = "";
-    linkSearchTriggerType.value = null;
-    linkSearchTriggerStart.value = -1;
-    linkKeyboardMode.value = false;
-    resetLinkSearchResults();
-    linkSearchTarget.value = null;
-    clearTimeout(linkSearchTimeout);
-}
-
-function selectLinkResult(note) {
-    const context = getLinkSearchContext();
-    const el = context?.textarea.value;
-    if (!context || !el) return;
-    const pos = el.selectionStart ?? 0;
-    const textBefore = context.text.value.slice(0, pos);
-    const textAfter = context.text.value.slice(pos);
-    const linkText = `[${note.title || "Untitled"}](/note/${note.id})`;
-
-    let replaceStart = -1;
-    if (linkSearchTriggerType.value === "wiki") {
-        replaceStart =
-            linkSearchTriggerStart.value >= 0
-                ? linkSearchTriggerStart.value
-                : textBefore.lastIndexOf("[[");
-    } else if (linkSearchTriggerType.value === "slash") {
-        replaceStart = linkSearchTriggerStart.value;
-    }
-    if (replaceStart == null || replaceStart < 0) return;
-
-    const newText = textBefore.slice(0, replaceStart) + linkText;
-    context.text.value = newText + textAfter;
-    closeLinkSearch();
-    requestAnimationFrame(() => {
-        el.focus();
-        const cursorPos = newText.length;
-        el.setSelectionRange(cursorPos, cursorPos);
-        updateLinkPopupPosition();
-    });
-    context.onChange?.();
-}
-
 function handleEscapeShortcut(event) {
     if (linkHintMode.value) {
         event.preventDefault();
@@ -4963,11 +3938,7 @@ onMounted(() => {
     window.addEventListener("beforeunload", onBeforeUnload);
     window.addEventListener("keydown", onThreadSidebarCtrlKeyDown, true);
     window.addEventListener("keyup", onThreadSidebarCtrlKeyUp, true);
-    window.addEventListener("keydown", onLinkHintKeyDown, true);
-    window.addEventListener("resize", scheduleLinkHintRefresh);
-    window.addEventListener("scroll", scheduleLinkHintRefresh, true);
     window.addEventListener("blur", onThreadSidebarCtrlBlur);
-    window.addEventListener("blur", onLinkHintWindowBlur);
     // Mobile detection (same 767px breakpoint as CSS + innerWidth checks)
     mobileMQ = window.matchMedia("(max-width: 767px)");
     onMobileChange = (e) => {
@@ -4986,21 +3957,14 @@ onUnmounted(() => {
     window.removeEventListener("beforeunload", onBeforeUnload);
     window.removeEventListener("keydown", onThreadSidebarCtrlKeyDown, true);
     window.removeEventListener("keyup", onThreadSidebarCtrlKeyUp, true);
-    window.removeEventListener("keydown", onLinkHintKeyDown, true);
-    window.removeEventListener("resize", scheduleLinkHintRefresh);
-    window.removeEventListener("scroll", scheduleLinkHintRefresh, true);
     window.removeEventListener("blur", onThreadSidebarCtrlBlur);
-    window.removeEventListener("blur", onLinkHintWindowBlur);
     if (mobileMQ && onMobileChange) {
         mobileMQ.removeEventListener("change", onMobileChange);
     }
-    cancelLinkHintRefresh();
     clearTimeout(searchTimeout);
     clearTimeout(parentSearchTimeout);
-    clearTimeout(linkSearchTimeout);
     abortSearchRequest(sidebarSearchRequest);
     abortSearchRequest(parentSearchRequest);
-    abortSearchRequest(linkSearchRequest);
 });
 
 function onClickOutside(e) {
