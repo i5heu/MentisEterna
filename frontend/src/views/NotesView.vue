@@ -76,6 +76,7 @@
                         class="search-input"
                         :title="getShortcutLabel('focus-search')"
                         @input="onSearchInput"
+                        @focus="closeLinkSearch()"
                         @keydown="onSearchFieldKeydown"
                     />
                     <button
@@ -1985,6 +1986,7 @@ const {
     linkKeyboardMode,
     linkPopupStyle,
     linkSearchIndex,
+    linkSearchOwnsFocus,
     linkSearchQuery,
     linkSearchResults,
     linkSearchSectionGroups,
@@ -2878,7 +2880,10 @@ async function selectSearchResult(
     if (preserveHighlight && highlightIndex >= 0) {
         highlightedIndex.value = highlightIndex;
     } else {
-        highlightedIndex.value = searchResults.value.indexOf(sr);
+        searchKeyboardMode.value = true;
+        highlightedIndex.value = searchSelectableEntries.value.findIndex(
+            (entry) => entry.kind === "result" && entry.item.result.id === sr.id,
+        );
     }
     const noteTypeVal = noteType.value || "standard";
     if (isLazyChildren(noteTypeVal)) {
@@ -3767,7 +3772,7 @@ function handleEscapeShortcut(event) {
 }
 
 function handleArrowShortcut(event) {
-    if (linkSearchVisible.value) {
+    if (linkSearchOwnsFocus()) {
         const linkList = linkKeyboardMode.value
             ? linkSelectableEntries.value
             : linkSearchResults.value;
@@ -3827,6 +3832,10 @@ function handleArrowShortcut(event) {
     if (!inSearch && isEditableElement(active)) {
         return;
     }
+    if (hasSidebarSearch.value && !searchKeyboardMode.value) {
+        searchKeyboardMode.value = true;
+        highlightedIndex.value = -1;
+    }
 
     const list = sidebarList.value;
     if (list.length === 0) return;
@@ -3853,7 +3862,7 @@ function handleArrowShortcut(event) {
 }
 
 function handleEnterShortcut(event) {
-    if (linkSearchVisible.value) {
+    if (linkSearchOwnsFocus()) {
         const linkList = linkKeyboardMode.value
             ? linkSelectableEntries.value
             : linkSearchResults.value;

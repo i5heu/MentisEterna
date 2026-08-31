@@ -626,6 +626,12 @@ export function useNoteLinkSearch({
         clearTimeout(linkSearchTimeout);
     }
 
+    function linkSearchOwnsFocus() {
+        if (!linkSearchVisible.value) return false;
+        const element = getLinkSearchContext()?.textarea.value;
+        return Boolean(element) && document.activeElement === element;
+    }
+
     function selectLinkResult(note) {
         const context = getLinkSearchContext();
         const element = context?.textarea.value;
@@ -692,6 +698,7 @@ export function useNoteLinkSearch({
         linkKeyboardMode,
         linkPopupStyle,
         linkSearchIndex,
+        linkSearchOwnsFocus,
         linkSearchQuery,
         linkSearchResults,
         linkSearchSectionGroups,
