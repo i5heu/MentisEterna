@@ -85,8 +85,10 @@ is the complete requirements document for it. The client side lives in
   `[mcp] disabled = false`.
 - The client dials out once and keeps the WebSocket (subprotocol
   `mentis-tunnel-v1`) alive permanently: PING every 30 s, reconnect with
-  exponential backoff (1 s → 60 s cap, ±20 % jitter), max 8 concurrent
-  relayed requests (`[mcp] proxy_max_concurrency`, queueing beyond that).
+  exponential backoff (1 s → 60 s cap, ±20 % jitter). Requests run on a fixed
+  worker pool (`[mcp] proxy_max_concurrency`, default 8) with a bounded queue —
+  overflow is answered with 503 "overloaded", a wedged handler with 504 after
+  ~115 s — so a flooding or wedged backend can never wedge the client.
 - The proxy relays agent requests as `req` frames; the client rebuilds them
   and runs them through the **regular `handleMCP` handler** — auth, body
   limits, and tool dispatch are identical to the LAN endpoint. The proxy

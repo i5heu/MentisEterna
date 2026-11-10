@@ -16,7 +16,9 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +48,19 @@ const (
 	handshakeTimeout    = 15 * time.Second
 	backoffInitial      = 1 * time.Second
 	backoffCap          = 60 * time.Second
+
+	// defaultRequestTimeout bounds one relayed request. It stays below the
+	// proxy's documented 120 s wait (docs/MCPProxy.md P5) so agents normally
+	// get a definitive 504 answer instead of a proxy-side timeout.
+	defaultRequestTimeout = 115 * time.Second
+	// queuePerWorker is the burst headroom per worker in the pending queue;
+	// beyond it requests are answered with 503 immediately.
+	queuePerWorker = 2
+	// minRecommendedTokenLen is only a warning threshold for entropy.
+	minRecommendedTokenLen = 32
+	// log truncation bounds for proxy-controlled strings.
+	maxLogCodeLen    = 64
+	maxLogMessageLen = 256
 )
 
 // Error frame codes (see docs/MCPProxy.md).
@@ -67,10 +82,69 @@ type Config struct {
 	Method string
 	// Path is the only relayed request path. Default: "/mcp".
 	Path string
-	// MaxConcurrency caps concurrent handler calls. <=0: DefaultMaxConcurrency.
+	// MaxConcurrency is the number of worker goroutines and the cap on
+	// concurrent handler calls. <=0: DefaultMaxConcurrency.
 	MaxConcurrency int
 	// PingInterval is the WS PING cadence. <=0: defaultPingInterval (30s).
 	PingInterval time.Duration
+	// RequestTimeout bounds one relayed request before the worker answers
+	// 504. <=0: defaultRequestTimeout (115s, below the proxy's 120s wait).
+	RequestTimeout time.Duration
+}
+
+// Validate reports whether the tunnel can start at all: a ws/wss URL with a
+// host, and a bearer token that is safe to place into an HTTP header
+// (printable ASCII only — no whitespace or control characters).
+func (cfg Config) Validate() error {
+	trimmed := strings.TrimSpace(cfg.URL)
+	if trimmed == "" {
+		return errors.New("proxy_url is empty")
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("invalid proxy_url: %v", err)
+	}
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("proxy_url must use ws:// or wss://, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return errors.New("proxy_url has no host")
+	}
+	if cfg.Token == "" {
+		return errors.New("token is empty")
+	}
+	for i := 0; i < len(cfg.Token); i++ {
+		if cfg.Token[i] < 0x21 || cfg.Token[i] > 0x7e {
+			return errors.New("token contains spaces or control characters")
+		}
+	}
+	return nil
+}
+
+// Warnings returns non-fatal hardening hints for the operator.
+func (cfg Config) Warnings() []string {
+	var out []string
+	u, err := url.Parse(strings.TrimSpace(cfg.URL))
+	if err == nil && u.Host != "" && u.Scheme == "ws" && !isLocalOrPrivateHost(u.Hostname()) {
+		out = append(out, fmt.Sprintf(
+			"proxy_url uses plaintext ws:// to %s — over a public network this leaks the tunnel token and MCP payloads; use wss://", u.Hostname()))
+	}
+	if len(cfg.Token) < minRecommendedTokenLen {
+		out = append(out, fmt.Sprintf(
+			"token is only %d characters — use ≥%d random bytes to resist brute force", len(cfg.Token), minRecommendedTokenLen))
+	}
+	return out
+}
+
+// isLocalOrPrivateHost reports whether the dial target stays on the local
+// machine or a private network, where plaintext ws:// is a tolerable choice.
+func isLocalOrPrivateHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
 
 // frameType is the envelope every tunnel frame carries.
@@ -119,7 +193,6 @@ type Status struct {
 // with Run (blocking), observe with Status.
 type Client struct {
 	cfg Config
-	sem chan struct{}
 
 	mu              sync.Mutex
 	connected       bool
@@ -130,6 +203,7 @@ type Client struct {
 
 // New creates a tunnel client. It does nothing until Run is called.
 func New(cfg Config) *Client {
+	cfg.URL = strings.TrimSpace(cfg.URL)
 	if cfg.Handler == nil {
 		cfg.Handler = http.NotFoundHandler()
 	}
@@ -145,7 +219,10 @@ func New(cfg Config) *Client {
 	if cfg.PingInterval <= 0 {
 		cfg.PingInterval = defaultPingInterval
 	}
-	return &Client{cfg: cfg, sem: make(chan struct{}, cfg.MaxConcurrency)}
+	if cfg.RequestTimeout <= 0 {
+		cfg.RequestTimeout = defaultRequestTimeout
+	}
+	return &Client{cfg: cfg}
 }
 
 // Status returns a snapshot of the tunnel state.
@@ -180,8 +257,8 @@ func (c *Client) setStatus(connected bool, errText string) {
 // exponential backoff (1s doubling, 60s cap, ±20% jitter). It blocks, so
 // call it in a goroutine.
 func (c *Client) Run(ctx context.Context) {
-	if c.cfg.URL == "" || c.cfg.Token == "" {
-		log.Printf("mcp tunnel: not started (proxy_url and token are required)")
+	if err := c.cfg.Validate(); err != nil {
+		log.Printf("mcp tunnel: not started: %v", err)
 		return
 	}
 	backoff := backoffInitial
@@ -262,9 +339,10 @@ func (c *Client) connectAndServe(ctx context.Context) time.Duration {
 }
 
 // serve runs one tunnel session until the connection fails or ctx is done.
-// All frames and PINGs are written by a single writer goroutine; requests are
-// processed in their own goroutines (bounded by the semaphore) and push their
-// result frames onto the writer channel.
+// All frames and PINGs are written by a single writer goroutine. Requests run
+// on a fixed worker pool fed by a bounded queue, so a flooding proxy can
+// never make the client spawn goroutines or grow memory without bound —
+// excess requests are answered with 503 instead of queued.
 func (c *Client) serve(ctx context.Context, conn *websocket.Conn) (time.Duration, error) {
 	start := time.Now()
 	ctx, cancel := context.WithCancel(ctx)
@@ -281,22 +359,41 @@ func (c *Client) serve(ctx context.Context, conn *websocket.Conn) (time.Duration
 		_ = conn.Close()
 	})
 
+	// Fixed worker pool: concurrency cap and total frame memory are both
+	// bounded by construction (pending fills up, then readLoop rejects).
+	pending := make(chan reqFrame, c.cfg.MaxConcurrency*queuePerWorker)
+	var workers sync.WaitGroup
+	for i := 0; i < c.cfg.MaxConcurrency; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case f := <-pending:
+					c.worker(ctx, f, writes)
+				}
+			}
+		}()
+	}
+
 	readDone := make(chan error, 1)
-	go func() { readDone <- c.readLoop(ctx, conn, writes) }()
+	go func() { readDone <- c.readLoop(ctx, conn, writes, pending) }()
 
 	var reason error
 	select {
 	case reason = <-readDone:
 		// Reader finished on its own (network error or deadline).
 		cancel()
-		<-writerDone
 	case <-ctx.Done():
 		// Parent shutdown: force-close to unblock the reader immediately.
 		_ = conn.Close()
 		reason = <-readDone
 		cancel()
-		<-writerDone
 	}
+	<-writerDone
+	workers.Wait()
 	return time.Since(start), reason
 }
 
@@ -330,7 +427,8 @@ func (c *Client) writeLoop(ctx context.Context, conn *websocket.Conn, writes <-c
 }
 
 // readLoop consumes tunnel frames until the connection fails or ctx is done.
-func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn, writes chan<- any) error {
+// Proxy-controlled strings are truncated before they reach the log.
+func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn, writes chan<- any, pending chan<- reqFrame) error {
 	conn.SetReadLimit(maxFrameBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(readIdleLimit))
 	conn.SetPongHandler(func(string) error {
@@ -352,16 +450,95 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn, writes chan
 		}
 		switch env.Type {
 		case "req":
-			c.dispatch(ctx, writes, data)
+			var f reqFrame
+			if jsonErr := json.Unmarshal(data, &f); jsonErr != nil || f.ID == "" || len(f.ID) > maxFrameIDLen {
+				c.trySend(ctx, writes, newErrorFrame(codeBadRequest, "req frame: id is missing or invalid"))
+				continue
+			}
+			select {
+			case pending <- f:
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Queue full: answer immediately instead of growing.
+				c.trySend(ctx, writes, resFrame{
+					Type:        "res",
+					ID:          f.ID,
+					Status:      http.StatusServiceUnavailable,
+					Body:        "overloaded",
+					ContentType: "text/plain; charset=utf-8",
+				})
+			}
 		case "error":
 			var e errorFrame
 			if err := json.Unmarshal(data, &e); err == nil {
-				log.Printf("mcp tunnel: proxy reported %s: %s", e.Code, e.Message)
+				log.Printf("mcp tunnel: proxy reported %s: %s",
+					truncateLog(e.Code, maxLogCodeLen), truncateLog(e.Message, maxLogMessageLen))
 			}
 		default:
 			c.trySend(ctx, writes, newErrorFrame(codeBadFrame, fmt.Sprintf("unknown frame type %q", env.Type)))
 		}
 	}
+}
+
+// worker consumes one queued request and queues its response frame.
+func (c *Client) worker(ctx context.Context, f reqFrame, writes chan<- any) {
+	res, ok := c.runHandler(ctx, f)
+	if !ok {
+		return
+	}
+	select {
+	case writes <- res:
+	case <-ctx.Done():
+	}
+}
+
+// runHandler runs one relayed request under a hard budget so a wedged
+// handler cannot occupy a worker forever. ok=false means the tunnel was torn
+// down while the request was in flight and no answer should be sent. The
+// abandoned handler goroutine gets a canceled context (best effort — Go code
+// that ignores ctx may linger, but it cannot hold the pool hostage).
+func (c *Client) runHandler(ctx context.Context, f reqFrame) (resFrame, bool) {
+	reqCtx, cancelReq := context.WithTimeout(ctx, c.cfg.RequestTimeout)
+	defer cancelReq()
+
+	done := make(chan resFrame, 1)
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("mcp tunnel: panic handling req %s: %v", f.ID, err)
+				done <- resFrame{
+					Type: "res", ID: f.ID, Status: http.StatusInternalServerError,
+					ContentType: "text/plain; charset=utf-8", Body: "internal server error",
+				}
+			}
+		}()
+		done <- c.handleReq(reqCtx, f)
+	}()
+
+	select {
+	case res := <-done:
+		return res, true
+	case <-reqCtx.Done():
+		if ctx.Err() != nil {
+			return resFrame{}, false
+		}
+		return resFrame{
+			Type:        "res",
+			ID:          f.ID,
+			Status:      http.StatusGatewayTimeout,
+			Body:        "gateway timeout",
+			ContentType: "text/plain; charset=utf-8",
+		}, true
+	}
+}
+
+// truncateLog bounds attacker-influenced strings before they hit the log.
+func truncateLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // newErrorFrame builds an error frame with the envelope type stamped in.
@@ -375,39 +552,6 @@ func (c *Client) trySend(ctx context.Context, writes chan<- any, frame any) {
 	case writes <- frame:
 	case <-ctx.Done():
 	}
-}
-
-// dispatch validates a req frame and processes it in its own goroutine,
-// bounded by the concurrency semaphore.
-func (c *Client) dispatch(ctx context.Context, writes chan<- any, raw []byte) {
-	var f reqFrame
-	if err := json.Unmarshal(raw, &f); err != nil || f.ID == "" || len(f.ID) > maxFrameIDLen {
-		c.trySend(ctx, writes, newErrorFrame(codeBadRequest, "req frame: id is missing or invalid"))
-		return
-	}
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Printf("mcp tunnel: panic handling req %s: %v", f.ID, err)
-				c.trySend(ctx, writes, resFrame{
-					Type: "res", ID: f.ID,
-					Status:      http.StatusInternalServerError,
-					ContentType: "text/plain; charset=utf-8",
-					Body:        "internal server error",
-				})
-			}
-		}()
-		select {
-		case c.sem <- struct{}{}:
-		case <-ctx.Done():
-			return
-		}
-		defer func() { <-c.sem }()
-		select {
-		case writes <- c.handleReq(ctx, f):
-		case <-ctx.Done():
-		}
-	}()
 }
 
 // handleReq guards the relay surface (method/path), rebuilds the request, and

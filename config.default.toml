@@ -141,7 +141,8 @@ category_workers = 10
 # alive permanently; the proxy exposes POST /mcp to agents on the internet
 # and relays requests through the tunnel. Empty (default) = tunnel off.
 # proxy_url = "wss://proxy.example.com/tunnel"
-# proxy_max_concurrency = 8  # relayed MCP requests in flight (default 8)
+# proxy_max_concurrency = 8  # worker pool for relayed MCP requests (default 8).
+#   Overflow is answered with 503; a wedged backend yields 504 after ~115 s.
 # Tunnel auth (secret stays in the environment):
 #   MCP_TUNNEL_TOKEN — bearer token for the tunnel dial; falls back to
 #   MCP_TOKEN when unset. Separate from MCP_TOKEN so the proxy never learns

@@ -171,22 +171,31 @@ func newMCPTunnel(s *Server) *mcptunnel.Client {
 		if fallback := os.Getenv("MCP_TOKEN"); fallback != "" {
 			token = fallback
 			tokenSource = "MCP_TOKEN (fallback)"
+			log.Printf("mcp tunnel: MCP_TUNNEL_TOKEN not set — falling back to MCP_TOKEN. " +
+				"A compromised proxy would then hold a valid MCP token; configure a distinct MCP_TUNNEL_TOKEN.")
 		}
 	}
 	if token == "" {
 		log.Printf("mcp tunnel: proxy_url is set but MCP_TUNNEL_TOKEN (or MCP_TOKEN) is not — tunnel disabled")
 		return nil
 	}
-	client := mcptunnel.New(mcptunnel.Config{
+	cfg := mcptunnel.Config{
 		URL:            proxyURL,
 		Token:          token,
 		Handler:        http.HandlerFunc(s.handleMCP),
 		MaxConcurrency: mcpCfg.ProxyMaxConcurrency,
 		Method:         http.MethodPost,
 		Path:           "/mcp",
-	})
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Printf("mcp tunnel: not started: %v", err)
+		return nil
+	}
+	for _, warn := range cfg.Warnings() {
+		log.Printf("mcp tunnel: warning: %s", warn)
+	}
 	log.Printf("mcp: tunnel enabled → %s (auth via %s)", proxyURL, tokenSource)
-	return client
+	return mcptunnel.New(cfg)
 }
 
 func (s *Server) Start(ctx context.Context) error {

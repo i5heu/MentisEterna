@@ -57,6 +57,14 @@ external agents and multiplexes their requests over that connection.
    localhost.
 4. Neither secret is ever written to logs in the clear (log at most a SHA-256
    prefix).
+5. **Token entropy.** Both tokens are bearer credentials; use ≥ 32 random
+   bytes (e.g. `openssl rand -hex 32`). MentisEterna logs a warning for
+   shorter tunnel tokens. Format restriction: printable ASCII only (the
+   token travels in an HTTP header).
+6. **Fallback caveat.** If MentisEterna is configured without
+   `MCP_TUNNEL_TOKEN` it falls back to `MCP_TOKEN` (the agents' token) and
+   logs a security warning — in that mode a compromised proxy holds a valid
+   MCP token, defeating the separation above. Prefer distinct tokens.
 
 ## Tunnel endpoint (proxy side)
 
@@ -99,7 +107,7 @@ that behaves like the streamable-http subset MentisEterna serves on the LAN:
 | P2 | Relayed request MUST carry the agent's `Authorization` header unchanged (and MAY carry `Content-Type`); MentisEterna does the real auth. The proxy itself MUST NOT require knowledge of the MCP token. |
 | P3 | `GET` / `DELETE` (and any other method) on `{public_path}` MUST be answered locally with `405` + `Allow: POST`. They are never relayed — MentisEterna's local endpoint answers 405 for them anyway. |
 | P4 | Request bodies larger than the binding's `max_body_bytes` (SHOULD default 1 MiB, matching MentisEterna's `max_json_body_bytes`) MUST be rejected with `413` before relaying. Hard cap 4 MiB regardless of configuration (frame limit, T8). |
-| P5 | The proxy MUST wait at most `request_timeout` for the `res` frame; default SHOULD be 120 s (MCP tool calls can trigger LLM/embedding work). On timeout, answer the agent with `502` (with a short JSON error body) and abandon the pending request id. A late `res` for an abandoned or unknown id MUST be discarded (log only). |
+| P5 | The proxy MUST wait at most `request_timeout` for the `res` frame; default SHOULD be 120 s (MCP tool calls can trigger LLM/embedding work, and MentisEterna's own request budget is ~115 s, slightly below, so agents normally get the client's definitive 504 rather than a proxy-side timeout). On timeout, answer the agent with `502` (with a short JSON error body) and abandon the pending request id. A late `res` for an abandoned or unknown id MUST be discarded (log only). Client-sent `503` (overloaded) and `504` (backend timeout) statuses MUST pass through to the agent unchanged. |
 | P6 | Edge protection SHOULD be configurable per binding: rate limits (recommend default 30 requests/min per source IP with a burst of 10), and rejecting requests with no `Authorization` header at all (`401`) — this is protective only; a present-but-wrong token is still relayed so MentisEterna's real `401` semantics reach the agent. Edge token allow-lists are an optional extra, not required. |
 | P7 | If the tunnel connection breaks while a request is in flight, answer that agent with `502`, JSON body. |
 | P8 | The relay is verbatim: do not parse, batch, or re-encode JSON bodies; compression is left to whatever fronts the proxy. |
@@ -165,12 +173,13 @@ sides treat frames opaquely aside from the envelope fields below.
 { "type": "error", "code": "bad_frame", "id": "b3f0a2", "message": "..." }
 ```
 
-Codes today: `bad_frame` (malformed/oversized/unknown frame), `bad_request`
-(request id unusable), `overloaded`. Unknown codes MUST be tolerated (log only).
-A frame the receiver considers fatal closes the tunnel (the side that closes
-SHOULD send a WS close message first; MentisEterna always does). After an
-`error` the connection state (pending ids) stays valid — the proxy may keep
-serving with a follow-up `res` for the same id.
+Codes today: `bad_frame` (malformed/unknown frame), `bad_request` (request id
+unusable). Unknown codes MUST be tolerated (log only). Overload is not an
+error frame: it is a normal `res` with status `503` (see below). A frame the
+receiver considers fatal closes the tunnel (the side that closes SHOULD send
+a WS close message first; MentisEterna always does). After an `error` the
+connection state (pending ids) stays valid — the proxy may keep serving with a
+follow-up `res` for the same id.
 
 ### Keepalive
 
@@ -178,17 +187,30 @@ Keepalive is protocol-level: WS PING/PONG control frames only (T5/T6). No JSON
 frame type exists for it — a receiver that gets an unknown `type` answers with
 `error` (`bad_frame`) and continues.
 
-### Concurrency & ordering
+### Concurrency, backpressure, and time budgets
 
 - Frames are exchanged concurrently; there is NO ordering guarantee across
   different ids.
 - The proxy MUST support at least 16 in-flight ids per tunnel and MUST NOT
-  coalesce or reorder resolve/complete pending ids.
-- MentisEterna processes at most 8 requests concurrently (config via
-  `[mcp] proxy_max_concurrency`); further frames are queued in arrival order,
-  not rejected.
+  coalesce or cross-wire pending ids.
+- MentisEterna runs a fixed worker pool (`[mcp] proxy_max_concurrency`, default
+  8) fed by a bounded queue (2 slots per worker). Excess requests are answered
+  immediately with `res` `503` (`body: "overloaded"`) — the proxy MUST relay
+  that to the agent unchanged. **The client never queues unbounded**, so a
+  flooding proxy cannot exhaust its memory; keep that property if the proxy
+  buffers agent requests too (bound per-tunnel in-flight, reject early).
+- Each relayed request has a hard budget of ~115 s on the MentisEterna side.
+  If the backend wedges, the client answers `res` `504` (`body: "gateway
+  timeout"`) and the worker is freed. The proxy's `request_timeout` (P5,
+  default 120 s) SHOULD therefore be ≥ the client budget so agents normally
+  get the definitive 504 instead of a proxy-side timeout.
+- Proxy-controlled frame payloads are truncated before they reach
+  MentisEterna's logs (log-flood resilience).
 - If either side closes the tunnel with requests outstanding, those requests
   fail: proxy answers its agents `502` (P7), MentisEterna abandons its work.
+- The client will not start with a non-ws/wss URL or a token containing
+  control characters, and it logs warnings for plaintext `ws://` dials to
+  non-private hosts and for short tokens (< 32 chars).
 
 ## Deliverables & acceptance checklist
 
@@ -214,6 +236,19 @@ service is equally fine, as is nginx-fronted deployment). It MUST pass:
 10. 16 concurrent agent requests are all answered correctly (no cross-talked
     ids, no mixed bodies).
 
+Hardening checks (the failure modes the client must survive — mirror these
+against the proxy in test builds):
+
+11. Flood: 1000 rapid relayed requests with a slow backend → every id answered
+    exactly once, a mixture of 200/503 (`overloaded`), tunnel stays healthy.
+12. A handler that never returns → client answers `504` after ~115 s, tunnel
+    keeps serving the next request.
+13. A handler that panics → client answers `500`, tunnel stays alive.
+14. Oversized (binary > 4 MiB read limit) or non-JSON text frames → tunnel
+    dropped; client reconnects; no leaked goroutines.
+15. `ws://` (non-TLS) proxy URLs to public hosts and control-character tokens
+    are refused/warned about at startup rather than silently accepted.
+
 Suggested proxy configuration surface (binding list):
 
 ```toml
@@ -235,12 +270,16 @@ For reference, so builder and client match:
 
 | Setting | Value |
 |---|---|
-| Enable | `[mcp] proxy_url` non-empty **and** `MCP_TUNNEL_TOKEN` env set (falls back to `MCP_TOKEN` if unset), **and** `[mcp] disabled = false` |
+| Enable | `[mcp] proxy_url` non-empty **and** `MCP_TUNNEL_TOKEN` env set (falls back to `MCP_TOKEN` with a security warning), **and** `[mcp] disabled = false` |
+| Startup validation | Refuses to run with a non-`ws`/`wss` URL or a token containing control characters; warns on plaintext `ws://` to non-private hosts and tokens < 32 chars |
 | Dial | `websocket.Dialer` with `Subprotocols: ["mentis-tunnel-v1"]`, `Authorization: Bearer <tunnel-token>` |
 | Backoff | Exponential 1 s → 60 s cap, ±20 % jitter; immediate first attempt; reconnects forever until ctx cancel |
 | Ping | WS PING every 30 s (write deadline 10 s); connection dropped if no traffic ~90 s |
 | Frame cap | Reads > 4 MiB → drop connection (T8) |
-| Concurrency | Semaphore over 8 concurrent handler calls (`proxy_max_concurrency`) |
+| Concurrency | Fixed worker pool of 8 (`proxy_max_concurrency`) + bounded queue (2/worker); overflow → `res` 503 "overloaded", never unbounded queueing |
+| Request budget | ~115 s per request; wedged handler → `res` 504 "gateway timeout", worker freed |
+| Panic safety | A panicking handler answers `res` 500; the connection and process stay alive |
 | Valid frames | method `POST` + path `/mcp` only; anything else → `res` 404/405 without calling the app. Malformed JSON frames → `error` frame, tunnel stays usable; binary frames or a mismatching subprotocol → tunnel closed |
 | Disconnect semantics | WS close message 1000 on shutdown; pending results are dropped (P5 covers the agent side) |
+| Logging | Proxy-controlled strings truncated (64/256 bytes); tokens never logged |
 | LAN `/mcp` | Unchanged — the tunnel adds the public path, it replaces nothing |

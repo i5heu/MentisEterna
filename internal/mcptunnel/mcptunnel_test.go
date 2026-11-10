@@ -462,3 +462,199 @@ func TestBinaryFrameDropsConnection(t *testing.T) {
 		return p.connects.Load() >= 2
 	})
 }
+
+// A flooding proxy must never make the client spawn unbounded goroutines or
+// grow memory without bound: past the worker pool + queue the client answers
+// 503 immediately instead of queueing.
+func TestOverloadAnswers503NotUnbounded(t *testing.T) {
+	p := startMockProxy(t, "tunnel-secret")
+
+	const total = 10
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond) // keeps the single worker busy
+		w.WriteHeader(http.StatusOK)
+	})
+
+	resCh := make(chan resFrame, total)
+	p.onConnect(func(conn *websocket.Conn) {
+		for i := 0; i < total; i++ {
+			_ = conn.WriteJSON(reqFrame{Type: "req", ID: fmt.Sprint(i), Method: http.MethodPost, Path: "/mcp"})
+		}
+		for i := 0; i < total; i++ {
+			var res resFrame
+			if err := conn.ReadJSON(&res); err != nil {
+				t.Errorf("proxy read res: %v", err)
+				return
+			}
+			resCh <- res
+		}
+		drain(conn)
+	})
+
+	// 1 worker + queue of 2: at most 3 requests can be handled, the rest
+	// must be rejected with 503 rather than queued (or leaked).
+	_ = runClient(t, Config{URL: p.URL, Token: "tunnel-secret", Handler: handler, MaxConcurrency: 1})
+
+	byID := map[string]int{}
+	overloaded := 0
+	for i := 0; i < total; i++ {
+		select {
+		case res := <-resCh:
+			byID[res.ID]++
+			switch res.Status {
+			case http.StatusOK:
+			case http.StatusServiceUnavailable:
+				overloaded++
+				if res.Body != "overloaded" {
+					t.Fatalf("503 body = %q, want overloaded", res.Body)
+				}
+			default:
+				t.Fatalf("res %s → %d, want 200 or 503", res.ID, res.Status)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out after %d answers", i)
+		}
+	}
+	if len(byID) != total {
+		t.Fatalf("got %d distinct ids, want %d (every request answered exactly once)", len(byID), total)
+	}
+	for id, n := range byID {
+		if n != 1 {
+			t.Fatalf("request %s answered %d times", id, n)
+		}
+	}
+	if overloaded == 0 {
+		t.Fatal("expected at least one 503 overloaded answer under flood")
+	}
+}
+
+// A wedged handler must not hold a worker hostage forever: the per-request
+// budget answers 504 and the tunnel keeps serving afterwards.
+func TestRequestTimeoutYields504(t *testing.T) {
+	p := startMockProxy(t, "tunnel-secret")
+
+	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Slow") != "" {
+			time.Sleep(500 * time.Millisecond) // longer than the 80ms budget
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	resCh := make(chan resFrame, 2)
+	p.onConnect(func(conn *websocket.Conn) {
+		_ = conn.WriteJSON(reqFrame{Type: "req", ID: "slow", Method: http.MethodPost, Path: "/mcp",
+			Headers: map[string][]string{"X-Slow": {"yes"}}})
+		_ = conn.WriteJSON(reqFrame{Type: "req", ID: "fast", Method: http.MethodPost, Path: "/mcp"})
+		for i := 0; i < 2; i++ {
+			var res resFrame
+			if err := conn.ReadJSON(&res); err != nil {
+				t.Errorf("proxy read res: %v", err)
+				return
+			}
+			resCh <- res
+		}
+		drain(conn)
+	})
+
+	_ = runClient(t, Config{URL: p.URL, Token: "tunnel-secret", Handler: slow, MaxConcurrency: 1,
+		RequestTimeout: 80 * time.Millisecond})
+
+	byID := map[string]resFrame{}
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-resCh:
+			byID[res.ID] = res
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out after %d answers", i)
+		}
+	}
+	if res := byID["slow"]; res.Status != http.StatusGatewayTimeout {
+		t.Fatalf("slow res.Status = %d, want 504", res.Status)
+	}
+	if res := byID["fast"]; res.Status != http.StatusOK {
+		t.Fatalf("fast res.Status = %d, want 200 (tunnel must stay healthy after a timeout)", res.Status)
+	}
+}
+
+func TestConfigValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		token   string
+		wantErr bool
+	}{
+		{"valid wss", "wss://proxy.example.com/tunnel", "0123456789abcdef", false},
+		{"valid ws", "ws://127.0.0.1:8080/tunnel", "0123456789abcdef", false},
+		{"empty url", "", "0123456789abcdef", true},
+		{"http scheme", "https://proxy.example.com/tunnel", "0123456789abcdef", true},
+		{"no host", "wss:///tunnel", "0123456789abcdef", true},
+		{"empty token", "wss://proxy.example.com/tunnel", "", true},
+		{"token with newline", "wss://proxy.example.com/tunnel", "abc\ndef", true},
+		{"token with space", "wss://proxy.example.com/tunnel", "abc def", true},
+		{"unparseable url", "wss://%zz", "0123456789abcdef", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{URL: tc.url, Token: tc.token}
+			err := cfg.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfigWarnings(t *testing.T) {
+	cases := []struct {
+		name       string
+		url        string
+		token      string
+		wantWarn   []string // substrings expected in warnings
+		wantNoWarn []string
+	}{
+		{
+			name:       "public plaintext short token",
+			url:        "ws://proxy.example.com/tunnel",
+			token:      "short",
+			wantWarn:   []string{"plaintext ws://", "brute force"},
+			wantNoWarn: nil,
+		},
+		{
+			name:       "tls with long token",
+			url:        "wss://proxy.example.com/tunnel",
+			token:      "0123456789abcdef0123456789abcdef",
+			wantWarn:   nil,
+			wantNoWarn: []string{"ws://", "brute force"},
+		},
+		{
+			name:       "plaintext to localhost is tolerable",
+			url:        "ws://localhost:8080/tunnel",
+			token:      "0123456789abcdef0123456789abcdef",
+			wantWarn:   nil,
+			wantNoWarn: []string{"plaintext ws://"},
+		},
+		{
+			name:       "plaintext to private lan is tolerable",
+			url:        "ws://192.168.1.10:8080/tunnel",
+			token:      "0123456789abcdef0123456789abcdef",
+			wantWarn:   nil,
+			wantNoWarn: []string{"plaintext ws://"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			warnings := (Config{URL: tc.url, Token: tc.token}).Warnings()
+			joined := strings.Join(warnings, " | ")
+			for _, want := range tc.wantWarn {
+				if !strings.Contains(joined, want) {
+					t.Errorf("warnings %q missing %q", joined, want)
+				}
+			}
+			for _, banned := range tc.wantNoWarn {
+				if strings.Contains(joined, banned) {
+					t.Errorf("warnings %q should not contain %q", joined, banned)
+				}
+			}
+		})
+	}
+}
