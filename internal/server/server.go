@@ -20,6 +20,8 @@ import (
 	"github.com/i5heu/MentisEterna/internal/db"
 	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
+	"github.com/i5heu/MentisEterna/internal/mcp"
+	"github.com/i5heu/MentisEterna/internal/mcptunnel"
 	"github.com/i5heu/MentisEterna/internal/media"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 	"github.com/i5heu/MentisEterna/pkg/printer"
@@ -43,6 +45,9 @@ type Server struct {
 	backupService *backup.Service
 	liveHub       *liveHub
 	ingestToken   string
+	mcpToken      string
+	mcpServer     *mcp.Server
+	mcpTunnel     *mcptunnel.Client
 }
 
 func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generator, autoTagger llm.AutoTagger, subtaskGen llm.SubTaskGenerator, ocrClient llm.OCRer, sttClient llm.STTer) *Server {
@@ -118,7 +123,7 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 		log.Printf("backup: BACKUP_ENCRYPTION_KEY not set — backups disabled")
 	}
 
-	return &Server{
+	s := &Server{
 		db:            d,
 		addr:          addr,
 		cfg:           cfg,
@@ -136,7 +141,52 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 		backupService: backupSvc,
 		liveHub:       liveHub,
 		ingestToken:   os.Getenv("INGEST_TOKEN"),
+		mcpToken:      os.Getenv("MCP_TOKEN"),
 	}
+	s.mcpServer = newMCPRegistry(s)
+	if len(s.mcpServer.Tools()) > 0 {
+		log.Printf("mcp: endpoint /mcp enabled (%d tools)", len(s.mcpServer.Tools()))
+	}
+	s.mcpTunnel = newMCPTunnel(s)
+	return s
+}
+
+// newMCPTunnel creates the outbound MCP proxy tunnel client (see
+// docs/MCPProxy.md) when it is fully configured. It returns nil when the
+// tunnel is off: MCP disabled, no proxy_url, or no tunnel token. The tunnel
+// relays into the regular handleMCP handler, so auth, limits, and tool
+// dispatch are identical to the LAN endpoint.
+func newMCPTunnel(s *Server) *mcptunnel.Client {
+	mcpCfg := config.Get().MCP
+	if mcpCfg.Disabled {
+		return nil
+	}
+	proxyURL := strings.TrimSpace(mcpCfg.ProxyURL)
+	if proxyURL == "" {
+		return nil
+	}
+	token := os.Getenv("MCP_TUNNEL_TOKEN")
+	tokenSource := "MCP_TUNNEL_TOKEN"
+	if token == "" {
+		if fallback := os.Getenv("MCP_TOKEN"); fallback != "" {
+			token = fallback
+			tokenSource = "MCP_TOKEN (fallback)"
+		}
+	}
+	if token == "" {
+		log.Printf("mcp tunnel: proxy_url is set but MCP_TUNNEL_TOKEN (or MCP_TOKEN) is not — tunnel disabled")
+		return nil
+	}
+	client := mcptunnel.New(mcptunnel.Config{
+		URL:            proxyURL,
+		Token:          token,
+		Handler:        http.HandlerFunc(s.handleMCP),
+		MaxConcurrency: mcpCfg.ProxyMaxConcurrency,
+		Method:         http.MethodPost,
+		Path:           "/mcp",
+	})
+	log.Printf("mcp: tunnel enabled → %s (auth via %s)", proxyURL, tokenSource)
+	return client
 }
 
 func (s *Server) Start(ctx context.Context) error {
@@ -286,6 +336,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.Handle("/session", protected(s.handleSession))
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.Handle("/mcp", http.HandlerFunc(s.handleMCP))
 	mux.Handle("/ws", protected(s.handleWebSocket))
 	mux.Handle("/notes", protected(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -469,6 +520,12 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		s.jobManager.Stop()
 	}()
+
+	// Outbound MCP proxy tunnel: permanent reconnecting connection to the
+	// public relay proxy (see docs/MCPProxy.md).
+	if s.mcpTunnel != nil {
+		go s.mcpTunnel.Run(ctx)
+	}
 
 	listenURL := listenerURL(s.addr, s.cfg.TLSEnabled())
 	if s.cfg.TLSEnabled() {
@@ -1246,6 +1303,24 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 		mediaSize = -1
 	}
 	resp["media_size_bytes"] = mediaSize
+
+	// MCP tunnel status.
+	if s.mcpTunnel != nil {
+		st := s.mcpTunnel.Status()
+		tunnel := map[string]any{
+			"enabled":       st.Enabled,
+			"url":           st.URL,
+			"connected":     st.Connected,
+			"connect_count": st.ConnectCount,
+			"last_error":    st.LastError,
+		}
+		if !st.LastConnectedAt.IsZero() {
+			tunnel["last_connected_at"] = st.LastConnectedAt.Format(time.RFC3339)
+		}
+		resp["mcp_tunnel"] = tunnel
+	} else {
+		resp["mcp_tunnel"] = map[string]any{"enabled": false}
+	}
 
 	// Backup stats.
 	if s.backupService != nil {

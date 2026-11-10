@@ -432,6 +432,43 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeJSONBody(w, r, &in) {
 		return
 	}
+	n, err := s.createNoteCore(createNoteInput{
+		Title:      in.Title,
+		Body:       in.Body,
+		ParentID:   in.ParentID,
+		Type:       in.Type,
+		CustomData: in.CustomData,
+		Tags:       in.Tags,
+	})
+	if err != nil {
+		var badReq *notetype.BadRequestError
+		if errors.As(err, &badReq) {
+			http.Error(w, badReq.Error(), http.StatusBadRequest)
+			return
+		}
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, n)
+}
+
+// createNoteInput is the creation payload shared by the HTTP handler and the
+// MCP tools. It carries not-yet-normalized values (empty type/title are
+// defaulted by createNoteCore).
+type createNoteInput struct {
+	Title      string
+	Body       string
+	ParentID   *int64
+	Type       string
+	CustomData json.RawMessage
+	Tags       []string
+}
+
+// createNoteCore creates a note with its body, plugin config, and tags, plus
+// every post-creation side effect (recipe classification, media
+// reconciliation, embedding/title/auto-tag jobs, live notification). Invalid
+// plugin config yields a *notetype.BadRequestError; other errors are internal.
+func (s *Server) createNoteCore(in createNoteInput) (NoteDetail, error) {
 	userProvidedTitle := strings.TrimSpace(in.Title) != ""
 	if !userProvidedTitle {
 		in.Title = "Untitled"
@@ -444,51 +481,44 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	if plugin, exists := notetype.Registry[in.Type]; exists && len(in.CustomData) > 0 {
 		if cv, ok := plugin.(notetype.ConfigValidator); ok {
 			if err := cv.ValidateConfig(in.CustomData); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
+				return NoteDetail{}, &notetype.BadRequestError{Message: err.Error()}
 			}
 		}
 	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		writeErr(w, err)
-		return
+		return NoteDetail{}, err
 	}
 	defer tx.Rollback()
 
 	res, err := tx.Exec(`INSERT INTO notes (title, parent_id, type) VALUES (?, ?, ?)`, in.Title, in.ParentID, in.Type)
 	if err != nil {
-		writeErr(w, err)
-		return
+		return NoteDetail{}, err
 	}
 	id, _ := res.LastInsertId()
 	resolvedBody := in.Body
 
 	if _, err = tx.Exec(`INSERT INTO updates (note_id, body) VALUES (?, ?)`, id, resolvedBody); err != nil {
-		writeErr(w, err)
-		return
+		return NoteDetail{}, err
 	}
 
 	// Let the plugin persist its config.
 	if plugin, exists := notetype.Registry[in.Type]; exists && len(in.CustomData) > 0 {
 		if cs, ok := plugin.(notetype.ConfigSaver); ok {
 			if err := cs.SaveConfig(context.Background(), tx, 0, id, in.CustomData); err != nil {
-				writeErr(w, err)
-				return
+				return NoteDetail{}, err
 			}
 		}
 	}
 
 	// Save tags.
 	if err := saveTags(tx, id, in.Tags); err != nil {
-		writeErr(w, err)
-		return
+		return NoteDetail{}, err
 	}
 
 	if err = tx.Commit(); err != nil {
-		writeErr(w, err)
-		return
+		return NoteDetail{}, err
 	}
 	if in.Type == "recipe" {
 		s.classifyRecipeIngredientsForNotes(id)
@@ -504,13 +534,11 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var n NoteDetail
 	sum, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
 	if err != nil {
-		writeErr(w, err)
-		return
+		return NoteDetail{}, err
 	}
-	n = NoteDetail{
+	n := NoteDetail{
 		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
 		Type: sum.Type, Pinned: sum.Pinned,
 		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
@@ -529,7 +557,7 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		notifyIDs = append(notifyIDs, *in.ParentID)
 	}
 	s.notifyNotesChanged("created", notifyIDs...)
-	writeJSON(w, http.StatusCreated, n)
+	return n, nil
 }
 
 func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {

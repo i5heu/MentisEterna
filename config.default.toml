@@ -127,6 +127,26 @@ workers = 15
 # Number of concurrent workers for recipe-category classification.
 category_workers = 10
 
+[mcp]
+# MCP (Model Context Protocol) endpoint for external coding agents, served at
+# POST /mcp (streamable-http). Tools manage task notes (list/add/complete).
+# disabled = true          # uncomment to return 404 from /mcp
+# Auth (static token, unless disabled keep this in the environment):
+#   MCP_TOKEN — long-lived bearer token (secrets stay in the environment).
+# Without MCP_TOKEN the endpoint still accepts normal session tokens via
+# Authorization: Bearer <session-token>.
+#
+# Outbound tunnel to a public relay proxy (full proxy requirements:
+# docs/MCPProxy.md). MentisEterna dials the proxy and keeps the connection
+# alive permanently; the proxy exposes POST /mcp to agents on the internet
+# and relays requests through the tunnel. Empty (default) = tunnel off.
+# proxy_url = "wss://proxy.example.com/tunnel"
+# proxy_max_concurrency = 8  # relayed MCP requests in flight (default 8)
+# Tunnel auth (secret stays in the environment):
+#   MCP_TUNNEL_TOKEN — bearer token for the tunnel dial; falls back to
+#   MCP_TOKEN when unset. Separate from MCP_TOKEN so the proxy never learns
+#   the agents' token; MentisEterna still validates agent auth itself.
+
 [printer]
 # USB-serial thermal printer settings.
 device = ""          # Explicit device path (e.g. /dev/usb/lp0); empty = auto-detect

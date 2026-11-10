@@ -181,6 +181,7 @@ func isAPIPath(p string) bool {
 	return p == "/health" || p == "/session" || p == "/logout" || p == "/ws" || p == "/notes" || strings.HasPrefix(p, "/notes/") ||
 		p == "/note-types" ||
 		p == "/jobs" || strings.HasPrefix(p, "/jobs/") ||
+		p == "/mcp" || strings.HasPrefix(p, "/mcp/") ||
 		strings.HasPrefix(p, "/webauthn/") || strings.HasPrefix(p, "/file/") ||
 		p == "/files" || strings.HasPrefix(p, "/files/") ||
 		strings.HasPrefix(p, "/system/") || strings.HasPrefix(p, "/backup/") || strings.HasPrefix(p, "/maintenance/") ||

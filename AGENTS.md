@@ -11,6 +11,8 @@ cmd/restore/     — one-shot tool: download + decrypt a backup from S3
 internal/backup/ — AES-256-GCM encrypted database backups to S3
 internal/db/     — SQLite wrapper, migrations, auth, session management
 internal/llm/    — LocalAI embedding client (interface: Embedder)
+internal/mcp/    — MCP JSON-RPC protocol core (transport-agnostic)
+internal/mcptunnel/ — outbound MCP proxy tunnel client (see docs/MCPProxy.md)
 internal/server/ — HTTP handlers, WebAuthn, SPA static serving
 pkg/notetype/    — Note type plugin interface, registry, test harness, and built-in plugins
 frontend/        — Vue 3 + Vite app (dev proxy → :8080)
@@ -56,6 +58,60 @@ The server populates `plugin.config` and `plugin.view` on note detail responses 
 - `GET /notes/:id` — note detail with `plugin.config` and `plugin.view`
 - `POST /notes/:id/actions/:actionID` — execute a plugin action
 - `POST /notes/:id/action` — legacy action route (delegates to same dispatcher)
+- `POST /mcp` — MCP (Model Context Protocol) endpoint, streamable-http transport (see "MCP Endpoint")
+
+## MCP Endpoint
+
+`POST /mcp` speaks a minimal MCP streamable-http subset: single JSON-RPC 2.0
+messages per request, stateless (no session IDs, no SSE; GET/DELETE return 405),
+plain `application/json` responses. Protocol framing lives in `internal/mcp`
+(pure, transport-agnostic); tool implementations and auth live in
+`internal/server/mcp.go`.
+
+Auth: static bearer token from the `MCP_TOKEN` env var (constant-time compare,
+ingest-token pattern) or any regular session token via
+`Authorization: Bearer`. Disable with `[mcp] disabled = true` in config.
+
+### MCP Remote Proxy Tunnel (outbound)
+
+MentisEterna usually sits on a LAN behind a firewall; the MCP endpoint is
+additionally reachable from the internet through a **relay proxy** running on
+a public server. The proxy is NOT built in this repo — `docs/MCPProxy.md`
+is the complete requirements document for it. The client side lives in
+`internal/mcptunnel/`.
+
+- Enable with `[mcp] proxy_url = "wss://host/tunnel"` (empty = off) plus the
+  `MCP_TUNNEL_TOKEN` env var (falls back to `MCP_TOKEN`). Requires
+  `[mcp] disabled = false`.
+- The client dials out once and keeps the WebSocket (subprotocol
+  `mentis-tunnel-v1`) alive permanently: PING every 30 s, reconnect with
+  exponential backoff (1 s → 60 s cap, ±20 % jitter), max 8 concurrent
+  relayed requests (`[mcp] proxy_max_concurrency`, queueing beyond that).
+- The proxy relays agent requests as `req` frames; the client rebuilds them
+  and runs them through the **regular `handleMCP` handler** — auth, body
+  limits, and tool dispatch are identical to the LAN endpoint. The proxy
+  must never learn `MCP_TOKEN`.
+- Tunnel state is reported in `/system/stats` under `mcp_tunnel`.
+- Frame/wire reference and proxy acceptance checklist: `docs/MCPProxy.md`.
+
+Tools (all operate on `task`-type notes): `list_todos` (status filter
+open/todo/in_progress/done/all, default open), `get_todo` (incl. subtask
+checklist), `add_todo` (creates a real task note through the same
+`createNoteCore` path as HTTP — embeddings, title generation, live notify),
+`set_todo_status`, `toggle_subtask` (both delegate to the task plugin's
+`HandleAction`, so validation and `completed_at` semantics are identical).
+
+Wiring an MCP client (Mistral Vibe):
+
+```bash
+vibe mcp add mentis --transport streamable-http --url https://your-host/mcp \
+  --api-key-env MENTIS_MCP_TOKEN --api-key-header Authorization --api-key-format "Bearer {token}"
+```
+
+Tests: `go test ./internal/server/ -run TestMCP` and `go test ./internal/mcp/`.
+
+Tunnel (client side): `go test ./internal/mcptunnel/` and
+`go test ./internal/server/ -run TestMCPTunnel`.
 
 ### Step-by-step (5 steps)
 
@@ -291,6 +347,8 @@ Key sections (see `config.default.toml` for all fields):
 | `[jobs] workers` | `JOB_WORKERS` | Concurrent background job workers |
 | `[recipe] category_workers` | `RECIPE_CATEGORY_WORKERS` | Recipe-category classification workers |
 | `[printer] device` / `usb_id` / `codepage` / etc. | `THERMAL_PRINTER_*` | Thermal printer settings |
+| `[mcp] disabled` | — | `true` makes the MCP endpoint return 404 |
+| `[mcp] proxy_url` / `proxy_max_concurrency` | — | Outbound tunnel to the public MCP relay proxy (empty = off) / relayed requests in flight (default 8) |
 
 ### Secrets (stay in the environment)
 
@@ -298,6 +356,8 @@ Key sections (see `config.default.toml` for all fields):
 |---|---|
 | `BACKUP_ENCRYPTION_KEY` | hex-encoded 64-char AES-256 key for encrypted backups |
 | `MEDIA_S3_<ID>_ACCESS_KEY_ID` / `MEDIA_S3_<ID>_SECRET_ACCESS_KEY` | Per-endpoint S3 API keys |
+| `MCP_TOKEN` | static bearer token for the `/mcp` MCP endpoint (also accepts session tokens) |
+| `MCP_TUNNEL_TOKEN` | bearer token for the outbound MCP proxy tunnel (falls back to `MCP_TOKEN`; see docs/MCPProxy.md) |
 
 `LOCALAI_BASE_URL`, `LLM_TIER_*_BASE_URL`, and `MEDIA_S3_ENDPOINTS` are **not**
 env vars anymore — base URLs moved to `config.toml` `[llm]`/`[llm.tiers]`, and

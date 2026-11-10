@@ -14,12 +14,13 @@ type Config struct {
 	Printer  PrinterConfig  `toml:"printer"`
 	Jobs     JobsConfig     `toml:"jobs"`
 	Recipe   RecipeConfig   `toml:"recipe"`
+	MCP      MCPConfig      `toml:"mcp"`
 }
 
 type DatabaseConfig struct {
-	Path            string `toml:"path"`              // was DB_PATH
-	VecExtPath      string `toml:"vec_ext_path"`      // was VEC_EXT_PATH
-	LegacyVSSExtPath string `toml:"vss_ext_path"`     // was VSS_EXT_PATH (legacy alias)
+	Path             string `toml:"path"`         // was DB_PATH
+	VecExtPath       string `toml:"vec_ext_path"` // was VEC_EXT_PATH
+	LegacyVSSExtPath string `toml:"vss_ext_path"` // was VSS_EXT_PATH (legacy alias)
 }
 
 type ServerConfig struct {
@@ -38,21 +39,21 @@ type AuthConfig struct {
 }
 
 type LLMConfig struct {
-	BaseURL           string                   `toml:"base_url"`           // was LOCALAI_BASE_URL
-	EmbeddingModel    string                   `toml:"embedding_model"`    // was LOCALAI_EMBEDDING_MODEL
-	EmbeddingMaxChars int                      `toml:"embedding_max_chars"`   // was LOCALAI_EMBEDDING_MAX_CHARS
-	TLSInsecure       bool                     `toml:"tls_insecure"`          // was LOCALAI_TLS_INSECURE
-	OCRDedicatedModel string                   `toml:"ocr_dedicated_model"`   // was LLM_OCR_MODEL
-	STTDedicatedModel string                   `toml:"stt_dedicated_model"`   // was LLM_STT_MODEL
-	MaxConcurrency    int                      `toml:"max_concurrency"`       // 0 = unlimited
-	RequestCooldownMS int                      `toml:"request_cooldown_ms"`   // 0 = no gap
-	RetryAttempts     int                      `toml:"retry_attempts"`        // retries AFTER the first attempt; 0 = no retry
-	RetryDelayMS      int                      `toml:"retry_delay_ms"`        // 0 = retry immediately
-	StopBackendOnIdle bool                     `toml:"stop_backend_on_idle"`  // default true
-	BackendStopEndpoint string                 `toml:"backend_stop_endpoint"` // default "/backend/shutdown"
-	StopDelayMS       int                      `toml:"stop_delay_ms"`         // idle-stop grace window; default 5000
-	Tiers             map[string]TierConfig    `toml:"tiers"`                 // was LLM_TIER_<NAME>_MODEL
-	Features          map[string]FeatureConfig `toml:"features"`              // was LLM_FEATURE_<NAME>_TIER
+	BaseURL             string                   `toml:"base_url"`              // was LOCALAI_BASE_URL
+	EmbeddingModel      string                   `toml:"embedding_model"`       // was LOCALAI_EMBEDDING_MODEL
+	EmbeddingMaxChars   int                      `toml:"embedding_max_chars"`   // was LOCALAI_EMBEDDING_MAX_CHARS
+	TLSInsecure         bool                     `toml:"tls_insecure"`          // was LOCALAI_TLS_INSECURE
+	OCRDedicatedModel   string                   `toml:"ocr_dedicated_model"`   // was LLM_OCR_MODEL
+	STTDedicatedModel   string                   `toml:"stt_dedicated_model"`   // was LLM_STT_MODEL
+	MaxConcurrency      int                      `toml:"max_concurrency"`       // 0 = unlimited
+	RequestCooldownMS   int                      `toml:"request_cooldown_ms"`   // 0 = no gap
+	RetryAttempts       int                      `toml:"retry_attempts"`        // retries AFTER the first attempt; 0 = no retry
+	RetryDelayMS        int                      `toml:"retry_delay_ms"`        // 0 = retry immediately
+	StopBackendOnIdle   bool                     `toml:"stop_backend_on_idle"`  // default true
+	BackendStopEndpoint string                   `toml:"backend_stop_endpoint"` // default "/backend/shutdown"
+	StopDelayMS         int                      `toml:"stop_delay_ms"`         // idle-stop grace window; default 5000
+	Tiers               map[string]TierConfig    `toml:"tiers"`                 // was LLM_TIER_<NAME>_MODEL
+	Features            map[string]FeatureConfig `toml:"features"`              // was LLM_FEATURE_<NAME>_TIER
 }
 
 type TierConfig struct {
@@ -98,6 +99,17 @@ type RecipeConfig struct {
 	CategoryWorkers int `toml:"category_workers"` // was RECIPE_CATEGORY_WORKERS
 }
 
+// MCPConfig configures the MCP (Model Context Protocol) endpoint at /mcp and
+// the outbound tunnel to the remote proxy. The tokens stay in the environment.
+type MCPConfig struct {
+	Disabled bool `toml:"disabled"` // true = MCP endpoint returns 404
+	// ProxyURL is the ws:// or wss:// tunnel endpoint of the remote relay
+	// proxy (see docs/MCPProxy.md). Empty = tunnel disabled.
+	ProxyURL string `toml:"proxy_url"`
+	// ProxyMaxConcurrency caps concurrently relayed MCP requests. <=0 = 8.
+	ProxyMaxConcurrency int `toml:"proxy_max_concurrency"`
+}
+
 var current = DefaultConfig()
 
 // DefaultConfig returns a Config with every production default filled
@@ -112,17 +124,17 @@ func DefaultConfig() Config {
 			MaxJSONBodyBytes:     1 << 20,
 		},
 		LLM: LLMConfig{
-			EmbeddingModel:    "text-embedding-ada-002",
-			EmbeddingMaxChars: 16 * 1024,
-			OCRDedicatedModel: "GLM-OCR-GGUF",
-			STTDedicatedModel: "vibevoice-cpp-asr",
-			MaxConcurrency:    1,
-			RequestCooldownMS: 1000,
-			RetryAttempts:     3,
-			RetryDelayMS:      3000,
-			StopBackendOnIdle: true,
+			EmbeddingModel:      "text-embedding-ada-002",
+			EmbeddingMaxChars:   16 * 1024,
+			OCRDedicatedModel:   "GLM-OCR-GGUF",
+			STTDedicatedModel:   "vibevoice-cpp-asr",
+			MaxConcurrency:      1,
+			RequestCooldownMS:   1000,
+			RetryAttempts:       3,
+			RetryDelayMS:        3000,
+			StopBackendOnIdle:   true,
 			BackendStopEndpoint: "/backend/shutdown",
-			StopDelayMS:        5000,
+			StopDelayMS:         5000,
 			Tiers: map[string]TierConfig{
 				"smart":  {Model: "Qwen3.6-27B-MTP-GGUF"},
 				"medium": {Model: "gemma-4-e2b-it-qat-q4_0"},
@@ -136,6 +148,8 @@ func DefaultConfig() Config {
 		},
 		Jobs:   JobsConfig{Workers: 10},
 		Recipe: RecipeConfig{CategoryWorkers: 10},
+		// matches mcptunnel.DefaultMaxConcurrency
+		MCP: MCPConfig{ProxyMaxConcurrency: 8},
 	}
 }
 
