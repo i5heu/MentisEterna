@@ -1,6 +1,7 @@
 package mcptunnel
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -461,6 +462,53 @@ func TestBinaryFrameDropsConnection(t *testing.T) {
 	waitFor(t, 15*time.Second, "reconnect after binary frame", func() bool {
 		return p.connects.Load() >= 2
 	})
+}
+
+// An oversize response must not produce an oversize outbound frame (symmetric
+// with the 4 MiB frame ceiling): the relay answers 500 inline instead.
+func TestOversizedResponseAnswersFallback500(t *testing.T) {
+	p := startMockProxy(t, "tunnel-secret")
+
+	resCh := make(chan resFrame, 1)
+	p.onConnect(func(conn *websocket.Conn) {
+		if err := conn.WriteJSON(reqFrame{
+			Type:   "req",
+			ID:     "big-1",
+			Method: http.MethodPost,
+			Path:   "/mcp",
+			Body:   `{}`,
+		}); err != nil {
+			t.Errorf("proxy write req: %v", err)
+			return
+		}
+		var res resFrame
+		if err := conn.ReadJSON(&res); err != nil {
+			t.Errorf("proxy read res: %v", err)
+			return
+		}
+		resCh <- res
+		drain(conn)
+	})
+
+	bigHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxFrameBytes+1024))
+	})
+
+	_ = runClient(t, Config{URL: p.URL, Token: "tunnel-secret", Handler: bigHandler})
+
+	var res resFrame
+	select {
+	case res = <-resCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for res frame")
+	}
+	if res.ID != "big-1" || res.Status != http.StatusInternalServerError {
+		t.Fatalf("res = %+v, want id=big-1 status=500", res)
+	}
+	if res.Body != "response body too large" {
+		t.Fatalf("res.Body = %q, want fallback body", res.Body)
+	}
 }
 
 // A flooding proxy must never make the client spawn unbounded goroutines or

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 )
 
 // JSONRPCVersion is the JSON-RPC 2.0 protocol tag.
@@ -34,6 +35,11 @@ const (
 	CodeInvalidParams  = -32602
 	CodeInternalError  = -32603
 )
+
+// internalToolErrorText is the generic in-band failure callers receive for
+// tool errors that are not PublicError/InvalidParamsError, so internal
+// details never leak to the client.
+const internalToolErrorText = "internal error (details in server logs)"
 
 // Request is a single JSON-RPC request or notification.
 type Request struct {
@@ -60,9 +66,10 @@ type Error struct {
 // ToolHandler executes a tool call. args is the caller-supplied arguments
 // object (JSON, possibly "null" when the client omitted arguments). Return
 // values: a string is used verbatim as text content, a CallToolResult passes
-// through, anything else is JSON-marshalled as text content. An error is
-// reported in-band as a tool error (isError: true); wrap it in
-// InvalidParamsError to report a -32602 protocol error instead.
+// through, anything else is JSON-marshalled as text content. Error handling:
+// wrap an error in InvalidParamsError to report it as JSON-RPC -32602, in a
+// PublicError to pass its message to the caller as an in-band tool failure,
+// anything else is logged and answered with a generic in-band internal error.
 type ToolHandler func(ctx context.Context, args json.RawMessage) (any, error)
 
 // InvalidParamsError marks malformed tool input so the server reports it as
@@ -76,6 +83,23 @@ func (e *InvalidParamsError) Error() string { return e.Message }
 // InvalidParamsf builds an InvalidParamsError.
 func InvalidParamsf(format string, args ...any) error {
 	return &InvalidParamsError{Message: fmt.Sprintf(format, args...)}
+}
+
+// PublicError is an error whose message is safe to show to the caller as an
+// in-band tool failure (isError: true). Handlers should use it for messages
+// they deliberately compose from validated input. Any other error type is
+// treated as internal: the message stays in the server log only and the
+// caller receives a generic "internal error" result instead, so internal
+// details (e.g. database error strings) never reach the wire.
+type PublicError struct {
+	Message string
+}
+
+func (e *PublicError) Error() string { return e.Message }
+
+// Publicf builds a PublicError.
+func Publicf(format string, args ...any) error {
+	return &PublicError{Message: fmt.Sprintf(format, args...)}
 }
 
 // Tool is the declaration of a callable tool. InputSchema is a JSON Schema
@@ -251,10 +275,21 @@ func (s *Server) Handle(ctx context.Context, body []byte) (Response, bool) {
 					Error:   &Error{Code: CodeInvalidParams, Message: invalid.Message},
 				}, true
 			}
+			var pub *PublicError
+			if errors.As(err, &pub) {
+				return Response{
+					JSONRPC: JSONRPCVersion,
+					ID:     req.ID,
+					Result: CallToolResult{Content: []Content{{Type: "text", Text: pub.Message}}, IsError: true},
+				}, true
+			}
+			// Internal error: the raw message stays in the server log and
+			// never reaches the caller.
+			log.Printf("mcp: tool %s: internal error: %v", params.Name, err)
 			return Response{
 				JSONRPC: JSONRPCVersion,
 				ID:      req.ID,
-				Result:  CallToolResult{Content: []Content{{Type: "text", Text: err.Error()}}, IsError: true},
+				Result:  CallToolResult{Content: []Content{{Type: "text", Text: internalToolErrorText}}, IsError: true},
 			}, true
 		}
 		return Response{

@@ -128,10 +128,21 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Brute-force guard: unauthenticated failures are throttled per client IP
+	// with exponential backoff (429 + Retry-After once blocked).
+	ipKey := throttleKeyIP(clientIPFromRequest(r))
+	if wait, allowed := s.mcpThrottle.allow(ipKey); !allowed {
+		w.Header().Set("Retry-After", formatRetryAfter(wait))
+		http.Error(w, "too many failed attempts", http.StatusTooManyRequests)
+		return
+	}
 	if !s.mcpAuthorized(r) {
+		s.mcpThrottle.recordFailure(ipKey)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	s.mcpThrottle.recordSuccess(ipKey)
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxJSONBodyBytes()))
 	if err != nil {
@@ -552,15 +563,23 @@ func (s *Server) mcpTaskAction(ctx context.Context, noteID int64, actionID strin
 
 	plugin, ok := notetype.Registry[noteType]
 	if !ok {
-		return nil, fmt.Errorf("task plugin not registered")
+		return nil, mcp.Publicf("task actions are not available")
 	}
 	ah, ok := plugin.(notetype.ActionHandler)
 	if !ok {
-		return nil, fmt.Errorf("task plugin has no actions")
+		return nil, mcp.Publicf("task actions are not available")
 	}
 
 	result, err := ah.HandleAction(ctx, s.db.DB, 0, noteID, actionID, params)
 	if err != nil {
+		// The plugin's BadRequestErrors are deliberate, caller-safe messages
+		// (validation failures, not-found cases). Everything else — e.g.
+		// wrapped database errors — stays internal and is answered with the
+		// generic in-band failure by the protocol core.
+		var badReq *notetype.BadRequestError
+		if errors.As(err, &badReq) {
+			return nil, mcp.Publicf("%s", badReq.Error())
+		}
 		return nil, err
 	}
 	if shouldNotifyForAction(plugin, actionID) {

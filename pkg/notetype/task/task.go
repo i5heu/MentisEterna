@@ -430,13 +430,18 @@ func (p *TaskPlugin) HandleAction(ctx context.Context, db *sql.DB, userID int, n
 // toggleSubtask flips the checked state of a single subtask in place,
 // without touching the rest of the task config. Used by the view-mode
 // checkbox so clicks persist immediately.
+//
+// Error contract: caller-visible failures (bad input, unknown subtask) are
+// returned as *notetype.BadRequestError — surfaces like the MCP endpoint
+// treat those as safe to relay verbatim; all other errors (database
+// failures) stay opaque.
 func toggleSubtask(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
 	var p ToggleSubtaskParams
 	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("task: invalid params: %w", err)
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("task: invalid params: %v", err)}
 	}
 	if p.SubtaskID <= 0 {
-		return nil, fmt.Errorf("task: subtask_id is required")
+		return nil, &notetype.BadRequestError{Message: "task: subtask_id is required"}
 	}
 	checked := 0
 	if p.Checked {
@@ -454,7 +459,7 @@ func toggleSubtask(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 		return nil, fmt.Errorf("task: subtask rows affected: %w", err)
 	}
 	if affected == 0 {
-		return nil, fmt.Errorf("task: subtask %d not found for note %d", p.SubtaskID, noteID)
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("task: subtask %d not found for note %d", p.SubtaskID, noteID)}
 	}
 	return map[string]any{
 		"subtask_id": p.SubtaskID,
@@ -464,13 +469,16 @@ func toggleSubtask(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 
 // setTaskStatus updates only the status field (and completed_at if done)
 // without touching any other task fields.
+//
+// Error contract: same as toggleSubtask — *notetype.BadRequestError for
+// caller-visible validation failures, opaque errors for database failures.
 func setTaskStatus(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
 	var p SetStatusParams
 	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("task: invalid params: %w", err)
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("task: invalid params: %v", err)}
 	}
 	if !validStatuses[p.Status] {
-		return nil, fmt.Errorf("task: invalid status %q (valid: todo, in_progress, done)", p.Status)
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("task: invalid status %q (valid: todo, in_progress, done)", p.Status)}
 	}
 
 	// Read current config to preserve all fields.

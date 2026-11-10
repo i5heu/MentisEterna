@@ -56,8 +56,8 @@ func (l *loginThrottle) recordFailure(username, ip string) {
 
 	now := l.now()
 	l.prune(now)
-	l.username[username] = nextThrottleState(l.username[username], now)
-	l.ip[ip] = nextThrottleState(l.ip[ip], now)
+	l.username[username] = nextThrottleState(l.username[username], now, loginThrottleFreeFailures, loginThrottleMaxDelay)
+	l.ip[ip] = nextThrottleState(l.ip[ip], now, loginThrottleFreeFailures, loginThrottleMaxDelay)
 }
 
 func (l *loginThrottle) recordSuccess(username, ip string) {
@@ -80,15 +80,15 @@ func (l *loginThrottle) prune(now time.Time) {
 	}
 }
 
-func nextThrottleState(state throttleState, now time.Time) throttleState {
+func nextThrottleState(state throttleState, now time.Time, freeFailures int, maxDelay time.Duration) throttleState {
 	state.Failures++
 	state.LastSeen = now
-	if state.Failures > loginThrottleFreeFailures {
-		exponent := state.Failures - loginThrottleFreeFailures - 1
+	if state.Failures > freeFailures {
+		exponent := state.Failures - freeFailures - 1
 		delaySeconds := math.Pow(2, float64(exponent))
 		delay := time.Duration(delaySeconds) * time.Second
-		if delay > loginThrottleMaxDelay {
-			delay = loginThrottleMaxDelay
+		if delay > maxDelay {
+			delay = maxDelay
 		}
 		state.BlockedUntil = now.Add(delay)
 	}

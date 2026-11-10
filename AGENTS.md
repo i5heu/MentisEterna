@@ -80,9 +80,12 @@ a public server. The proxy is NOT built in this repo — `docs/MCPProxy.md`
 is the complete requirements document for it. The client side lives in
 `internal/mcptunnel/`.
 
-- Enable with `[mcp] proxy_url = "wss://host/tunnel"` (empty = off) plus the
-  `MCP_TUNNEL_TOKEN` env var (falls back to `MCP_TOKEN`). Requires
-  `[mcp] disabled = false`.
+- Enable with `[mcp] proxy_url = "wss://host/tunnel"` (empty = off). Requires
+  `[mcp] disabled = false`. Tunnel auth token: the `MCP_TUNNEL_TOKEN` env var
+  if set, otherwise a 32-byte random token is generated once, printed on
+  startup, and persisted in the DB (`secrets` table, key `mcp_tunnel_token`).
+  `MCP_TOKEN` is never used for the tunnel — the proxy must not hold a valid
+  app credential.
 - The client dials out once and keeps the WebSocket (subprotocol
   `mentis-tunnel-v1`) alive permanently: PING every 30 s, reconnect with
   exponential backoff (1 s → 60 s cap, ±20 % jitter). Requests run on a fixed
@@ -359,7 +362,7 @@ Key sections (see `config.default.toml` for all fields):
 | `BACKUP_ENCRYPTION_KEY` | hex-encoded 64-char AES-256 key for encrypted backups |
 | `MEDIA_S3_<ID>_ACCESS_KEY_ID` / `MEDIA_S3_<ID>_SECRET_ACCESS_KEY` | Per-endpoint S3 API keys |
 | `MCP_TOKEN` | static bearer token for the `/mcp` MCP endpoint (also accepts session tokens) |
-| `MCP_TUNNEL_TOKEN` | bearer token for the outbound MCP proxy tunnel (falls back to `MCP_TOKEN`; see docs/MCPProxy.md) |
+| `MCP_TUNNEL_TOKEN` | bearer token for the outbound MCP proxy tunnel (optional: when unset, one is auto-generated and stored in the DB `secrets` table as `mcp_tunnel_token`; see docs/MCPProxy.md) |
 
 `LOCALAI_BASE_URL`, `LLM_TIER_*_BASE_URL`, and `MEDIA_S3_ENDPOINTS` are **not**
 env vars anymore — base URLs moved to `config.toml` `[llm]`/`[llm.tiers]`, and
@@ -490,4 +493,5 @@ cmd/restore/main.go           — CLI tool (download + decrypt → output file)
 - `vss_notes`: rowid (= notes.id), body_embedding (JSON float array, 2560-dim)
 - `auth`: id, username, password_hash (SHA-512 hex)
 - `sessions`: token, username, expires_at
+- `secrets`: key, value — machine-generated credentials (auto-generated MCP tunnel token lives here as `mcp_tunnel_token`)
 - DB opened with `_journal_mode=WAL&_foreign_keys=on`

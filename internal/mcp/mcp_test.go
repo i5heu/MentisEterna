@@ -244,6 +244,9 @@ func TestToolsCallInvalidParamsError(t *testing.T) {
 	}
 }
 
+// TestToolsCallHandlerErrorIsInBand verifies the error contract: internal
+// errors are answered in-band with a generic message (raw details never
+// reach the caller), PublicError messages pass through verbatim.
 func TestToolsCallHandlerErrorIsInBand(t *testing.T) {
 	reg := newTestRegistry()
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"broken"}}`)
@@ -255,8 +258,40 @@ func TestToolsCallHandlerErrorIsInBand(t *testing.T) {
 	if err := json.Unmarshal(decode(t, resp.Result), &result); err != nil {
 		t.Fatalf("decode tools/call: %v", err)
 	}
-	if !result.IsError || !strings.Contains(result.Content[0].Text, "internal kaboom") {
-		t.Fatalf("result = %+v, want isError with message", result)
+	if !result.IsError {
+		t.Fatalf("result = %+v, want isError", result)
+	}
+	if text := result.Content[0].Text; text != internalToolErrorText {
+		t.Fatalf("content text = %q, want %q", text, internalToolErrorText)
+	}
+	if strings.Contains(result.Content[0].Text, "internal kaboom") {
+		t.Fatal("internal error message leaked to the caller")
+	}
+}
+
+func TestToolsCallPublicErrorPassesThrough(t *testing.T) {
+	reg := NewServer("test-server", "0.1")
+	reg.AddTool(ToolDefinition{
+		Tool: Tool{
+			Name:        "checked",
+			Description: "returns a public failure",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		},
+		Handler: func(ctx context.Context, args json.RawMessage) (any, error) {
+			return nil, Publicf("no such item %d", 42)
+		},
+	})
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"checked"}}`)
+	resp, _ := reg.Handle(context.Background(), body)
+	if resp.Error != nil {
+		t.Fatalf("public error must be in-band, got %+v", resp.Error)
+	}
+	var result CallToolResult
+	if err := json.Unmarshal(decode(t, resp.Result), &result); err != nil {
+		t.Fatalf("decode tools/call: %v", err)
+	}
+	if !result.IsError || result.Content[0].Text != "no such item 42" {
+		t.Fatalf("result = %+v, want isError with the public message", result)
 	}
 }
 

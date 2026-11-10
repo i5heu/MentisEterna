@@ -166,6 +166,9 @@ func (d *DB) migrate() error {
 	if err := d.ensureAuthTables(); err != nil {
 		return err
 	}
+	if err := d.ensureSecretsTable(); err != nil {
+		return err
+	}
 	if err := d.ensureJobTables(); err != nil {
 		return err
 	}

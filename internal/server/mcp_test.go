@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/builtins"
 
 	"github.com/i5heu/MentisEterna/internal/config"
+	"github.com/i5heu/MentisEterna/internal/mcp"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
@@ -247,6 +250,65 @@ func TestMCPEndpointDisabled(t *testing.T) {
 
 	if w := mcpPerform(t, s, token, "ping", `{}`); w.Code != http.StatusNotFound {
 		t.Fatalf("disabled endpoint: HTTP %d, want 404", w.Code)
+	}
+}
+
+// TestMCPAuthThrottle verifies brute-force defense: unauthenticated failures
+// are free up to a threshold, then the client IP is blocked with 429 +
+// Retry-After — regardless of whether a later attempt carries the right
+// token. Another IP is unaffected, and a successful auth lifts its block.
+func TestMCPAuthThrottle(t *testing.T) {
+	s, token := newMCPTestServer(t)
+
+	// httptest requests default to RemoteAddr 192.0.2.1:1234 — one bucket.
+	for i := 0; i <= mcpThrottleFreeFailures; i++ {
+		if w := mcpPerform(t, s, "bad-guess", "ping", `{}`); w.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: HTTP %d, want 401 (free failures)", i+1, w.Code)
+		}
+	}
+
+	// Next failure from the same source is blocked before auth.
+	w := mcpPerform(t, s, "bad-guess", "ping", `{}`)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("after threshold: HTTP %d, want 429", w.Code)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatal("429 response must carry Retry-After")
+	}
+
+	// Even the valid token is blocked from that source while blocked.
+	if w := mcpPerform(t, s, token, "ping", `{}`); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("valid token while blocked: HTTP %d, want 429", w.Code)
+	}
+
+	// A different source IP is unaffected and authenticates normally.
+	r := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.RemoteAddr = "10.1.2.3:4444"
+	w2 := httptest.NewRecorder()
+	s.handleMCP(w2, r)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("other IP: HTTP %d, want 200", w2.Code)
+	}
+}
+
+// TestMCPTaskActionMapsBadRequestsToPublic verifies that task plugin
+// validation failures surface as caller-safe PublicErrors (descriptive,
+// in-band) instead of opaque internal errors.
+func TestMCPTaskActionMapsBadRequestsToPublic(t *testing.T) {
+	s, token := newMCPTestServer(t)
+	noteID := helperAddTodo(t, s, token)
+
+	_, err := s.mcpTaskAction(context.Background(), noteID, "set_status", json.RawMessage(`{"status":"banana"}`))
+	if err == nil {
+		t.Fatal("expected an error for an invalid status")
+	}
+	var pub *mcp.PublicError
+	if !errors.As(err, &pub) {
+		t.Fatalf("err = %T (%v), want *mcp.PublicError so the message is relayed in-band", err, err)
+	}
+	if !strings.Contains(pub.Message, "invalid status") {
+		t.Fatalf("PublicError message = %q, want the plugin's validation text", pub.Message)
 	}
 }
 

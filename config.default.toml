@@ -143,10 +143,12 @@ category_workers = 10
 # proxy_url = "wss://proxy.example.com/tunnel"
 # proxy_max_concurrency = 8  # worker pool for relayed MCP requests (default 8).
 #   Overflow is answered with 503; a wedged backend yields 504 after ~115 s.
-# Tunnel auth (secret stays in the environment):
-#   MCP_TUNNEL_TOKEN — bearer token for the tunnel dial; falls back to
-#   MCP_TOKEN when unset. Separate from MCP_TOKEN so the proxy never learns
-#   the agents' token; MentisEterna still validates agent auth itself.
+# Tunnel auth (optional secret, env or auto-generated):
+#   MCP_TUNNEL_TOKEN — bearer token for the tunnel dial. When unset, a
+#   32-byte random token is generated once at first use, printed on startup,
+#   and stored in the DB (secrets table, key mcp_tunnel_token). It is NEVER
+#   taken from MCP_TOKEN: the proxy must not hold a valid app credential;
+#   MentisEterna still validates agent auth itself.
 
 [printer]
 # USB-serial thermal printer settings.

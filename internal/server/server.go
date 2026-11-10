@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +42,7 @@ type Server struct {
 	webauthn      *webauthn.WebAuthn
 	sessionStore  *webAuthnSessionStore
 	loginThrottle *loginThrottle
+	mcpThrottle   *keyThrottle
 	jobManager    *jobs.Manager
 	mediaService  *media.Service
 	backupService *backup.Service
@@ -136,6 +139,7 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 		webauthn:      w,
 		sessionStore:  newWebAuthnSessionStore(),
 		loginThrottle: newLoginThrottle(),
+		mcpThrottle:   newKeyThrottle(),
 		jobManager:    jobMgr,
 		mediaService:  mediaSvc,
 		backupService: backupSvc,
@@ -153,9 +157,10 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 
 // newMCPTunnel creates the outbound MCP proxy tunnel client (see
 // docs/MCPProxy.md) when it is fully configured. It returns nil when the
-// tunnel is off: MCP disabled, no proxy_url, or no tunnel token. The tunnel
-// relays into the regular handleMCP handler, so auth, limits, and tool
-// dispatch are identical to the LAN endpoint.
+// tunnel is off: MCP disabled or no proxy_url. The tunnel relays into the
+// regular handleMCP handler, so auth, limits, and tool dispatch are identical
+// to the LAN endpoint. The tunnel token comes from MCP_TUNNEL_TOKEN or, when
+// that is unset, is generated and persisted by resolveMCPTunnelToken.
 func newMCPTunnel(s *Server) *mcptunnel.Client {
 	mcpCfg := config.Get().MCP
 	if mcpCfg.Disabled {
@@ -165,18 +170,9 @@ func newMCPTunnel(s *Server) *mcptunnel.Client {
 	if proxyURL == "" {
 		return nil
 	}
-	token := os.Getenv("MCP_TUNNEL_TOKEN")
-	tokenSource := "MCP_TUNNEL_TOKEN"
-	if token == "" {
-		if fallback := os.Getenv("MCP_TOKEN"); fallback != "" {
-			token = fallback
-			tokenSource = "MCP_TOKEN (fallback)"
-			log.Printf("mcp tunnel: MCP_TUNNEL_TOKEN not set — falling back to MCP_TOKEN. " +
-				"A compromised proxy would then hold a valid MCP token; configure a distinct MCP_TUNNEL_TOKEN.")
-		}
-	}
-	if token == "" {
-		log.Printf("mcp tunnel: proxy_url is set but MCP_TUNNEL_TOKEN (or MCP_TOKEN) is not — tunnel disabled")
+	token, tokenSource, err := s.resolveMCPTunnelToken()
+	if err != nil {
+		log.Printf("mcp tunnel: not started: %v", err)
 		return nil
 	}
 	cfg := mcptunnel.Config{
@@ -194,8 +190,71 @@ func newMCPTunnel(s *Server) *mcptunnel.Client {
 	for _, warn := range cfg.Warnings() {
 		log.Printf("mcp tunnel: warning: %s", warn)
 	}
-	log.Printf("mcp: tunnel enabled → %s (auth via %s)", proxyURL, tokenSource)
+	log.Printf("mcp: tunnel enabled to %s (auth via %s)", proxyURL, tokenSource)
 	return mcptunnel.New(cfg)
+}
+
+// mcpTunnelTokenKey is the DB secrets key holding the auto-generated tunnel
+// token when MCP_TUNNEL_TOKEN is not set in the environment.
+const mcpTunnelTokenKey = "mcp_tunnel_token"
+
+// mcpTunnelTokenBytes is the size (bytes, hex-encoded to 64 chars) of the
+// auto-generated tunnel token.
+const mcpTunnelTokenBytes = 32
+
+// resolveMCPTunnelToken returns the tunnel auth token and a short human
+// description of where it came from. Preference order:
+//
+//  1. MCP_TUNNEL_TOKEN env var (operator-managed, overrides the DB).
+//  2. The secrets-table value persisted on an earlier start.
+//  3. A freshly generated 32-byte random token (hex), persisted and printed
+//     to stdout exactly once, like the initial admin password.
+//
+// The agents' MCP_TOKEN is deliberately never used for the tunnel: the tunnel
+// token must stay meaningless to MentisEterna itself so a compromised proxy
+// does not hold a valid app credential (see docs/MCPProxy.md, security model).
+func (s *Server) resolveMCPTunnelToken() (token, source string, err error) {
+	if envToken := os.Getenv("MCP_TUNNEL_TOKEN"); envToken != "" {
+		return envToken, "MCP_TUNNEL_TOKEN", nil
+	}
+	stored, err := s.db.GetSecret(mcpTunnelTokenKey)
+	if err != nil {
+		return "", "", fmt.Errorf("read stored tunnel token: %w", err)
+	}
+	if stored != "" {
+		return stored, "stored secret (secrets/" + mcpTunnelTokenKey + ")", nil
+	}
+
+	generated, err := generateTokenHex(mcpTunnelTokenBytes)
+	if err != nil {
+		return "", "", fmt.Errorf("generate tunnel token: %w", err)
+	}
+	created, err := s.db.SetSecretIfAbsent(mcpTunnelTokenKey, generated)
+	if err != nil {
+		return "", "", fmt.Errorf("store tunnel token: %w", err)
+	}
+	if !created {
+		// A concurrent writer won the race: use whichever value persisted.
+		stored, err = s.db.GetSecret(mcpTunnelTokenKey)
+		if err != nil {
+			return "", "", fmt.Errorf("read stored tunnel token: %w", err)
+		}
+		if stored == "" {
+			return "", "", errors.New("tunnel token missing after insert")
+		}
+		return stored, "stored secret (secrets/" + mcpTunnelTokenKey + ")", nil
+	}
+	fmt.Printf("\n*** MCP tunnel token (shown only once, configure it as the proxy binding's tunnel_token): %s ***\n\n", generated)
+	return generated, "auto-generated (stored in DB as secrets/" + mcpTunnelTokenKey + ")", nil
+}
+
+// generateTokenHex returns n crypto-random bytes, hex-encoded.
+func generateTokenHex(n int) (string, error) {
+	raw := make([]byte, n)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 func (s *Server) Start(ctx context.Context) error {

@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/i5heu/MentisEterna/internal/config"
+	"github.com/i5heu/MentisEterna/internal/db"
 )
 
 func TestMCPTunnelWiringCases(t *testing.T) {
@@ -26,8 +29,8 @@ func TestMCPTunnelWiringCases(t *testing.T) {
 		{"off by default", false, "", "", "", true},
 		{"disabled mcp wins", true, "ws://example.invalid/tunnel", "t", "a", true},
 		{"enabled with tunnel token", false, "ws://example.invalid/tunnel", "t", "", false},
-		{"enabled via MCP_TOKEN fallback", false, "ws://example.invalid/tunnel", "", "a", false},
-		{"no token configured", false, "ws://example.invalid/tunnel", "", "", true},
+		{"generated tunnel token when only MCP_TOKEN is set", false, "ws://example.invalid/tunnel", "", "agent-token", false},
+		{"generated tunnel token when nothing is set", false, "ws://example.invalid/tunnel", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -42,7 +45,91 @@ func TestMCPTunnelWiringCases(t *testing.T) {
 			if (s.mcpTunnel == nil) != tc.wantNil {
 				t.Fatalf("mcpTunnel == nil = %v, want %v", s.mcpTunnel == nil, tc.wantNil)
 			}
+			if tc.wantNil {
+				return
+			}
+			if tc.tunnelTok != "" {
+				return // explicit env token used as-is
+			}
+			// Without a tunnel env token, a distinct token must have been
+			// generated and persisted in the secrets table — never a reuse
+			// of MCP_TOKEN.
+			stored, err := s.db.GetSecret("mcp_tunnel_token")
+			if err != nil {
+				t.Fatalf("read stored tunnel token: %v", err)
+			}
+			if len(stored) != 64 {
+				t.Fatalf("stored tunnel token has %d chars, want 64 (32 bytes hex)", len(stored))
+			}
+			if _, err := hex.DecodeString(stored); err != nil {
+				t.Fatalf("stored tunnel token is not hex: %v", err)
+			}
+			if tc.mcpTok != "" && stored == tc.mcpTok {
+				t.Fatal("tunnel token must not reuse MCP_TOKEN")
+			}
 		})
+	}
+}
+
+// TestMCPTunnelTokenPersistence pins the token lifecycle: auto-generated on
+// first use, persisted in the DB, reused on the next start on the same DB,
+// and overridable via MCP_TUNNEL_TOKEN (which leaves the stored value alone).
+func TestMCPTunnelTokenPersistence(t *testing.T) {
+	config.Reset()
+	t.Cleanup(config.Reset)
+	t.Setenv("MCP_TOKEN", "agent-token") // must never be picked for the tunnel
+	config.Get().MCP.ProxyURL = "ws://example.invalid/tunnel"
+
+	dbPath := filepath.Join(t.TempDir(), "server.db")
+
+	// First server on this DB: token generated, printed once, stored.
+	d1, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { d1.Close() })
+	s1 := New(d1, ":0", nil, nil, nil, nil, nil, nil)
+	if s1.mcpTunnel == nil {
+		t.Fatal("mcpTunnel is nil — tunnel did not configure itself")
+	}
+	stored1, err := d1.GetSecret("mcp_tunnel_token")
+	if err != nil || stored1 == "" {
+		t.Fatalf("stored tunnel token = %q, %v; want a generated value", stored1, err)
+	}
+	if stored1 == "agent-token" {
+		t.Fatal("tunnel token must be distinct from MCP_TOKEN")
+	}
+
+	// Second server on the same DB: same token, reported as stored.
+	d2, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { d2.Close() })
+	s2 := New(d2, ":0", nil, nil, nil, nil, nil, nil)
+	token2, source2, err := s2.resolveMCPTunnelToken()
+	if err != nil {
+		t.Fatalf("resolveMCPTunnelToken: %v", err)
+	}
+	if token2 != stored1 {
+		t.Fatalf("token changed across restarts: %q vs %q", token2, stored1)
+	}
+	if !strings.Contains(source2, "stored secret") {
+		t.Fatalf("source = %q, want stored secret", source2)
+	}
+
+	// Explicit env token wins and leaves the stored value untouched.
+	t.Setenv("MCP_TUNNEL_TOKEN", "manual-tunnel-token")
+	token3, source3, err := s2.resolveMCPTunnelToken()
+	if err != nil {
+		t.Fatalf("resolveMCPTunnelToken with env: %v", err)
+	}
+	if token3 != "manual-tunnel-token" || source3 != "MCP_TUNNEL_TOKEN" {
+		t.Fatalf("env override: token=%q source=%q", token3, source3)
+	}
+	storedAfter, err := d2.GetSecret("mcp_tunnel_token")
+	if err != nil || storedAfter != stored1 {
+		t.Fatalf("env override must not rewrite the stored token: %q, %v", storedAfter, err)
 	}
 }
 

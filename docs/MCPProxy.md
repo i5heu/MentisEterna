@@ -61,10 +61,13 @@ external agents and multiplexes their requests over that connection.
    bytes (e.g. `openssl rand -hex 32`). MentisEterna logs a warning for
    shorter tunnel tokens. Format restriction: printable ASCII only (the
    token travels in an HTTP header).
-6. **Fallback caveat.** If MentisEterna is configured without
-   `MCP_TUNNEL_TOKEN` it falls back to `MCP_TOKEN` (the agents' token) and
-   logs a security warning — in that mode a compromised proxy holds a valid
-   MCP token, defeating the separation above. Prefer distinct tokens.
+6. **Token lifecycle.** The tunnel token comes from the `MCP_TUNNEL_TOKEN`
+   env var when set; when unset, MentisEterna generates a 32-byte random
+   token itself, persists it in its database (used unchanged on every later
+   start), and prints it once on startup for configuring the proxy binding.
+   It is never taken from `MCP_TOKEN`, so even the default configuration
+   keeps the two-secret separation: a compromised proxy never holds a valid
+   app credential either way.
 
 ## Tunnel endpoint (proxy side)
 
@@ -270,12 +273,12 @@ For reference, so builder and client match:
 
 | Setting | Value |
 |---|---|
-| Enable | `[mcp] proxy_url` non-empty **and** `MCP_TUNNEL_TOKEN` env set (falls back to `MCP_TOKEN` with a security warning), **and** `[mcp] disabled = false` |
+| Enable | `[mcp] proxy_url` non-empty **and** `[mcp] disabled = false`. Auth token: `MCP_TUNNEL_TOKEN` env when set, else auto-generated 32-byte token persisted in the DB (`secrets` table, key `mcp_tunnel_token`) and shown once on first startup |
 | Startup validation | Refuses to run with a non-`ws`/`wss` URL or a token containing control characters; warns on plaintext `ws://` to non-private hosts and tokens < 32 chars |
 | Dial | `websocket.Dialer` with `Subprotocols: ["mentis-tunnel-v1"]`, `Authorization: Bearer <tunnel-token>` |
 | Backoff | Exponential 1 s → 60 s cap, ±20 % jitter; immediate first attempt; reconnects forever until ctx cancel |
 | Ping | WS PING every 30 s (write deadline 10 s); connection dropped if no traffic ~90 s |
-| Frame cap | Reads > 4 MiB → drop connection (T8) |
+| Frame cap | Reads > 4 MiB → drop connection (T8). Outbound `res` frames are checked on the encoded size: > 4 MiB → answered inline with `res` 500 (`body: "response body too large"`) instead |
 | Concurrency | Fixed worker pool of 8 (`proxy_max_concurrency`) + bounded queue (2/worker); overflow → `res` 503 "overloaded", never unbounded queueing |
 | Request budget | ~115 s per request; wedged handler → `res` 504 "gateway timeout", worker freed |
 | Panic safety | A panicking handler answers `res` 500; the connection and process stay alive |

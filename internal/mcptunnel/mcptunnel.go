@@ -592,6 +592,21 @@ func (c *Client) handleReq(ctx context.Context, f reqFrame) resFrame {
 		res.ContentType = ct
 	}
 	res.Body = rec.Body()
+
+	// Never send a frame the proxy would have to drop: symmetric with T8
+	// (frames > 4 MiB are a protocol violation). JSON-escaping can expand
+	// the body, so the size check runs on the encoded frame; an oversized
+	// response is answered inline with a 500 instead of wedging the relay.
+	if encoded, err := json.Marshal(res); err != nil || len(encoded) > maxFrameBytes {
+		log.Printf("mcp tunnel: res %s too large to relay (%d bytes body) — answering 500", f.ID, len(res.Body))
+		res = resFrame{
+			Type:        "res",
+			ID:          f.ID,
+			Status:      http.StatusInternalServerError,
+			ContentType: "text/plain; charset=utf-8",
+			Body:        "response body too large",
+		}
+	}
 	return res
 }
 
