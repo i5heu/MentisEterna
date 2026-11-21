@@ -44,7 +44,7 @@ func (p *Plugin) actionReclassify(ctx context.Context, db *sql.DB, noteID int64,
 		return nil, err
 	}
 
-	cls := newClassifier()
+	cls := newClassifier(db, noteID)
 	release := cls.BeginUse()
 	defer release()
 

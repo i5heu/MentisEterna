@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/i5heu/MentisEterna/internal/llm"
+	"github.com/i5heu/MentisEterna/pkg/notetype/llminferencer"
 )
 
 // classifyMaxRunes caps the article text sent to the classifier.
@@ -62,9 +63,19 @@ func (l llmClassifier) BeginUse() func() {
 	return llm.BeginBackendUse(l.client)
 }
 
-// newClassifier is the production seam for tests.
-var newClassifier = func() classifier {
-	return llmClassifier{client: llm.NewRSSClassifierClient()}
+// newClassifier is the production seam for tests. The classifier resolves
+// through the note hierarchy: the nearest llm_inferencer note binding the
+// "rss_classify" usage (OpenRouter / Mistral / any OpenAI-compatible
+// provider, with the note-stored API key) wins; with no binding the
+// config.toml feature/tier system client applies. On resolver failure the
+// config client is used so a broken inferencer note degrades gracefully
+// rather than blocking classification.
+var newClassifier = func(db *sql.DB, noteID int64) classifier {
+	client, _, err := llminferencer.ResolveChat(db, noteID, "rss_classify")
+	if err != nil || client == nil {
+		return llmClassifier{client: llm.NewRSSClassifierClient()}
+	}
+	return llmClassifier{client: client}
 }
 
 // classifyUserMessage builds the user message for one article.
@@ -216,7 +227,7 @@ func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 		return 0
 	}
 
-	cls := newClassifier()
+	cls := newClassifier(db, noteID)
 	release := cls.BeginUse()
 	defer release()
 

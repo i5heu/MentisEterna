@@ -2,6 +2,7 @@ package rss
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,7 +29,7 @@ func withPrivateHosts(t *testing.T) {
 func stubClassifier(t *testing.T, raw string) {
 	t.Helper()
 	prev := newClassifier
-	newClassifier = func() classifier {
+	newClassifier = func(db *sql.DB, noteID int64) classifier {
 		return stubClassifyClient{raw: raw}
 	}
 	t.Cleanup(func() { newClassifier = prev })

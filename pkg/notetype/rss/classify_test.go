@@ -2,6 +2,7 @@ package rss
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 	"github.com/i5heu/MentisEterna/pkg/notetype/plugintest"
 )
@@ -39,7 +41,9 @@ func (s *seqClassifyClient) BeginUse() func() { return func() {} }
 func stubSeqClassifier(t *testing.T, replies []string, err error) {
 	t.Helper()
 	prev := newClassifier
-	newClassifier = func() classifier { return &seqClassifyClient{replies: replies, err: err} }
+	newClassifier = func(db *sql.DB, noteID int64) classifier {
+		return &seqClassifyClient{replies: replies, err: err}
+	}
 	t.Cleanup(func() { newClassifier = prev })
 }
 
@@ -278,5 +282,94 @@ func TestClassifyUserMessageCapsContent(t *testing.T) {
 	msg := classifyUserMessage("Title", "Feed", "https://x", long)
 	if got := len([]rune(msg)); got > classifyMaxRunes+2000 {
 		t.Errorf("user message not capped: %d runes", got)
+	}
+}
+
+// TestClassifierResolvesThroughInferencerNote verifies the production
+// newClassifier seam: a nearby llm_inferencer note binding rss_classify must
+// yield that note's model/endpoint/key, and without one the config.toml
+// feature client applies. No network is dialed — client construction only.
+func TestClassifierResolvesThroughInferencerNote(t *testing.T) {
+	p := notetype.Registry[PluginID].(*Plugin)
+	d := plugintest.DB(t, p)
+	if err := notetype.Registry["llm_inferencer"].InitSchema(d.DB); err != nil {
+		t.Fatalf("llm_inferencer schema: %v", err)
+	}
+
+	// Fallback first: no inferencer notes anywhere.
+	cls := newClassifier(d.DB, 0)
+	ll, ok := cls.(llmClassifier)
+	if !ok {
+		t.Fatalf("production classifier has unexpected type %T", cls)
+	}
+	if ll.client.Model != llm.FeatureModel("rss_classify") {
+		t.Fatalf("fallback model = %q, want config feature model", ll.client.Model)
+	}
+
+	// A sibling inferencer note binds rss_classify.
+	folder := createTestNote(t, d, "News", "standard", 0)
+	reader := createTestNote(t, d, "Reader", PluginID, folder)
+	createTestNote(t, d, "Other reader", PluginID, folder)
+	sibling, err := d.Exec(`INSERT INTO notes (title, type, parent_id) VALUES ('Inferencer', 'llm_inferencer', ?)`, folder)
+	if err != nil {
+		t.Fatalf("insert inferencer note: %v", err)
+	}
+	siblingID, _ := sibling.LastInsertId()
+	saveInferencerCfg(t, d, siblingID, `{
+		"provider": "compatible",
+		"base_url": "http://127.0.0.1:9",
+		"api_key": "sk-rss",
+		"default_tier": "small",
+		"tiers": {"small": {"model": "prov/small"}},
+		"usages": {"rss_classify": {"tier": "small"}}
+	}`)
+
+	cls = newClassifier(d.DB, reader)
+	ll, ok = cls.(llmClassifier)
+	if !ok {
+		t.Fatalf("classifier type %T", cls)
+	}
+	if ll.client.Model != "prov/small" {
+		t.Errorf("resolved model = %q, want prov/small", ll.client.Model)
+	}
+	if ll.client.BaseURL != "http://127.0.0.1:9" {
+		t.Errorf("resolved base URL = %q", ll.client.BaseURL)
+	}
+	if ll.client.APIKey != "sk-rss" {
+		t.Errorf("stored API key not applied")
+	}
+}
+
+// createTestNote inserts a note in the rss tests (NULL parent for root).
+func createTestNote(t *testing.T, d *db.DB, title, noteType string, parent int64) int64 {
+	t.Helper()
+	var res sql.Result
+	var err error
+	if parent == 0 {
+		res, err = d.Exec(`INSERT INTO notes (title, type, parent_id) VALUES (?, ?, NULL)`, title, noteType)
+	} else {
+		res, err = d.Exec(`INSERT INTO notes (title, type, parent_id) VALUES (?, ?, ?)`, title, noteType, parent)
+	}
+	if err != nil {
+		t.Fatalf("insert note: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// saveInferencerCfg saves an llm_inferencer note's config inside a tx.
+func saveInferencerCfg(t *testing.T, d *db.DB, noteID int64, payload string) {
+	t.Helper()
+	saver := notetype.Registry["llm_inferencer"].(notetype.ConfigSaver)
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := saver.SaveConfig(context.Background(), tx, 0, noteID, jsonRaw(payload)); err != nil {
+		tx.Rollback()
+		t.Fatalf("save inferencer config: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
 	}
 }
