@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
@@ -89,7 +90,20 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 		byID[f.ID] = i
 	}
 
-	items, rejected, counts, err := loadItems(db, noteID, cfg.RejectThreshold, feeds, byID)
+	// Rules live in the note body; re-parse live so body edits surface
+	// immediately and the effective threshold reflects overrides.
+	rulesWarning := ""
+	threshold := cfg.RejectThreshold
+	rulesBody, err := noteBody(db, noteID)
+	if err == nil {
+		rules := parseRules(rulesBody)
+		threshold = rules.effectiveThreshold(cfg.RejectThreshold)
+		if len(rules.Warnings) > 0 {
+			rulesWarning = strings.Join(rules.Warnings, "; ")
+		}
+	}
+
+	items, rejected, counts, err := loadItems(db, noteID, threshold, feeds, byID)
 	if err != nil {
 		return nil, err
 	}
@@ -100,12 +114,13 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 	}
 
 	return &View{
-		Settings: cfg,
-		Feeds:    feeds,
-		Prompt:   &prompt,
-		Items:    items,
-		Rejected: rejected,
-		Counts:   counts,
+		Settings:     cfg,
+		Feeds:        feeds,
+		Prompt:       &prompt,
+		RulesWarning: rulesWarning,
+		Items:        items,
+		Rejected:     rejected,
+		Counts:       counts,
 	}, nil
 }
 

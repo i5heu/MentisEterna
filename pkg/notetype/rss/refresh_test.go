@@ -102,6 +102,7 @@ func TestRefreshNoteEndToEnd(t *testing.T) {
 	p := notetype.Registry[PluginID].(*Plugin)
 	d := plugintest.DB(t, p)
 	noteID := plugintest.CreateNote(t, d, "My Reader", p)
+	setNoteBody(t, d, noteID, "") // refreshNote reads the note body for rules
 
 	feedURL := srv.URL + "/feed.xml"
 	tx, _ := d.Begin()
@@ -217,6 +218,7 @@ func TestRefreshNoteSSRFGuard(t *testing.T) {
 	p := notetype.Registry[PluginID].(*Plugin)
 	d := plugintest.DB(t, p)
 	noteID := plugintest.CreateNote(t, d, "Guarded Reader", p)
+	setNoteBody(t, d, noteID, "")
 
 	tx, _ := d.Begin()
 	if err := p.SaveConfig(context.Background(), tx, 0, noteID, json.RawMessage(

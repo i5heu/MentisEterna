@@ -30,6 +30,13 @@ func refreshNote(db *sql.DB, noteID int64, force bool) (string, error) {
 		return "", err
 	}
 
+	// Rules live in the reader note's own body — re-read every refresh.
+	rulesBody, err := noteBody(db, noteID)
+	if err != nil {
+		return "", err
+	}
+	rules := parseRules(rulesBody)
+
 	feeds, err := loadFeedRows(db, noteID)
 	if err != nil {
 		return "", err
@@ -41,7 +48,7 @@ func refreshNote(db *sql.DB, noteID int64, force bool) (string, error) {
 	outcomes := refreshFeedsParallel(ctx, feeds, cfg, force)
 
 	var feedsOK, feedsUnchanged, feedsFresh, feedsError int
-	var newItems, fullFetched int
+	var newItems, fullFetched, rejectedCount int
 	now := nowStr()
 	for _, oc := range outcomes {
 		switch {
@@ -69,11 +76,12 @@ func refreshNote(db *sql.DB, noteID int64, force bool) (string, error) {
 		}
 
 		feedsOK++
-		inserted, err := insertFeedItems(db, oc, cfg)
+		inserted, rejectedByRules, err := insertFeedItems(db, oc, cfg, rules)
 		if err != nil {
 			return "", err
 		}
 		newItems += inserted
+		rejectedCount += rejectedByRules
 		fullFetched += oc.fetched
 
 		feedName := oc.feedTitle
@@ -107,8 +115,8 @@ func refreshNote(db *sql.DB, noteID int64, force bool) (string, error) {
 	}
 
 	summary := fmt.Sprintf(
-		"%d ok, %d unchanged, %d fresh-skipped, %d error(s); +%d new (%d full-text), %d classified",
-		feedsOK, feedsUnchanged, feedsFresh, feedsError, newItems, fullFetched, classified,
+		"%d ok, %d unchanged, %d fresh-skipped, %d error(s); +%d new (%d full-text), %d classified, %d rejected",
+		feedsOK, feedsUnchanged, feedsFresh, feedsError, newItems, fullFetched, classified, rejectedCount,
 	)
 	if swept > 0 {
 		summary += fmt.Sprintf(", %d swept", swept)
@@ -272,10 +280,13 @@ func prepareItem(ctx context.Context, item FeedItem, cfg Config) (preparedItem, 
 }
 
 // insertFeedItems inserts the outcome's new items (dedup via
-// feed_id+item_key conflict target) and returns how many were inserted.
-func insertFeedItems(db *sql.DB, oc feedOutcome, cfg Config) (int, error) {
+// feed_id+item_key conflict target), applies the note-body rules to newly
+// inserted rows, and returns (inserted, rejectedByRules).
+func insertFeedItems(db *sql.DB, oc feedOutcome, cfg Config, rules RulesDoc) (int, int, error) {
 	now := nowStr()
 	inserted := 0
+	rejected := 0
+	threshold := rules.effectiveThreshold(cfg.RejectThreshold)
 	for _, it := range oc.items {
 		classifyStatus := "pending"
 		if !cfg.AutoClassify {
@@ -291,13 +302,35 @@ func insertFeedItems(db *sql.DB, oc feedOutcome, cfg Config) (int, error) {
 			it.FeedContent, it.FullContent, it.FullStatus, classifyStatus,
 		)
 		if err != nil {
-			return inserted, fmt.Errorf("rss: insert item %q: %w", it.Key, err)
+			return inserted, rejected, fmt.Errorf("rss: insert item %q: %w", it.Key, err)
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			inserted++
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		inserted++
+		itemID, _ := res.LastInsertId()
+
+		ruleRes := applyRules(rules, it.Title, pickContent(it))
+		isRejected := ruleRes.Banned || (threshold > 0 && ruleRes.Score >= threshold)
+		if isRejected {
+			rejected++
+		}
+		if _, err := db.Exec(
+			`UPDATE ct_rss_items SET penalty_score = ?, penalty_json = ?, banned = ? WHERE id = ?`,
+			ruleRes.Score, penaltyJSONString(ruleRes.Entries), boolToInt(ruleRes.Banned), itemID,
+		); err != nil {
+			return inserted, rejected, fmt.Errorf("rss: score item %q: %w", it.Key, err)
 		}
 	}
-	return inserted, nil
+	return inserted, rejected, nil
+}
+
+// pickContent returns the best available content for scoring.
+func pickContent(it preparedItem) string {
+	if it.FullContent != "" {
+		return it.FullContent
+	}
+	return it.FeedContent
 }
 
 // --- retention ---

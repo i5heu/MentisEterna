@@ -302,5 +302,72 @@ func (p *Plugin) actionSaveAsNote(db *sql.DB, noteID int64, params json.RawMessa
 	return map[string]any{"note_id": newNoteID, "item_id": it.ID}, nil
 }
 
+// actionReapplyRules re-reads the note-body rules and re-scores all of the
+// reader's items (no LLM involved).
+func actionReapplyRules(db *sql.DB, noteID int64) (any, error) {
+	body, err := noteBody(db, noteID)
+	if err != nil {
+		return nil, err
+	}
+	rules := parseRules(body)
+	threshold := rules.effectiveThreshold(0) // filled below from config
+
+	cfg, err := loadConfigRow(db, noteID)
+	if err != nil {
+		return nil, err
+	}
+	threshold = rules.effectiveThreshold(cfg.RejectThreshold)
+
+	rows, err := db.Query(`
+		SELECT i.id, i.title, COALESCE(NULLIF(i.full_content,''), i.feed_content, '')
+		FROM ct_rss_items i
+		JOIN ct_rss_feeds f ON f.id = i.feed_id
+		WHERE f.note_id = ?`, noteID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("rss: reapply: load items: %w", err)
+	}
+	type itemRow struct {
+		id      int64
+		title   string
+		content string
+	}
+	items := []itemRow{}
+	for rows.Next() {
+		var it itemRow
+		if err := rows.Scan(&it.id, &it.title, &it.content); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	applied, nowRejected := 0, 0
+	for _, it := range items {
+		res := applyRules(rules, it.title, it.content)
+		isRejected := res.Banned || (threshold > 0 && res.Score >= threshold)
+		if _, err := db.Exec(
+			`UPDATE ct_rss_items SET penalty_score = ?, penalty_json = ?, banned = ? WHERE id = ?`,
+			res.Score, penaltyJSONString(res.Entries), boolToInt(res.Banned), it.id,
+		); err != nil {
+			return nil, fmt.Errorf("rss: reapply: update item %d: %w", it.id, err)
+		}
+		applied++
+		if isRejected {
+			nowRejected++
+		}
+	}
+	return map[string]any{
+		"applied":   applied,
+		"rejected":  nowRejected,
+		"threshold": threshold,
+		"warnings":  rules.Warnings,
+	}, nil
+}
+
 var _ notetype.ActionHandler = (*Plugin)(nil)
 var _ notetype.JobEnqueuer = (*Plugin)(nil)
