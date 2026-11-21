@@ -11,12 +11,69 @@ import (
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
-// yetPlaceholder messages are replaced when classification (M3) and rules
-// (M4) land.
-const (
-	errClassifyNotReady = "rss: classification is not implemented yet"
-	errRulesNotReady    = "rss: rules are not implemented yet"
-)
+// actionReclassify synchronously re-runs classification for one article
+// using the currently-scoped prompt.
+func (p *Plugin) actionReclassify(ctx context.Context, db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
+	var pr struct {
+		ItemID int64 `json:"item_id"`
+	}
+	if err := json.Unmarshal(params, &pr); err != nil {
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: invalid params: %v", err)}
+	}
+	if pr.ItemID <= 0 {
+		return nil, &notetype.BadRequestError{Message: "rss: item_id is required"}
+	}
+
+	var it itemForClassify
+	var feedName string
+	err := db.QueryRow(`
+		SELECT i.id, i.title, i.url, COALESCE(NULLIF(i.full_content,''), i.feed_content, ''),
+		       COALESCE(NULLIF(f.name,''), '')
+		FROM ct_rss_items i
+		JOIN ct_rss_feeds f ON f.id = i.feed_id
+		WHERE i.id = ? AND f.note_id = ?
+	`, pr.ItemID, noteID).Scan(&it.ID, &it.Title, &it.URL, &it.Content, &feedName)
+	if err == sql.ErrNoRows {
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: item %d not found in note %d", pr.ItemID, noteID)}
+	} else if err != nil {
+		return nil, fmt.Errorf("rss: load item: %w", err)
+	}
+
+	promptRef, prompt, err := promptText(db, noteID)
+	if err != nil {
+		return nil, err
+	}
+
+	cls := newClassifier()
+	release := cls.BeginUse()
+	defer release()
+
+	if ctx.Err() != nil {
+		return nil, &notetype.BadRequestError{Message: "rss: context cancelled"}
+	}
+	classification, _, err := classifyOnce(cls, prompt+classifyContract, classifyUserMessage(it.Title, feedName, it.URL, it.Content))
+	if err != nil {
+		msg := err.Error()
+		if len(msg) > 500 {
+			msg = msg[:500]
+		}
+		_, _ = db.Exec(
+			`UPDATE ct_rss_items SET classify_status = 'error', classify_error = ? WHERE id = ?`,
+			msg, it.ID,
+		)
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: classification failed: %v", err)}
+	}
+	if err := storeClassification(db, it.ID, promptRef.NoteID, classification); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"item_id":  it.ID,
+		"category": classification.Category,
+		"summary":  classification.Summary,
+		"quality":  classification.Quality,
+		"tags":     classification.Tags,
+	}, nil
+}
 
 // HandleAction implements notetype.ActionHandler.
 func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteID int64, actionID string, params json.RawMessage) (any, error) {
@@ -31,9 +88,9 @@ func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteI
 	case "set_item_state":
 		return actionSetItemState(db, noteID, params)
 	case "reclassify":
-		return nil, &notetype.BadRequestError{Message: errClassifyNotReady}
+		return p.actionReclassify(ctx, db, noteID, params)
 	case "reapply_rules":
-		return nil, &notetype.BadRequestError{Message: errRulesNotReady}
+		return nil, &notetype.BadRequestError{Message: "rss: rules are not implemented yet"}
 	default:
 		return nil, notetype.ErrUnknownAction
 	}

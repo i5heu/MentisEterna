@@ -2,10 +2,7 @@ package rss
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -20,14 +17,6 @@ const (
 	keepFreshFeedSeconds = 0
 	classifyBatchSize    = 25
 )
-
-// --- seams (replaced when classification M3 and rules M4 land) ---
-
-// classifyPendingItems processes up to classifyBatchSize pending items for a
-// note; the M3 pipeline replaces the stub.
-var classifyPendingItems = func(db *sql.DB, noteID int64, cfg Config) int {
-	return 0
-}
 
 // refreshNote refreshes all enabled feeds of a reader note: fetch (parallel),
 // parse, dedup-insert items, resolve full content, classify pending items,
@@ -390,19 +379,4 @@ func parseDBTime(s string) time.Time {
 		}
 	}
 	return time.Time{}
-}
-
-// hashKey builds a deterministic fallback key from arbitrary strings.
-func hashKey(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
-	return "h:" + hex.EncodeToString(sum[:16])
-}
-
-// prettyMarshal is a convenience for marshaling values used in penalties etc.
-func prettyMarshal(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "[]"
-	}
-	return string(b)
 }

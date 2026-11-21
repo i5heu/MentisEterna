@@ -478,3 +478,28 @@ func TruncateForEmbedding(text string) string {
 	}
 	return strings.TrimRight(truncated, " \t\n\r")
 }
+
+// ChatMessage is one message in an OpenAI-compatible chat completion
+// exchange. Generic counterpart of the package-internal chatMessage used
+// by the feature-specific helpers.
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// Complete sends a chat completion with caller-defined messages and returns
+// the first choice's content. It is the generic surface for plugins with
+// user-provided prompts (e.g. the RSS reader classification prompt).
+func (c *ChatClient) Complete(messages []ChatMessage) (string, error) {
+	internal := make([]chatMessage, len(messages))
+	for i, m := range messages {
+		internal[i] = chatMessage{Role: m.Role, Content: m.Content}
+	}
+	return c.complete(internal)
+}
+
+// UnmarshalLooseJSONObject decodes the first JSON object from an LLM reply,
+// tolerating markdown code fences and surrounding prose.
+func UnmarshalLooseJSONObject(raw string, dst any) error {
+	return unmarshalLooseJSONObject(raw, dst)
+}

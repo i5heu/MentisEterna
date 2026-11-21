@@ -61,21 +61,13 @@ type ViewCounts struct {
 
 // View is the BuildView response for an rss note.
 type View struct {
-	Settings     Config        `json:"settings"`
-	Feeds        []FeedStatus  `json:"feeds"`
-	Prompt       *PromptReport `json:"prompt,omitempty"`
-	RulesWarning string        `json:"rules_warning"`
-	Items        []ItemView    `json:"items"`
-	Rejected     []ItemView    `json:"rejected"`
-	Counts       ViewCounts    `json:"counts"`
-}
-
-// PromptReport describes the classification prompt in scope for the reader
-// (populated once scope resolution exists).
-type PromptReport struct {
-	NoteID  int64  `json:"note_id"`
-	Title   string `json:"title"`
-	Default bool   `json:"default"`
+	Settings     Config       `json:"settings"`
+	Feeds        []FeedStatus `json:"feeds"`
+	Prompt       *PromptRef   `json:"prompt"`
+	RulesWarning string       `json:"rules_warning"`
+	Items        []ItemView   `json:"items"`
+	Rejected     []ItemView   `json:"rejected"`
+	Counts       ViewCounts   `json:"counts"`
 }
 
 // BuildView implements notetype.ViewBuilder.
@@ -102,9 +94,15 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 		return nil, err
 	}
 
+	prompt, err := resolvePromptNote(db, noteID)
+	if err != nil {
+		prompt = PromptRef{Default: true, Title: "Built-in default prompt", Warning: "scope resolution failed"}
+	}
+
 	return &View{
 		Settings: cfg,
 		Feeds:    feeds,
+		Prompt:   &prompt,
 		Items:    items,
 		Rejected: rejected,
 		Counts:   counts,

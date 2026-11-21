@@ -27,11 +27,12 @@ type featureSpec struct {
 }
 
 var featureSpecs = map[string]featureSpec{
-	"title":    {TierTiny, "", "granite-4.1-3b-Q4_K_M"},
-	"tags":     {TierMedium, "", "gemma-4-e2b-it-qat-q4_0"},
-	"subtasks": {TierSmart, "", "Qwen3.6-27B-MTP-GGUF"},
-	"ocr":      {TierMedium, "ocr", "GLM-OCR-GGUF"},
-	"stt":      {TierSmall, "stt", "vibevoice-cpp-asr"},
+	"title":        {TierTiny, "", "granite-4.1-3b-Q4_K_M"},
+	"tags":         {TierMedium, "", "gemma-4-e2b-it-qat-q4_0"},
+	"subtasks":     {TierSmart, "", "Qwen3.6-27B-MTP-GGUF"},
+	"rss_classify": {TierMedium, "", "gemma-4-e2b-it-qat-q4_0"},
+	"ocr":          {TierMedium, "ocr", "GLM-OCR-GGUF"},
+	"stt":          {TierSmall, "stt", "vibevoice-cpp-asr"},
 }
 
 // TierNames returns the four tier names in capability order.
@@ -97,6 +98,12 @@ func NewAutoTaggerClient() *ChatClient {
 // NewSubTaskClient returns a chat client bound to the subtasks feature's tier.
 func NewSubTaskClient() *ChatClient {
 	return NewChatClient(FeatureBaseURL("subtasks"), FeatureModel("subtasks"))
+}
+
+// NewRSSClassifierClient returns a chat client bound to the rss_classify
+// feature's tier (used by the rss note type's article classification).
+func NewRSSClassifierClient() *ChatClient {
+	return NewChatClient(FeatureBaseURL("rss_classify"), FeatureModel("rss_classify"))
 }
 
 // NewTieredOCRClient returns an OCR client bound to the ocr feature's tier.

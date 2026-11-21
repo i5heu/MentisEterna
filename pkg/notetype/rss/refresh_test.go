@@ -23,6 +23,30 @@ func withPrivateHosts(t *testing.T) {
 	t.Cleanup(func() { allowPrivateHosts = prev })
 }
 
+// stubClassifier replaces newClassifier with a canned-response stub for the
+// test's duration; keeps test runs hermetic (no LLM backend dialing).
+func stubClassifier(t *testing.T, raw string) {
+	t.Helper()
+	prev := newClassifier
+	newClassifier = func() classifier {
+		return stubClassifyClient{raw: raw}
+	}
+	t.Cleanup(func() { newClassifier = prev })
+}
+
+// stubClassifyClient is a deterministic classifier for tests.
+type stubClassifyClient struct {
+	raw string
+}
+
+func (s stubClassifyClient) Classify(system, user string) (string, error) {
+	return s.raw, nil
+}
+
+func (s stubClassifyClient) BeginUse() func() { return func() {} }
+
+const stubClassifyJSON = `{"category":"Technology","summary":"A stub summary.","quality":7,"tags":["one","two"]}`
+
 // feedServer serves a two-item feed (one rich item, one snippet that needs
 // full-content fetch) with ETag/304 handling, plus an article page.
 func feedServer(t *testing.T) *httptest.Server {
@@ -72,6 +96,7 @@ func feedServer(t *testing.T) *httptest.Server {
 
 func TestRefreshNoteEndToEnd(t *testing.T) {
 	withPrivateHosts(t)
+	stubClassifier(t, stubClassifyJSON)
 	srv := feedServer(t)
 
 	p := notetype.Registry[PluginID].(*Plugin)
@@ -97,6 +122,17 @@ func TestRefreshNoteEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(summary, "+2 new") || !strings.Contains(summary, "1 full-text") {
 		t.Errorf("summary missing counts: %q", summary)
+	}
+	if !strings.Contains(summary, "2 classified") {
+		t.Errorf("summary missing classification: %q", summary)
+	}
+	// Items were classified with the stub's canned result.
+	var cs, cat string
+	if err := d.QueryRow(`SELECT classify_status, COALESCE(category,'') FROM ct_rss_items WHERE item_key = 'rich-1'`).Scan(&cs, &cat); err != nil {
+		t.Fatalf("load classified item: %v", err)
+	}
+	if cs != "done" || cat != "Technology" {
+		t.Errorf("classification not stored: status=%q category=%q", cs, cat)
 	}
 
 	// Items stored with expected content.
