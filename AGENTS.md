@@ -173,6 +173,34 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 | `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) + metadata fields | ConfigValidator, ConfigSaver, ConfigLoader |
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
 | `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
+| `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM classification (prompt resolved from the nearest `rss_prompt` note in the hierarchy) + ban words / penalty points typed in the reader note's body | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
+
+## RSS Reader
+
+The `rss` note type puts the whole subsystem in one note (see
+[docs/RSSReader.md](docs/RSSReader.md) for the full design):
+
+- **Feeds + settings** live in the note's config (`ct_rss_config` /
+  `ct_rss_feeds`); fetched articles in `ct_rss_items` (cascade with the note).
+- **Ban words / penalty points** are typed in the reader note's own body as
+  user content (`ban: <phrase>`, `<phrase>: <points>`, `threshold: <n>`);
+  the plugin only ever *reads* the body. Malformed rule lines surface as
+  warnings in the view; plain prose is ignored.
+- **Classification prompt** is the only external piece: the body of the
+  nearest `rss_prompt` note in the hierarchy (descendants → siblings →
+  uncles, nearest wins) — none found ⇒ built-in default prompt. Output is
+  structured JSON `{category, summary, quality, tags}` bound to the
+  `[llm.features] rss_classify` feature (medium tier by default).
+- One cron job (`rss/refresh_feeds`, `@every 15m`): nil payload refreshes
+  due feeds of all readers; payload `{"note_id":N,"force":true}` (from the
+  refresh action) force-refreshes one reader. Feed fetches are parallel
+  (bounded), classification sequential in ≤25-item batches, retention +
+  per-feed trim each run.
+- Outbound fetches go through an SSRF dial guard (private/loopback/
+  link-local refused; `MENTIS_RSS_ALLOW_PRIVATE_HOSTS=1` escape hatch for
+  self-hosters pointing feeds at internal servers).
+- Tests: `go test ./pkg/notetype/rss/` — all LLM/fetch seams are stubbed;
+  hermetic.
 
 ## Frontend Note-Type Architecture
 

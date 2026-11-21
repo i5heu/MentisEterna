@@ -272,11 +272,16 @@ missing OR < 500 runes and `fetch_full_content` is on:
 `state='starred'` or `saved_note_id>0`; trim each feed to `max_items_per_feed`
 oldest-beyond-cap.
 
-## 8. Jobs & refresh orchestration
+## 8. Jobs & refresh orchestration (as built)
 
-- **Cron job** `refresh_feeds`, schedule `@every 15m` (upserted by the
-  server's plugin-job registration). Iterates all `ct_rss_config` notes;
-  skip feeds fetched `< interval_minutes` ago or `enabled=0`.
+- **One job definition**, `rss/refresh_feeds`, schedule `@every 15m`. The
+  jobs harness rejects empty schedules, so there are no separate ad-hoc
+  definitions; the same definition serves both modes:
+  - cron tick (nil payload): iterate all `ct_rss_config` notes, refresh
+    readers with due feeds (per-feed interval freshness),
+  - action enqueued (payload `{"note_id":N,"force":true}`): force-refresh
+    that one reader.
+  Iteration skips feeds fetched `< interval_minutes` ago or `enabled=0`.
 - Feed fetches parallel (errgroup, max 4); classification strictly sequential
   in ≤25-item batches; whole task wrapped in `context.WithTimeout(10 min)`.
 - Result summary: `"3 feeds ok, 1 error, +12 new, 12 classified, 2 rejected"` —

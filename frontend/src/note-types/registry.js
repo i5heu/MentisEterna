@@ -417,6 +417,67 @@ const registry = [
         supportsSchemaFallback: false,
         supportsActions: true,
     },
+
+    {
+        id: "rss",
+        label: "RSS Reader",
+        component: defineAsyncComponent(
+            () => import("./rss/RssNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            feeds: [],
+            interval_minutes: 60,
+            auto_classify: true,
+            fetch_full_content: true,
+            max_items_per_feed: 100,
+            retention_days: 90,
+            reject_threshold: 5,
+        }),
+        normalizeCustomData(raw, _note) {
+            if (!raw || typeof raw !== "object") {
+                return {
+                    feeds: [],
+                    interval_minutes: 60,
+                    auto_classify: true,
+                    fetch_full_content: true,
+                    max_items_per_feed: 100,
+                    retention_days: 90,
+                    reject_threshold: 5,
+                };
+            }
+            return {
+                feeds: Array.isArray(raw.feeds)
+                    ? raw.feeds.map((f) => ({
+                          url: f.url || "",
+                          name: f.name || "",
+                          enabled: f.enabled !== false,
+                      }))
+                    : [],
+                interval_minutes: Number(raw.interval_minutes) || 60,
+                auto_classify: raw.auto_classify !== false,
+                fetch_full_content: raw.fetch_full_content !== false,
+                max_items_per_feed: Number(raw.max_items_per_feed) || 100,
+                retention_days: Number(raw.retention_days) || 90,
+                reject_threshold: Number(raw.reject_threshold) || 5,
+            };
+        },
+        supportsSchemaFallback: false,
+        supportsActions: true,
+        // Children of a reader: the optional RSS Prompt note and articles
+        // saved via "Save as Note".
+        defaultChildType: "standard",
+    },
+
+    {
+        id: "rss_prompt",
+        label: "RSS Prompt",
+        component: null, // plain markdown body — no custom renderer
+        emptyCustomData: NULL_DATA,
+        normalizeCustomData(raw, _note) {
+            return raw || null;
+        },
+        supportsSchemaFallback: false,
+    },
 ];
 
 // ---------------------------------------------------------------------------
