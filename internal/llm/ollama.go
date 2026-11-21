@@ -121,20 +121,32 @@ func NewEmbeddingClient() *EmbeddingClient {
 	}
 }
 
-// ChatClient communicates with a LocalAI instance for text generation
-// (e.g., auto-generating note titles) via the OpenAI-compatible
+// ChatClient communicates with an OpenAI-compatible chat backend (LocalAI,
+// OpenRouter, Mistral La Plateforme, ...) for text generation via the
 // /v1/chat/completions endpoint.
 type ChatClient struct {
 	BaseURL string
 	Model   string
-	http    *http.Client
+	// APIKey, when non-empty, is sent as "Authorization: Bearer <key>" on
+	// every request (remote providers). API-keyed clients are external
+	// endpoints: the LocalAI idle-stop machinery never fires against them.
+	APIKey string
+	http   *http.Client
 }
 
 // NewChatClient creates a chat client for the given base URL and model.
 func NewChatClient(baseURL, model string) *ChatClient {
+	return NewChatClientWithKey(baseURL, model, "")
+}
+
+// NewChatClientWithKey creates a chat client that authenticates with a
+// bearer API key (OpenRouter, Mistral La Plateforme, or any other
+// OpenAI-compatible provider). An empty key means no authentication header.
+func NewChatClientWithKey(baseURL, model, apiKey string) *ChatClient {
 	return &ChatClient{
 		BaseURL: baseURL,
 		Model:   model,
+		APIKey:  apiKey,
 		http:    newLLMHTTPClient(),
 	}
 }
@@ -219,15 +231,23 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 	}
 
 	url := c.BaseURL + "/v1/chat/completions"
-	resp, err := c.http.Post(url, "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("localai request: %w", err)
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("llm request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("localai returned %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("llm request returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var cr chatCompletionResponse
@@ -236,7 +256,7 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 	}
 
 	if len(cr.Choices) == 0 {
-		return "", fmt.Errorf("localai returned no choices")
+		return "", fmt.Errorf("llm returned no choices")
 	}
 
 	return cr.Choices[0].Message.Content, nil

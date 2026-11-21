@@ -41,6 +41,13 @@ func (c *EmbeddingClient) BeginBackendUse() func() {
 }
 
 func (c *ChatClient) BeginBackendUse() func() {
+	// An API-keyed chat client targets an external hosted provider
+	// (OpenRouter, Mistral, ...): the idle-stop machinery is a LocalAI-only
+	// behavior (POST /backend/shutdown) and must not fire against a
+	// third-party endpoint.
+	if c.APIKey != "" {
+		return func() {}
+	}
 	return sharedBackendUseRegistry.begin(c.BaseURL, c.Model, c.http)
 }
 
