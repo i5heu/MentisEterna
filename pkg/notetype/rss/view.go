@@ -61,13 +61,13 @@ type ViewCounts struct {
 
 // View is the BuildView response for an rss note.
 type View struct {
-	Settings     Config         `json:"settings"`
-	Feeds        []FeedStatus   `json:"feeds"`
-	Prompt       *PromptReport  `json:"prompt,omitempty"`
-	RulesWarning string         `json:"rules_warning"`
-	Items        []ItemView     `json:"items"`
-	Rejected     []ItemView     `json:"rejected"`
-	Counts       ViewCounts     `json:"counts"`
+	Settings     Config        `json:"settings"`
+	Feeds        []FeedStatus  `json:"feeds"`
+	Prompt       *PromptReport `json:"prompt,omitempty"`
+	RulesWarning string        `json:"rules_warning"`
+	Items        []ItemView    `json:"items"`
+	Rejected     []ItemView    `json:"rejected"`
+	Counts       ViewCounts    `json:"counts"`
 }
 
 // PromptReport describes the classification prompt in scope for the reader

@@ -11,7 +11,7 @@ import (
 
 func TestRSSPlugin(t *testing.T) {
 	plugintest.Run(t, notetype.Registry[PluginID], plugintest.TestData{
-		ValidPayload: `{"feeds":[{"url":"https://example.com/feed.xml","name":"Example","enabled":true}],"interval_minutes":60,"auto_classify":true,"fetch_full_content":true,"max_items_per_feed":100,"retention_days":90,"reject_threshold":5}`,
+		ValidPayload:   `{"feeds":[{"url":"https://example.com/feed.xml","name":"Example","enabled":true}],"interval_minutes":60,"auto_classify":true,"fetch_full_content":true,"max_items_per_feed":100,"retention_days":90,"reject_threshold":5}`,
 		InvalidPayload: `{"feeds":[{"url":"ftp://example.com/feed"}]}`,
 	})
 }
