@@ -8,6 +8,7 @@ import (
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/print"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/recipe"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/recipeoverview"
+	_ "github.com/i5heu/MentisEterna/pkg/notetype/rss"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/task"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/taskoverview"
 )
