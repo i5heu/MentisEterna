@@ -60,6 +60,24 @@ The server populates `plugin.config` and `plugin.view` on note detail responses 
 - `POST /notes/:id/action` — legacy action route (delegates to same dispatcher)
 - `POST /mcp` — MCP (Model Context Protocol) endpoint, streamable-http transport (see "MCP Endpoint")
 
+## LLM Inferencer Notes & Usage Resolution
+
+Remote LLM inference (OpenRouter, Mistral, any OpenAI-compatible endpoint) is
+configured in `llm_inferencer` note types: provider + base URL + a
+**write-only API key** (stored in `ct_llm_inferencer_config.api_key`, never
+returned by LoadConfig — empty on save keeps it, `clear_api_key` removes it)
++ four tier models (**big/middle/small/tiny**) + `usages` mappings
+(`{tier}` or direct `{model}`) + optional `default_tier`.
+
+The usage catalog (`internal/llm/usage.go`) lists the app's LLM usages
+(rss_classify, title, tags, subtasks) with a `Wired` flag. Wired usages
+resolve per call site via `llminferencer.ResolveChat(db, anchorNoteID, usage)`:
+nearest binder in the note hierarchy (own subtree → siblings → uncles →
+top level) wins, else the `config.toml` feature/tier client. Only
+`rss_classify` is wired today; mappings for unwired usages are inert until
+their call site migrates (see docs/LLMInferencer.md §5). API-keyed chat
+clients skip the LocalAI idle-stop machinery.
+
 ## MCP Endpoint
 
 `POST /mcp` speaks a minimal MCP streamable-http subset: single JSON-RPC 2.0
@@ -173,6 +191,7 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 | `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) + metadata fields | ConfigValidator, ConfigSaver, ConfigLoader |
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
 | `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
+| `pkg/notetype/llminferencer/` | `llm_inferencer` | LLM inference provider note (OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings; write-only API key; `ResolveChat` resolves usages through the note hierarchy | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler |
 | `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM classification (prompt resolved from the nearest `rss_prompt` note in the hierarchy) + ban words / penalty points typed in the reader note's body | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
 
 ## RSS Reader

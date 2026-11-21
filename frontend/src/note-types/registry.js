@@ -478,6 +478,62 @@ const registry = [
         },
         supportsSchemaFallback: false,
     },
+
+    {
+        id: "llm_inferencer",
+        label: "LLM Inferencer",
+        component: defineAsyncComponent(
+            () => import("./llm_inferencer/LlmInferencerNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            provider: "openrouter",
+            base_url: "",
+            api_key: "",
+            api_key_set: false,
+            default_tier: "",
+            tiers: {
+                big: { model: "", base_url: "" },
+                middle: { model: "", base_url: "" },
+                small: { model: "", base_url: "" },
+                tiny: { model: "", base_url: "" },
+            },
+            usages: {},
+        }),
+        normalizeCustomData(raw, _note) {
+            const tiers = {};
+            for (const tier of ["big", "middle", "small", "tiny"]) {
+                const t = raw?.tiers?.[tier];
+                tiers[tier] = {
+                    model: (t && typeof t === "object" && t.model) || "",
+                    base_url: (t && typeof t === "object" && t.base_url) || "",
+                };
+            }
+            const usages = {};
+            if (raw?.usages && typeof raw.usages === "object") {
+                for (const [id, b] of Object.entries(raw.usages)) {
+                    if (!b || typeof b !== "object") continue;
+                    if (typeof b.tier === "string" && b.tier) {
+                        usages[id] = { tier: b.tier };
+                    } else if (typeof b.model === "string" && b.model) {
+                        usages[id] = { model: b.model };
+                    }
+                }
+            }
+            return {
+                provider: raw?.provider || "openrouter",
+                base_url: raw?.base_url || "",
+                // Write-only key: the server never returns it; an empty
+                // value on save keeps the stored key.
+                api_key: "",
+                api_key_set: !!raw?.api_key_set,
+                default_tier: raw?.default_tier || "",
+                tiers,
+                usages,
+            };
+        },
+        supportsSchemaFallback: false,
+        supportsActions: true,
+    },
 ];
 
 // ---------------------------------------------------------------------------

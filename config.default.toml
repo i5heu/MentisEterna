@@ -95,6 +95,12 @@ tiny   = { model = "granite-4.1-3b-Q4_K_M", base_url = "" }
 
 # Feature -> tier binding. Values are one of smart/medium/small/tiny.
 # Defaults: title=tiny, tags=medium, subtasks=smart, ocr=medium, stt=small.
+#
+# NOTE: "LLM Inferencer" note types can override feature/tier routing per
+# branch of the note hierarchy: the nearest llm_inferencer note binding the
+# usage (OpenRouter / Mistral / any OpenAI-compatible provider; four tiers:
+# big/middle/small/tiny) wins, and this config remains the fallback. rss_classify
+# is wired this way today — see docs/LLMInferencer.md.
 [llm.features]
 title        = { tier = "tiny" }
 tags         = { tier = "medium" }
