@@ -109,14 +109,19 @@ func refreshNote(db *sql.DB, noteID int64, force bool) (string, error) {
 		classified = classifyPendingItems(db, noteID, cfg)
 	}
 
+	summarized := 0
+	if cfg.AutoClassify {
+		summarized = summarizePendingItems(db, noteID, cfg)
+	}
+
 	swept, err := runRetention(db, noteID, cfg)
 	if err != nil {
 		return "", err
 	}
 
 	summary := fmt.Sprintf(
-		"%d ok, %d unchanged, %d fresh-skipped, %d error(s); +%d new (%d full-text), %d classified, %d rejected",
-		feedsOK, feedsUnchanged, feedsFresh, feedsError, newItems, fullFetched, classified, rejectedCount,
+		"%d ok, %d unchanged, %d fresh-skipped, %d error(s); +%d new (%d full-text), %d classified, %d summarized, %d rejected",
+		feedsOK, feedsUnchanged, feedsFresh, feedsError, newItems, fullFetched, classified, summarized, rejectedCount,
 	)
 	if swept > 0 {
 		summary += fmt.Sprintf(", %d swept", swept)
@@ -289,17 +294,19 @@ func insertFeedItems(db *sql.DB, oc feedOutcome, cfg Config, rules RulesDoc) (in
 	threshold := rules.effectiveThreshold(cfg.RejectThreshold)
 	for _, it := range oc.items {
 		classifyStatus := "pending"
+		summaryStatus := "pending"
 		if !cfg.AutoClassify {
 			classifyStatus = "disabled"
+			summaryStatus = "disabled"
 		}
 		res, err := db.Exec(`
 			INSERT INTO ct_rss_items
 				(feed_id, item_key, title, url, author, published_at, fetched_at,
-				 feed_content, full_content, full_status, state, classify_status, penalty_json)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, '[]')
+				 feed_content, full_content, full_status, state, classify_status, summary_status, penalty_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, '[]')
 			ON CONFLICT(feed_id, item_key) DO NOTHING`,
 			oc.feed.ID, it.Key, it.Title, it.Link, it.Author, it.PublishedAt, now,
-			it.FeedContent, it.FullContent, it.FullStatus, classifyStatus,
+			it.FeedContent, it.FullContent, it.FullStatus, classifyStatus, summaryStatus,
 		)
 		if err != nil {
 			return inserted, rejected, fmt.Errorf("rss: insert item %q: %w", it.Key, err)

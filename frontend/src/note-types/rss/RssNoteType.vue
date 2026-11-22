@@ -12,10 +12,14 @@
         <div
             v-if="evalProgress"
             class="rss-progressbar"
-            :title="`LLM evaluation running: ${evalProgress.done} of ${evalProgress.total} articles evaluated`"
+            :title="`${progressStageLabel} running: ${evalProgress.done} of ${evalProgress.total} articles done`"
         >
             <div class="rss-progressfill" :style="{ width: progressPct + '%' }"></div>
-            <span class="rss-progresstext">⚡ Evaluating {{ evalProgress.done }}/{{ evalProgress.total }}</span>
+            <span class="rss-progresstext"
+                >{{ evalProgress.stage === "summarize" ? "✎" : "⚡" }}
+                {{ progressStageLabel }}
+                {{ evalProgress.done }}/{{ evalProgress.total }}</span
+            >
         </div>
 
         <!-- ==================== Viewer ==================== -->
@@ -76,6 +80,12 @@
             <p v-if="view && view.counts && (view.counts.unevaluated ?? 0) > 0" class="rss-info">
                 {{ view.counts.unevaluated }} article(s) have no evaluation yet — evaluate them from Settings.
             </p>
+            <p
+                v-if="view && view.counts && (view.counts.unsummarized ?? 0) > 0"
+                class="rss-info"
+            >
+                {{ view.counts.unsummarized }} article(s) have no summary yet — summarize them from Settings.
+            </p>
 
             <div v-if="view" class="rss-meta">
                 <span
@@ -106,10 +116,12 @@
                 <span
                     v-if="view.counts"
                     class="rss-chip"
-                    :title="`${view.counts.total} fetched · ${view.counts.pending_classify} awaiting classification`"
+                    :title="`${view.counts.total} fetched · ${view.counts.pending_classify} awaiting evaluation · ${view.counts.pending_summarize} awaiting summary`"
                 >
                     {{ view.counts.total }} articles ·
-                    {{ view.counts.pending_classify }} evaluating
+                    {{ view.counts.pending_classify }} evaluating<template v-if="view.counts.pending_summarize"
+                        > · {{ view.counts.pending_summarize }} summarizing</template
+                    >
                 </span>
             </div>
 
@@ -265,7 +277,28 @@
                         ⚠ evaluation notes: {{ article.classify_error }}
                     </p>
 
-                    <template v-if="article && (article.summary || article.reflection)">
+                    <!-- Telegraph F/O/Q summary; falls back to the legacy
+                         reflection/summary line when none is stored yet. -->
+                    <div
+                        v-if="article && article.structured_summary"
+                        class="rss-modal-digest"
+                    >
+                        <div
+                            v-for="sec in articleDigest"
+                            :key="sec.title"
+                            class="rss-modal-digest-sec"
+                        >
+                            <h5>{{ sec.title }}</h5>
+                            <p
+                                v-for="(line, i) in sec.lines"
+                                :key="i"
+                                class="rss-modal-digest-line"
+                            >
+                                {{ line }}
+                            </p>
+                        </div>
+                    </div>
+                    <template v-else-if="article && (article.summary || article.reflection)">
                         <p
                             v-if="article.summary && !article.reflection"
                             class="rss-modal-summary"
@@ -279,6 +312,20 @@
                             {{ article.reflection }}
                         </blockquote>
                     </template>
+                    <p
+                        v-if="article && article.summary_status === 'pending' && !article.structured_summary"
+                        class="rss-modal-hint"
+                    >
+                        ⏳ Summary queued — it appears here when the
+                        summarization job finishes.
+                    </p>
+                    <p
+                        v-if="article && article.summary_status === 'error'"
+                        class="rss-modal-hint rss-error"
+                        :title="article.summary_error || ''"
+                    >
+                        ⚠ summarization failed — retry with “Summarize”.
+                    </p>
 
                     <div class="rss-modal-body">
                         <p v-if="articleLoading" class="rss-modal-hint">
@@ -363,6 +410,18 @@
                             title="Re-run the LLM significance evaluation"
                         >
                             Re-evaluate
+                        </button>
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy || summarizing"
+                            :title="
+                                article && article.summary_status === 'done'
+                                    ? 'Re-run the LLM summarizer on this article'
+                                    : 'Run the built-in LLM summarizer on this article (telegraph F/O/Q lines)'
+                            "
+                            @click="summarizeArticle(activeItem)"
+                        >
+                            {{ summarizing ? "Summarizing…" : "Summarize" }}
                         </button>
                     </div>
                 </div>
@@ -487,7 +546,7 @@ weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10</pre>
                                 v-model="localConfig.auto_classify"
                                 type="checkbox"
                             />
-                            Evaluate new articles with the LLM
+                            Process new articles with the LLM (evaluate &amp; summarize)
                         </label>
                         <label class="rss-check">
                             <input
@@ -505,13 +564,16 @@ weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10</pre>
                 </div>
 
                 <div class="rss-editor-section">
-                    <h4>LLM evaluation</h4>
+                    <h4>LLM evaluation &amp; summaries</h4>
                     <p class="rss-hint">
-                        The reader evaluates every article with the LLM
-                        (significance, negativity, personal relevance,
-                        humans affected → ★ points). Both actions schedule
-                        a background job — progress appears as the ⚡ bar,
-                        results flow in automatically.
+                        The reader processes every article with the LLM in two
+                        passes: the <strong>evaluation</strong> (significance,
+                        negativity, personal relevance, humans affected → ★
+                        points) and a separate <strong>summarizer</strong>
+                        pass (telegraph-style F:/O:/Q: lines — what changed,
+                        why, implications — shown on each card). Both actions
+                        schedule a background job — progress appears as the ⚡
+                        bar, results flow in automatically.
                     </p>
                     <div class="rss-eval-actions">
                         <button
@@ -521,6 +583,14 @@ weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10</pre>
                             @click="evaluateMissing"
                         >
                             Evaluate missing{{ unevaluatedCount ? ` (${unevaluatedCount})` : "" }}
+                        </button>
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy || refreshing || !unsummarizedCount"
+                            title="Queue only articles that have no summary yet; existing summaries are kept"
+                            @click="summarizeMissing"
+                        >
+                            Summarize missing{{ unsummarizedCount ? ` (${unsummarizedCount})` : "" }}
                         </button>
                         <button
                             class="btn-ghost btn-sm"
@@ -536,7 +606,10 @@ weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10</pre>
                         ({{ view?.counts?.total ?? 0 }}), overwriting existing
                         scores — one LLM call per article. Evaluate missing
                         only queues the {{ unevaluatedCount }} article(s)
-                        without an evaluation.
+                        without an evaluation; Summarize missing only queues
+                        the {{ unsummarizedCount }} article(s) without a
+                        summary (also one LLM call per article — they do not
+                        touch each other's results).
                     </p>
                 </div>
             </div>
@@ -683,6 +756,18 @@ const evaluatedHumans = computed(() => {
     return `Humans affected: now ${fmtMillions(nowD)} direct / ${fmtMillions(nowI)} indirect · future ${fmtMillions(futD)} direct / ${fmtMillions(futI)} indirect`;
 });
 
+// The three telegraph F/O/Q sections of the loaded article's structured
+// summary (empty when none stored yet).
+const articleDigest = computed(() => {
+    const s = article.value?.structured_summary;
+    if (!s) return [];
+    return [
+        { title: "What has changed in reality?", lines: s.what_changed || [] },
+        { title: "Why has reality changed?", lines: s.why || [] },
+        { title: "What are the new implications?", lines: s.implications || [] },
+    ].filter((sec) => sec.lines.length > 0);
+});
+
 // If the item leaves the view lists (e.g. purged by retention after a
 // refresh), close the modal — its footer actions would otherwise dangle.
 watch(activeItem, (it) => {
@@ -820,12 +905,17 @@ async function refreshView() {
 // additionally streams per-item progress ("plugin.progress" live messages,
 // {note_id, done, total, finished}) — rendered as the progress bar below.
 
-const evalProgress = ref(null); // { done, total } while the drain runs
+const evalProgress = ref(null); // { stage, done, total } while a drain runs
 const progressPct = computed(() => {
     const p = evalProgress.value;
     if (!p || !p.total) return 0;
     return Math.min(100, Math.round((p.done / p.total) * 100));
 });
+const progressStageLabel = computed(() =>
+    evalProgress.value?.stage === "summarize"
+        ? "Summarizing"
+        : "Evaluating",
+);
 
 let pollTimer = null;
 let pollTries = 0;
@@ -853,11 +943,12 @@ function startPolling(info) {
     }, 5000);
 }
 
-// Settle the working state when nothing is left to evaluate; warn if the
-// cap was reached with work still outstanding (the job event will still
-// settle it later).
+// Settle the working state when nothing is left to evaluate or summarize;
+// warn if the cap was reached with work still outstanding (the job event
+// will still settle it later).
 function settleIfDone(capped = false) {
-    const pending = view.value?.counts?.pending_classify ?? 0;
+    const pending = (view.value?.counts?.pending_classify ?? 0) +
+        (view.value?.counts?.pending_summarize ?? 0);
     if (pending === 0 && pollTries >= 2) {
         clearPollTimer();
         refreshing.value = false;
@@ -890,9 +981,10 @@ function onLiveMessage(event) {
     }
     if (job.status === "done") {
         // Single source of truth: view reload when the job finished; if the
-        // queue drained, the spinner clears right here.
+        // queues drained, the spinner clears right here.
         refreshView().then(() => {
-            const pending = view.value?.counts?.pending_classify ?? 0;
+            const pending = (view.value?.counts?.pending_classify ?? 0) +
+                (view.value?.counts?.pending_summarize ?? 0);
             if (pending === 0) {
                 clearPollTimer();
                 refreshing.value = false;
@@ -914,8 +1006,9 @@ function onLiveMessage(event) {
     }
 }
 
-// Per-item progress stream from the evaluation drain (rss plugin.progress
-// messages): the drain reports {note_id, done, total, finished} after every
+// Per-item progress stream from the drains (rss plugin.progress messages):
+// the evaluation and summarization drains report
+// {note_id, stage: "evaluate"|"summarize", done, total, finished} after every
 // article, so the bar advances in real time without any polling.
 function onProgressMessage(progress) {
     if (!progress || progress.plugin_id !== "rss") return;
@@ -931,13 +1024,15 @@ function onProgressMessage(progress) {
     if (!data.finished && Number(data.total) > 0) {
         refreshing.value = true;
         evalProgress.value = {
+            stage: data.stage || "evaluate",
             done: Number(data.done) || 0,
             total: Number(data.total),
         };
         return;
     }
-    // Drain finished for this reader: fold the bar away and fetch the
-    // freshly scored items immediately.
+    // A drain finished for this reader: fold the bar away and fetch the
+    // freshly processed items immediately (another stage may follow in the
+    // same job — the job-done event settles the state).
     if (evalProgress.value || refreshing.value) {
         evalProgress.value = null;
         refreshView();
@@ -969,6 +1064,12 @@ async function reapplyRules() {
 // — the target of the settings' "Evaluate missing" button.
 const unevaluatedCount = computed(() => view.value?.counts?.unevaluated ?? 0);
 
+// Number of articles without a summary (legacy '', pending, errored) — the
+// target of the settings' "Summarize missing" button.
+const unsummarizedCount = computed(
+    () => view.value?.counts?.unsummarized ?? 0,
+);
+
 // Entering edit mode: make sure the counts are loaded (the settings buttons
 // display and confirm against them).
 watch(
@@ -998,6 +1099,55 @@ async function evaluateMissing() {
     });
     if (!res) return;
     startPolling(`Evaluating ${res.reset ?? 0} article(s)…`);
+}
+
+// Summarize missing: fills the gaps — only articles without a stored summary
+// are queued; existing summaries are kept. Ask first: one LLM call each.
+async function summarizeMissing() {
+    const n = unsummarizedCount.value;
+    if (!n) {
+        actionInfo.value = "Every article already has a summary.";
+        return;
+    }
+    if (
+        !window.confirm(
+            `Run the LLM summarizer on the ${n} article(s) that have no summary yet? Each article is one LLM call; the summarization runs as a background job.`,
+        )
+    ) {
+        return;
+    }
+    const res = await runAction("summarize_missing", {}, {
+        info: "Queuing summarization…",
+    });
+    if (!res) return;
+    startPolling(`Summarizing ${res.reset ?? 0} article(s)…`);
+}
+
+// Per-article summarization (from the article modal): synchronous, updates
+// the open modal so the digest appears immediately.
+const summarizing = ref(false);
+async function summarizeArticle(item) {
+    summarizing.value = true;
+    actionError.value = "";
+    try {
+        const { pluginActionV2 } = await import("../../api.js");
+        const res = await pluginActionV2(props.token, props.note.id, "summarize_item", {
+            item_id: item.id,
+        });
+        if (article.value && String(article.value.item_id) === String(item.id)) {
+            article.value = {
+                ...article.value,
+                structured_summary: res.structured_summary ?? null,
+                summary_status: "done",
+                summary_error: "",
+            };
+        }
+        await refreshView();
+    } catch (e) {
+        actionError.value = e?.message || String(e);
+    } finally {
+        summarizing.value = false;
+    }
 }
 
 // Re-evaluate ALL: full re-run over every article — overwrites existing
@@ -1332,6 +1482,31 @@ function feedChipTitle(f) {
     font-style: italic;
     color: var(--font-color-secondary);
     font-size: 0.92rem;
+}
+
+/* --- Telegraph F/O/Q digest in the article modal --- */
+.rss-modal-digest {
+    margin: 0.8rem 1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    border-left: 3px solid var(--accent-teal, #6d9484);
+    padding: 0.35rem 0.8rem;
+}
+
+.rss-modal-digest-sec h5 {
+    margin: 0 0 0.15rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent-teal, var(--font-color-secondary));
+}
+
+.rss-modal-digest-line {
+    margin: 0.1rem 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
 }
 
 .rss-modal-meta-detail {

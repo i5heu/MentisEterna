@@ -77,16 +77,16 @@ or `{local: true}` = explicit pin to the config.toml local LLM, which beats
 `default_tier`) + optional `default_tier`.
 
 The usage catalog (`internal/llm/usage.go`) lists the app's LLM usages
-(rss_classify, title, tags, subtasks) with a `Wired` flag. Wired usages
-resolve per call site via `llminferencer.ResolveChat(db, usage)` — no
-anchor: the singleton note applies globally from anywhere in the tree. It
-binds usages that map to a tier/model of its provider; `{local: true}`
+(rss_classify, rss_summarize, title, tags, subtasks) with a `Wired` flag.
+Wired usages resolve per call site via `llminferencer.ResolveChat(db, usage)`
+— no anchor: the singleton note applies globally from anywhere in the tree.
+It binds usages that map to a tier/model of its provider; `{local: true}`
 pins and unmapped usages resolve to the `config.toml` feature/tier client
 (`Source: "local"` / `"config"`). The view surfaces the per-usage
 config.toml defaults (`llm.UsageSystemDefault`) next to every mapping, and
 the frontend offers a **Reset to system defaults** button (clears the usage
-map + default tier). Only `rss_classify` is wired today; mappings for
-unwired usages are inert until their call site migrates (see
+map + default tier). `rss_classify` and `rss_summarize` are wired; mappings
+for unwired usages are inert until their call site migrates (see
 docs/LLMInferencer.md §5). API-keyed chat clients skip the LocalAI
 idle-stop machinery.
 
@@ -214,7 +214,7 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
 | `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
 | `pkg/notetype/llminferencer/` | `llm_inferencer` | The app's single LLM inference provider note (singleton: OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings (`{tier}`/`{model}`/`{local: true}` pin to config.toml); write-only API key; `ResolveChat(db, usage)` resolves globally, falling back to config.toml (the per-usage system defaults are shown in the view); also owns the app-wide **LLM call statistics ledger** (`ct_llm_inferencer_stats`: per-call tokens/routing/model/latency/errors — 90-day retention cron, `clear_stats` action, aggregates + local↔remote split in the view) — see [docs/LLMInferencer.md](docs/LLMInferencer.md) §6 | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, CallStatsRecorder, CronJobs |
-| `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM significance evaluation (significance / negativity / personal relevance / humans affected → **0–10 ranking points**; ban words / penalty points / `min_points` / `weights` rules typed in the reader note's body; points-ranked timeline, rejected bucket, `reclassify_all`) — see [docs/RSSReader.md](docs/RSSReader.md) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
+| `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM significance evaluation (significance / negativity / personal relevance / humans affected → **0–10 ranking points**) and a telegraph F/O/Q **summarizer** pass (what changed / why / implications, shown on cards); ban words / penalty points / `min_points` / `weights` rules typed in the reader note's body; points-ranked timeline, rejected bucket, `reclassify_all` / `evaluate_missing` / `summarize_missing`) — see [docs/RSSReader.md](docs/RSSReader.md) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, ProgressReporter, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
 
 ## RSS Reader
 
@@ -237,6 +237,17 @@ The `rss` note type puts the whole subsystem in one note (see
   keys survive only for custom legacy prompts). Output is structured JSON
   bound to the `[llm.features] rss_classify` feature (medium tier by
   default).
+- **Summarizer** is a second LLM pass: telegraph-style `F:`/`O:`/`Q:` lines
+  grouped under *What has changed in reality? / Why has reality changed? /
+  What are the new implications?*, stored per item in
+  `ct_rss_items.summary_json` (canonical keys what_changed/why/implications)
+  and shown right on the cards and in the article modal. Its prompt is
+  **built-in** (`pkg/notetype/rss/summarize.go`), not note-resolvable;
+  bound to the `[llm.features] rss_summarize` feature (small tier by
+  default). The drain runs after the evaluation drain in the same refresh
+  job; rows predating the feature (`summary_status: ''`) are never
+  auto-summarized — the settings' **Summarize missing** action (or, per
+  article, the modal's Summarize button) queues exactly those.
 - **Points**: each evaluated article gets **0–10 ranking points** =
   `10 × (wSig·significance + wRel·relevance + wPos·(1−negativity) +
   wHum·humansTerm) − rule penalties` (weights + `min_points:` floor are body
@@ -247,7 +258,10 @@ The `rss` note type puts the whole subsystem in one note (see
   settings (both behind confirmation, both drained by the refresh job's
   classify stage with live ⚡ progress): `reclassify_all` re-queues EVERY
   article (overwrites scores), `evaluate_missing` only the articles without
-  an evaluation; the view exposes `counts.evaluated`/`counts.unevaluated`.
+  an evaluation; the view exposes `counts.evaluated`/`counts.unevaluated`
+  (and `counts.summarized`/`counts.unsummarized`/`counts.pending_summarize`
+  for the matching `summarize_missing` action — the progress bar is
+  stage-aware: ⚡ Evaluating / ✎ Summarizing).
 - **Stored article text is viewable inline**: item content is kept out of
   the view payload (size); the `get_item` action returns one article's
   stored content on demand (extracted `full_content` preferred, else the

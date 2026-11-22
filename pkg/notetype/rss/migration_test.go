@@ -87,31 +87,43 @@ func TestInitSchemaUpgradesOldItemsTable(t *testing.T) {
 	rows.Close()
 	for _, want := range []string{"significance", "negativity", "personal_relevance",
 		"affected_now_direct", "affected_now_indirect", "affected_future_direct",
-		"affected_future_indirect", "reflection", "points", "evaluated"} {
+		"affected_future_indirect", "reflection", "points", "evaluated",
+		"summary_json", "summary_status", "summary_error"} {
 		if !cols[want] {
 			t.Errorf("missing column after upgrade: %s", want)
 		}
 	}
 
 	// Legacy row survives with unevaluated defaults → exempt from min_points.
+	// The summarizer columns default to '' (status unknown-to-the-feature):
+	// legacy rows are never auto-summarized — only the explicit
+	// "Summarize missing" action queues them.
 	var sig, points float64
 	var evaluated int
+	var sumStatus, sumJSON string
 	var title string
 	if err := d.QueryRow(
-		`SELECT title, significance, points, evaluated FROM ct_rss_items WHERE item_key = 'legacy'`,
-	).Scan(&title, &sig, &points, &evaluated); err != nil {
+		`SELECT title, significance, points, evaluated, summary_status, summary_json FROM ct_rss_items WHERE item_key = 'legacy'`,
+	).Scan(&title, &sig, &points, &evaluated, &sumStatus, &sumJSON); err != nil {
 		t.Fatalf("load legacy item: %v", err)
 	}
 	if title != "Old article" || sig != 0 || points != 0 || evaluated != 0 {
 		t.Errorf("legacy item corrupted: %q %v %v %d", title, sig, points, evaluated)
 	}
+	if sumStatus != "" || sumJSON != "" {
+		t.Errorf("legacy summary state = (%q, %q), want ('', '') — no surprise draining", sumStatus, sumJSON)
+	}
 
-	// The upgraded table keeps working: a full classify store round-trip.
+	// The upgraded table keeps working: a full classify store round-trip
+	// and a summary store round-trip.
 	if err := storeClassification(d.DB, 1, 0, Classification{
 		EvaluationReflectionParagraph: "Upgraded row.",
 		Significance:                  0.5,
 		Tags:                          []string{"x"},
 	}, defaultScoreWeights(), 0); err != nil {
 		t.Errorf("store after upgrade: %v", err)
+	}
+	if err := storeSummary(d.DB, 1, StructuredSummary{WhatChanged: []string{"F: works"}}); err != nil {
+		t.Errorf("store summary after upgrade: %v", err)
 	}
 }

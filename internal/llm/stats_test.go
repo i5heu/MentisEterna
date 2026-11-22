@@ -92,6 +92,9 @@ func TestChatClientFactoryTags(t *testing.T) {
 		// The RSS classifier fallback client (config.toml tier) is the
 		// "rss_classify" usage on the local side of the split.
 		"rss_classify": {client: NewRSSClassifierClient(), usage: "rss_classify", source: ChatSourceConfig},
+		// The RSS summarizer fallback client is its own usage — summarize
+		// tokens must not be conflated with evaluation tokens.
+		"rss_summarize": {client: NewRSSSummarizerClient(), usage: "rss_summarize", source: ChatSourceConfig},
 		// The usage-aware resolver entry point tags like the factories.
 		"feature_title": {client: NewFeatureChatClient("title"), usage: "title", source: ChatSourceConfig},
 		// Generic clients stay untagged: their rows land as "" usage /

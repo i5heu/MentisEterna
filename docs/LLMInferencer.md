@@ -30,14 +30,15 @@ surfaced in the note's UI ((system default tier → model), with a
 | Resolution | Global through the app's single note: call sites ask `ResolveChat(db, usage)` with no anchor. Nothing binds → `config.toml` feature/tier client. An explicit `{local: true}` binding resolves to the same `config.toml` client, but reported as `Source: "local"` (the pin is the user's explicit choice, distinct from a plain fallback). |
 | System defaults | The view reports, per usage, what `config.toml` would serve (`system_default: {tier, model, base_url}` via `llm.UsageSystemDefault`), and effective bindings (explicit / `via_default` / `local` flag). The frontend shows these defaults next to every usage in viewer and editor, and the editor's **Reset to system defaults** button clears the usage map + default tier so every usage uses the `config.toml` defaults again (provider, endpoint, key, and tier model definitions stay). |
 | OCR / STT / embeddings | Deliberately out of scope: different API shapes (image/audio/file endpoints, dedicated models). They stay bound to `config.toml`. |
-| Wired in v1 | `rss_classify` (RSS article classification). Others (`title`, `tags`, `subtasks`) are pre-wired into the catalog and the resolver — see "Wiring a new usage" below. |
+| Wired in v1 | `rss_classify` (RSS article evaluation) and `rss_summarize` (RSS telegraph digest). Others (`title`, `tags`, `subtasks`) are pre-wired into the catalog and the resolver — see "Wiring a new usage" below. |
 
 ## 1. The note and its config
 
 ```
 🧠 LLM Inferencer (type: llm_inferencer — ONE per app, applies app-wide)
 │   config: provider, base_url, api_key (write-only), tiers{big,middle,small,tiny},
-│           default_tier, usages{rss_classify: {tier: small} | {model: x} | {local: true}, ...}
+│           default_tier, usages{rss_classify: {tier: small} | {model: x} | {local: true}, ...
+│                    rss_summarize: ...same shapes...}
 │   view:   provider label, key-set flag, tier table, resolved usage bindings,
 │           per-usage system (config.toml) defaults, warnings
 ```
@@ -132,6 +133,7 @@ The **usage catalog** also lives in `internal/llm` (`usage.go`):
 | usage id | label | wired | config.toml tier |
 |---|---|---|---|
 | `rss_classify` | RSS Evaluation | ✅ | medium |
+| `rss_summarize` | RSS Summarizer | ✅ | small |
 | `title` | Note Title Generation | — (pending) | tiny |
 | `tags` | Auto Tags | — (pending) | medium |
 | `subtasks` | Subtask Generation | — (pending) | smart |
@@ -238,6 +240,13 @@ return llmClassifier{client: client}
 Classification (cron batch + manual reclassify) resolves once per run.
 The inferencer note is global, so reader placement in the tree no longer
 matters; a `{local: true}` pin or no binding falls back to `config.toml`.
+
+The RSS summarizer (`pkg/notetype/rss/summarize.go`) wires its own usage
+the same way through the `newSummarizer` seam — `ResolveChat(db,
+"rss_summarize")` with `llm.NewRSSSummarizerClient()` fallback (default
+tier **small**). This is what lets summaries run on a cheaper model than
+the evaluation (or pin them `{local: true}`) with one inferencer mapping —
+the two passes report as separate usages in the call-stats ledger.
 
 ## 8. Frontend
 

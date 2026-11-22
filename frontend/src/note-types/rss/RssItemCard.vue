@@ -80,7 +80,32 @@
             >
             <span v-if="item.saved_note_id" class="rss-badge">∼ saved</span>
         </div>
-        <p v-if="item.summary" class="rss-item-summary">{{ item.summary }}</p>
+        <div
+            v-if="item.structured_summary"
+            class="rss-item-digest"
+        >
+            <div
+                v-for="sec in digestSections"
+                :key="sec.title"
+                class="rss-digest-sec"
+            >
+                <span class="rss-digest-h">{{ sec.title }}</span>
+                <p
+                    v-for="(line, i) in sec.lines"
+                    :key="i"
+                    class="rss-digest-line"
+                >
+                    {{ line }}
+                </p>
+            </div>
+        </div>
+        <p v-else-if="item.summary" class="rss-item-summary">{{ item.summary }}</p>
+        <p
+            v-else-if="item.summary_status === 'pending'"
+            class="rss-item-summary rss-summary-pending"
+        >
+            ⏳ summarizing…
+        </p>
         <div class="rss-item-tags" v-if="item.tags && item.tags.length">
             <span v-for="t in item.tags" :key="t" class="rss-badge rss-badge-tag">{{ t }}</span>
         </div>
@@ -187,6 +212,18 @@ const penaltyTooltip = computed(() => {
     return entries
         .map((e) => `${e.phrase}: ${e.points} × ${e.occurrences || 1}`)
         .join("\n");
+});
+
+// --- Structured summary (telegraph F/O/Q digest) ---
+
+const digestSections = computed(() => {
+    const s = props.item.structured_summary;
+    if (!s) return [];
+    return [
+        { title: "What changed", lines: s.what_changed || [] },
+        { title: "Why", lines: s.why || [] },
+        { title: "New implications", lines: s.implications || [] },
+    ].filter((sec) => sec.lines.length > 0);
 });
 
 const publishedLabel = computed(() => {
@@ -301,6 +338,41 @@ const publishedLabel = computed(() => {
     font-size: 0.88rem;
     margin: 0;
     color: var(--font-color-secondary);
+}
+
+.rss-summary-pending {
+    font-style: italic;
+    opacity: 0.8;
+}
+
+/* --- Telegraph F/O/Q digest --- */
+.rss-item-digest {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    border-left: 2px solid var(--accent-teal, rgba(109, 148, 132, 0.6));
+    padding-left: 0.55rem;
+}
+
+.rss-digest-sec {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.rss-digest-h {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent-teal, var(--font-color-secondary));
+}
+
+.rss-digest-line {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    color: var(--font-color, inherit);
+    white-space: pre-wrap;
 }
 
 .rss-item-actions {

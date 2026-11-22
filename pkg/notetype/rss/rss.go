@@ -106,6 +106,9 @@ func (p *Plugin) InitSchema(db *sql.DB) error {
 			reflection      TEXT    NOT NULL DEFAULT '',  -- evaluationReflectionParagraph
 			points          REAL    NOT NULL DEFAULT 0,   -- computed 0..10
 			evaluated       INTEGER NOT NULL DEFAULT 0,    -- classification carried evaluation data
+			summary_json    TEXT    NOT NULL DEFAULT '',   -- telegraph F/O/Q summary (what/why/implications)
+			summary_status  TEXT    NOT NULL DEFAULT '',   -- '' legacy | pending | done | error | disabled
+			summary_error   TEXT    NOT NULL DEFAULT '',
 			classify_status TEXT    NOT NULL DEFAULT 'pending',
 			classify_error  TEXT    NOT NULL DEFAULT '',
 			penalty_score   REAL    NOT NULL DEFAULT 0,
@@ -140,6 +143,9 @@ func ensureItemColumns(db *sql.DB) error {
 		{"reflection", "reflection TEXT NOT NULL DEFAULT ''"},
 		{"points", "points REAL NOT NULL DEFAULT 0"},
 		{"evaluated", "evaluated INTEGER NOT NULL DEFAULT 0"},
+		{"summary_json", "summary_json TEXT NOT NULL DEFAULT ''"},
+		{"summary_status", "summary_status TEXT NOT NULL DEFAULT ''"},
+		{"summary_error", "summary_error TEXT NOT NULL DEFAULT ''"},
 	}
 
 	rows, err := db.Query(`PRAGMA table_info(ct_rss_items)`)
@@ -179,7 +185,7 @@ func (p *Plugin) Manifest() notetype.Manifest {
 	return notetype.Manifest{
 		ID:          PluginID,
 		Label:       "RSS Reader",
-		Description: "Fetches RSS/Atom feeds, resolves full article content, and evaluates items with an LLM (significance, negativity, personal relevance, humans affected — condensed into ranking points); ban words / penalty points / point-rule weights are typed in the note body",
+		Description: "Fetches RSS/Atom feeds, resolves full article content, and evaluates items with an LLM (significance, negativity, personal relevance, humans affected — condensed into ranking points) plus a telegraph-style F/O/Q summary; ban words / penalty points / point-rule weights are typed in the note body",
 		Category:    "Information",
 		SortOrder:   500,
 		DefaultConfig: json.RawMessage(`{
@@ -287,6 +293,32 @@ func (p *Plugin) Manifest() notetype.Manifest {
 				Dangerous:       false,
 				RefreshStrategy: "none",
 				SuccessMessage:  "Missing evaluations scheduled",
+			},
+			{
+				ID:          "summarize_item",
+				Label:       "Summarize Item",
+				Description: "Run the LLM summarizer on one article and store the telegraph-style F/O/Q summary",
+				ParamsSchema: json.RawMessage(`{
+					"type": "object",
+					"properties": {"item_id": {"type": "integer"}},
+					"required": ["item_id"]
+				}`),
+				Dangerous:       false,
+				RefreshStrategy: "reload_view",
+				SuccessMessage:  "Article summarized",
+			},
+			{
+				ID:          "summarize_missing",
+				Label:       "Summarize Missing",
+				Description: "Queue every article without a stored summary for LLM summarization and schedule a refresh (existing summaries are kept)",
+				ParamsSchema: json.RawMessage(`{
+					"type": "object",
+					"properties": {},
+					"required": []
+				}`),
+				Dangerous:       false,
+				RefreshStrategy: "none",
+				SuccessMessage:  "Missing summaries scheduled",
 			},
 			{
 				ID:          "reapply_rules",

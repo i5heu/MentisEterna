@@ -88,10 +88,12 @@ cron @every 15m ──▶ refresh_feeds(db)
             rules scoring ◀──────────────── full-content fetch + extract
                      │
                      ▼
-            insert items (state=new, classify pending)
+            insert items (state=new, classify + summary pending)
                      ▼
             evaluate batch (≤25/batch, drains queue, prompt from scope) ─▶ llm.NewRSSClassifierClient
-                     ├─▶ per-item plugin.progress ws events (ProgressReporter) ─▶ reader progress bar
+                     ▼
+            summarize batch (≤25/batch, drains its own queue, built-in prompt) ─▶ llm.NewRSSSummarizerClient
+                     ├─▶ per-item plugin.progress ws events, {stage: evaluate|summarize} (ProgressReporter) ─▶ reader progress bar
                      └─▶ job result summary (JobQueue + ws broadcast)
 ```
 
@@ -151,6 +153,9 @@ CREATE TABLE IF NOT EXISTS ct_rss_items (
     reflection      TEXT    NOT NULL DEFAULT '',  -- evaluationReflectionParagraph
     points          REAL    NOT NULL DEFAULT 0,   -- computed 0..10
     evaluated       INTEGER NOT NULL DEFAULT 0,   -- classification carried evaluation data
+    summary_json    TEXT    NOT NULL DEFAULT '',   -- telegraph F/O/Q digest {"what_changed":[…],"why":[…],"implications":[…]}
+    summary_status  TEXT    NOT NULL DEFAULT '',   -- ''|pending|done|error|disabled
+    summary_error   TEXT    NOT NULL DEFAULT '',
     classify_status TEXT    NOT NULL DEFAULT 'pending', -- pending|done|error|disabled
     classify_error  TEXT    NOT NULL DEFAULT '',
     penalty_score   REAL    NOT NULL DEFAULT 0,
@@ -169,9 +174,12 @@ No tables for prompt notes — bodies read live from `updates`. Item content is
 truncated to 200 KB. `prompt_note_id` snapshots which prompt classified the
 item (audit + "summary came from prompt X" in the UI).
 
-The ten evaluation columns are additive; databases created before them are
-upgraded on plugin startup by `ensureItemColumns` (PRAGMA table_info +
-`ALTER TABLE ADD COLUMN` per missing column).
+The ten evaluation columns and the three summarizer columns are additive;
+databases created before them are upgraded on plugin startup by
+`ensureItemColumns` (PRAGMA table_info + `ALTER TABLE ADD COLUMN` per missing
+column). Rows that predate the summarizer get `summary_status ''` — a plain
+refresh never auto-summarizes them (no surprise bulk LLM cost after the
+upgrade); the explicit **Summarize missing** action queues exactly those.
 
 **Rejected** is computed: `banned=1 OR penalty_score >= threshold (0=off) OR
 state='rejected' OR (evaluated=1 AND min_points > 0 AND points < min_points)`.
@@ -238,6 +246,42 @@ object in this shape):
   is stored in `classify_error` while the status stays `done`.
 - `evaluationReflectionParagraph` falls back into `summary` when no summary
   is present — cards and saved notes keep a review line for every article.
+
+## 5a. Summarizer prompt (telegraph F/O/Q digest)
+
+A second, independent LLM pass condenses every article into a structured
+summary — the digest rendered on each card and in the article modal. Unlike
+the evaluation prompt it is **built-in** (`defaultSummarizerPrompt` in
+`pkg/notetype/rss/summarize.go`, not nota-resolvable yet); editing it is a
+code change + restart. A fixed binding tail (`summarizeContract`) is
+appended so the reply is machine-readable.
+
+- **What it asks for** (verbatim design): ≤200 words, telegraph-style,
+  each line labeled `F:` (fact), `O:` opinion + source, `Q:` quote +
+  source, grouped under three questions — *What has changed in reality?* /
+  *Why has reality changed?* / *What are the new implications?* — all
+  translated to English except German text, no source links.
+- **Output contract**: `{"content": {"What has changed in reality?": [...],
+  "Why has reality changed?": [...], "What are the new implications?": [...]}}`.
+  Parsed tolerantly: fences/prose around the object, missing `content`
+  wrapper, rephrased question keys (fuzzy bucketing) all recover; unknown
+  keys are dropped; lines are trimmed and clipped (≤300 runes, ≤15 per
+  section). A reply carrying no lines at all is an error (one corrective
+  retry, then `summary_status='error'`).
+- **Storage**: the three sections land in `ct_rss_items.summary_json` under
+  canonical keys `what_changed` / `why` / `implications` with a
+  `summary_status` machine (`''` legacy / `pending` / `done` / `error` /
+  `disabled`) — separate from the evaluation's `classify_status`.
+- **Client**: `llm.NewRSSSummarizerClient()` bound to feature
+  `rss_summarize` (usage `rss_summarize` in the llm_inferencer catalog;
+  default tier `small` — cheaper than the evaluation's `medium`, overridable
+  via `[llm.features.rss_summarize]` or an inferencer note usage mapping).
+- **Drain**: `summarizePendingItems` runs right after the evaluation drain
+  inside the same refresh job, own ≤25-item batches, 6-minute budget, gated
+  on `auto_classify`. Items without stored content complete instantly with
+  an empty done summary instead of burning an LLM call (and blocking the
+  queue). Per-item progress streams with `stage:"summarize"`.
+
 - User message = article title + feed name + URL + content (full_content
   preferred, feed_content fallback), capped at ~10k chars.
 - Client: `llm.NewRSSClassifierClient()` bound to feature `rss_classify`
@@ -345,14 +389,19 @@ oldest-beyond-cap.
   Iteration skips feeds fetched `< interval_minutes` ago or `enabled=0`.
 - Feed fetches parallel (errgroup, max 4); classification strictly sequential
   in ≤25-item batches until the queue drains (8-min classify budget,
-  bounded by the task's 10-minute timeout).
-- **Live progress**: the drain streams `{note_id, done, total, finished}`
-  through the injected `notetype.ProgressReporter` emitter after every
-  article; the server broadcasts it as a `plugin.progress` ws message, and
-  the reader renders a "⚡ Evaluating x/y" progress bar (noise-free:
-  nothing emits when nothing is pending).
-- Result summary: `"3 feeds ok, 1 error, +12 new, 12 classified, 2 rejected"` —
-  visible in JobQueue + broadcast via ws job events.
+  bounded by the task's 10-minute timeout); then the summarize drain runs
+  the same way (≤25-item batches, 6-min budget, `summary_status='pending'`
+  rows, no-content rows complete instantly as done-empty).
+- **Live progress**: both drains stream
+  `{note_id, stage, done, total, finished}` (`stage` = `evaluate` |
+  `summarize`) through the injected `notetype.ProgressReporter` emitter
+  after every article; the server broadcasts it as a `plugin.progress` ws
+  message, and the reader renders a stage-aware progress bar
+  ("⚡ Evaluating x/y" / "✎ Summarizing x/y"; noise-free: nothing emits
+  when nothing is pending).
+- Result summary: `"3 feeds ok, 1 error, +12 new, 12 classified, 12
+  summarized, 2 rejected"` — visible in JobQueue + broadcast via ws job
+  events.
 - **Ad-hoc job** `refresh_feeds_now` payload `{"note_id":N,"force":true}` —
   registered in `CronJobs()` with an empty schedule (scheduler skips it,
   `Enqueue` reaches it) — used by the "Refresh now" action.
@@ -365,12 +414,14 @@ oldest-beyond-cap.
 | ID | Params | Behavior |
 |---|---|---|
 | `refresh` | `{}` | Enqueue `rss/refresh_feeds` `{note_id, force}`; returns `{run_id}` |
-| `save_as_note` | `{item_id}` | Create child note (type `standard`) under the reader note: INSERT `notes` (title, type, parent) + `updates` (markdown: link/author/date, summary/reflection, evaluation line, content); enqueue `_system/vss_index` `{note_id}`; set `saved_note_id`, state→`read`; returns `{note_id}` for navigation |
+| `save_as_note` | `{item_id}` | Create child note (type `standard`) under the reader note: INSERT `notes` (title, type, parent) + `updates` (markdown: link/author/date, **Summary section** from `summary_json` when present else the summary/reflection line, evaluation line, content); enqueue `_system/vss_index` `{note_id}`; set `saved_note_id`, state→`read`; returns `{note_id}` for navigation |
 | `set_item_state` | `{item_id, state}` | `read` / `new` / `starred` / `rejected` (manual reject) |
-| `get_item` | `{item_id}` | Return one article with its stored content for inline reading — `full_content` preferred (`content_source:"extracted"`), `feed_content` fallback (`"feed"`), empty when neither stored — plus the full metadata the view omits, including the evaluation (significance, negativity, relevance, humans ×4, reflection, points, evaluated). Content is kept out of the view payload (size) and loaded on demand by the reader modal; `RefreshStrategy: none` (pure read, no ws notify); rejected items stay viewable |
+| `get_item` | `{item_id}` | Return one article with its stored content for inline reading — `full_content` preferred (`content_source:"extracted"`), `feed_content` fallback (`"feed"`), empty when neither stored — plus the full metadata the view omits, including the evaluation (significance, negativity, relevance, humans ×4, reflection, points, evaluated) and the summary fields (`structured_summary` parsed, `summary_status`, `summary_error`). Content is kept out of the view payload (size) and loaded on demand by the reader modal; `RefreshStrategy: none` (pure read, no ws notify); rejected items stay viewable |
 | `reclassify` | `{item_id}` | Re-run the LLM evaluation synchronously (60 s bound) with the currently-scoped prompt; recomputes points; returns `{points, significance, negativity, personal_relevance, summary, reflection, tags}` |
 | `reclassify_all` | `{}` | Queue **every** article for a fresh evaluation (`classify_status` → `pending`, errors cleared — existing scores are overwritten by the drain) and schedule a force refresh whose classify stage drains the queue; returns `{reset, run_id}`. Exposed in the reader's **Settings → LLM evaluation** behind a warning confirmation (one LLM call per article) |
 | `evaluate_missing` | `{}` | Queue **only articles with no evaluation** (`evaluated = 0`: legacy keyword-classified rows, errored runs, still-pending ones; already-evaluated scores are kept) and schedule the same drain refresh; returns `{reset, run_id}`. Settings button carries the live unevaluated count |
+| `summarize_item` | `{item_id}` | Run the built-in summarizer on one article synchronously and store the F/O/Q digest; returns `{item_id, structured_summary}`. Article-modal "Summarize" button (also refreshes an existing digest); errors (no stored content, LLM failure) are recorded on the item |
+| `summarize_missing` | `{}` | Queue **only articles without a stored summary** (`summary_status != 'done'`: `''` rows predating the summarizer, errored runs, pending ones; existing summaries are kept) and schedule the drain refresh; returns `{reset, run_id}`. Settings button carries the live unsummarized count, behind a confirmation (one LLM call per article) |
 | `reapply_rules` | `{}` | Re-read body rules, recompute penalty/banned AND points for all items (no LLM); returns counts incl. `min_points` |
 
 ## 10. View + frontend
@@ -384,20 +435,23 @@ oldest-beyond-cap.
   "prompt":    { "note_id": 12, "title": "My prompt", "default": false } | { "default": true },
   "rules_warning": "line 4 ignored: 'foo: abc'",
   "items":     [ /* ≤200, not rejected: id, feed_id, feed_name, title, url, author, published_at,
-                     summary, category, tags, quality, significance, negativity, personal_relevance,
+                     summary, structured_summary, summary_status, category, tags, quality, significance,
+                     negativity, personal_relevance,
                      affected_now_direct, affected_now_indirect, affected_future_direct,
                      affected_future_indirect, points, evaluated, classify_status,
                      penalty_score, penalty, banned, state, saved_note_id, full_status */ ],
   "rejected":  [ /* ≤50 computed-rejected, same shape */ ],
   "counts":    { "total", "new", "read", "starred", "rejected", "pending_classify",
-                 "evaluated", "unevaluated" }
+                 "evaluated", "unevaluated", "pending_summarize", "summarized", "unsummarized" }
 }
 ```
 
 Views resolve scopes live (cheap queries) — hierarchy edits reflect on the
 next view load. The view payload carries the evaluation columns (small
-floats); the reflection paragraph rides only in `get_item` (size; the item
-`summary` already carries its clip).
+floats) **and the parsed F/O/Q digest** (`structured_summary`; the card
+renders it directly so articles are skimmable from the list); the reflection
+paragraph rides only in `get_item` (size; the item `summary` already carries
+its clip).
 
 Frontend (`frontend/src/note-types/rss/`):
 
@@ -417,14 +471,17 @@ Frontend (`frontend/src/note-types/rss/`):
   tokens). A bounded fallback poll (5 s, ≤12 min, settles as soon as the
   pending queue drains) covers ws outages — it also folds the bar away.
   The toolbar keeps **Refresh feeds** / **Reapply rules** and surfaces a
-  hint line when articles have no evaluation yet (pointing at Settings).
+  hint line when articles have no evaluation or summary yet (pointing at
+  Settings).
   Sort picker (default **unread first ·
   ★ points**; also best-points / newest / oldest), filter
   chips (feed / state), item cards: ★ points badge (green/amber/red tint by
   negativity; tooltip = significance/negativity/relevance/humans/penalty
   breakdown), legacy category + Q badges, penalty badges (tooltip from
-  `penalty_json`), summary (= reflection paragraph), actions: open original
-  (external), Save as Note (→ navigate), Star / Read / Reject /
+  `penalty_json`), the **telegraph digest** (F/O/Q lines under
+  "What changed / Why / New implications" headers; falls back to the
+  reflection `summary` line; "⏳ summarizing…" while queued), actions: open
+  original (external), Save as Note (→ navigate), Star / Read / Reject /
   Re-evaluate; collapsed "Rejected" toggle; item content stays out of the
   view — the modal loads it through `get_item`. Prompt status chip: shows
   which prompt is in scope or nudges "add an RSS Prompt note" (add-child
@@ -435,22 +492,32 @@ Frontend (`frontend/src/note-types/rss/`):
   (labelled as such), else a link to the original. The modal carries the
   item's meta chips (feed, author, date), the full evaluation (★ points,
   significance, negativity, relevance chips, humans-affected line,
-  evaluation notes from the model's `error` field) and the reflection
-  paragraph as a quote; plus the same actions as the card (Star / Read /
-  Save as Note / Re-evaluate); Esc or Close dismisses. Rejected (dimmed)
-  cards are readable the same way.
+  evaluation notes from the model's `error` field), the **F/O/Q digest**
+  rendered under the three question headers (replacing the reflection
+  quote when present — the reflection stays reachable via the card-line
+  fallback), summarize-state hints ("⏳ Summary queued…" / ⚠ failed, retry
+  via the button), and a **Summarize** button that runs the per-item
+  summarizer synchronously and refreshes the open modal; plus the same
+  actions as the card (Star / Read / Save as Note / Re-evaluate); Esc or
+  Close dismisses. Rejected (dimmed) cards are readable the same way.
 - **Editor**: feeds add/remove/edit (url, name, enabled), interval,
   threshold, full-content, retention/cap inputs, classify toggle
   (`usePluginAction` / `useNoteTypeDraft` composables; hydrate-on-`note.id`
   guard pattern).
 - Reminder chip in-edit mode: rules (ban words) are typed in the note body,
   not the config panel.
-- **Settings → LLM evaluation** section (feedback lines + ⚡ progress bar
-  render in edit mode too): **Evaluate missing (N)** queues only the
-  articles without an evaluation (count from `counts.unevaluated`);
-  **Re-evaluate ALL…** is guarded by a ⚠️ warning confirmation — it
-  overwrites every existing score and costs one LLM call per article.
-  Both run as the background drain job.
+- **Settings → LLM evaluation & summaries** section (feedback lines + ⚡
+  progress bar render in edit mode too): **Evaluate missing (N)** queues
+  only the articles without an evaluation (count from
+  `counts.unevaluated`); **Summarize missing (N)** queues only the articles
+  without a stored summary (count from `counts.unsummarized`), behind a
+  confirmation — one LLM call per article; **Re-evaluate ALL…** is guarded
+  by a ⚠️ warning confirmation — it overwrites every existing score and
+  costs one LLM call per article. All three run as the background drain
+  job, and the two "missing" actions never touch each other's results.
+  The progress bar is stage-aware (⚡ Evaluating / ✎ Summarizing), and the
+  article modal's **Summarize** button runs the per-item summarizer
+  synchronously.
 
 ## 11. Wiring changes outside the plugin (complete list)
 
@@ -459,8 +526,8 @@ Frontend (`frontend/src/note-types/rss/`):
 | `go.mod` / `go.sum` | add `golang.org/x/net` (+ `golang.org/x/text` indirect) |
 | `pkg/notetype/builtins/builtins.go` | blank import `pkg/notetype/rss` (registers both types) |
 | `internal/llm/ollama.go` | export `ChatMessage` + `ChatClient.Complete([]ChatMessage)` (wraps private `complete`) |
-| `internal/llm/tiers.go` | featureSpecs `"rss_classify"` (default tier medium) + `NewRSSClassifierClient()` |
-| `config.default.toml` | `[llm.features] rss_classify = { tier = "medium" }` |
+| `internal/llm/tiers.go` | featureSpecs `"rss_classify"` (default tier medium) + `"rss_summarize"` (small) + `NewRSSClassifierClient()` / `NewRSSSummarizerClient()`; usage catalog entries for both |
+| `config.default.toml` | `[llm.features] rss_classify = { tier = "medium" }`, `rss_summarize = { tier = "small" }` |
 | `frontend/src/note-types/registry.js` | 2 entries above |
 | `AGENTS.md` | plugin rows in the reference-implementation table + pointer to this doc |
 | `docs/RSSReader.md` | this plan |
@@ -496,12 +563,20 @@ textarea like `standard`).
   (`{done,total,finished}`), silence on empty drains and without the
   injected emitter, errored classifications still advance the bar; the
   server side (`internal/server/live_ws_test.go`) tests the ws broadcast
-  and wire round-trip.
-- `classify_test.go` also covers the progress stream: per-item events
-  (`{done,total,finished}`), silence on empty drains and without the
-  injected emitter, errored classifications still advance the bar; the
-  server side (`internal/server/live_ws_test.go`) tests the ws broadcast
-  and wire round-trip.
+  and wire round-trip. The summarize stage adds `stage:"summarize"`
+  labeling (asserted in `summarize_test.go`); the other progress semantics
+  are shared through `reportEvaluationProgress`.
+- `summarize_test.go`: stub summarizer via the `newSummarizer` seam —
+  parse table (contract shape, fences/prose, missing wrapper, fuzzy keys,
+  clamps, drop unknown keys, no-lines error), rapid PBT (reply ⟷ stored
+  roundtrip + key-bucketing stability), drain battery (done/error status,
+  contentless items complete without an LLM call, legacy `''` rows never
+  auto-drained, `auto_classify` gate, one corrective retry), staged
+  progress, `summarize_item` / `summarize_missing` actions (queue
+  targeting + existing-summary preservation + drain job enqueue), view
+  counts (`summarized`/`unsummarized`/`pending_summarize`) + ItemView
+  digest, `get_item` summary fields, `save_as_note` digest markdown, and
+  the pre-summarizer table upgrade (`migration_test.go`).
 - `view_eval_test.go`: computed rejection — evaluated items below
   `min_points` rejected (default floor), `min_points: 0` disables, floor
   raised via body rule; evaluation columns round-trip into the view.

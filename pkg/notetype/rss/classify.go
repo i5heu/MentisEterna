@@ -496,16 +496,24 @@ func classifyProgressCount(db *sql.DB, noteID int64) int {
 	return n
 }
 
+// Progress stages streamed with the per-item drain updates: which pipeline
+// stage the numbers belong to (evaluation drain vs. summarization drain).
+const (
+	progressStageEvaluate  = "evaluate"
+	progressStageSummarize = "summarize"
+)
+
 // reportEvaluationProgress streams per-item drain progress to the UI (see
 // notetype.ProgressReporter / the plugin.progress live messages). Fire and
 // forget: no injected emitter (tests, tools) or a marshal error just skips
-// the update.
-func reportEvaluationProgress(noteID int64, done, total int, finished bool) {
+// the update. stage marks which drain is running ("evaluate"/"summarize").
+func reportEvaluationProgress(noteID int64, stage string, done, total int, finished bool) {
 	if progressFunc == nil {
 		return
 	}
 	payload, err := json.Marshal(map[string]any{
 		"note_id":  noteID,
+		"stage":    stage,
 		"done":     done,
 		"total":    total,
 		"finished": finished,
@@ -541,7 +549,7 @@ func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 	if total == 0 {
 		return 0
 	}
-	reportEvaluationProgress(noteID, 0, total, false)
+	reportEvaluationProgress(noteID, progressStageEvaluate, 0, total, false)
 
 	processed := 0
 	drained := false
@@ -573,7 +581,7 @@ func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 				)
 			}
 			processed++
-			reportEvaluationProgress(noteID, processed, total, false)
+			reportEvaluationProgress(noteID, progressStageEvaluate, processed, total, false)
 		}
 		if len(items) < classifyBatchSize {
 			drained = true
@@ -583,6 +591,6 @@ func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 			break
 		}
 	}
-	reportEvaluationProgress(noteID, processed, total, drained)
+	reportEvaluationProgress(noteID, progressStageEvaluate, processed, total, drained)
 	return processed
 }

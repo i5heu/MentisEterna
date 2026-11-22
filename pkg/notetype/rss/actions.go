@@ -100,6 +100,10 @@ func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteI
 		return p.actionReclassifyAll(db, noteID)
 	case "evaluate_missing":
 		return p.actionEvaluateMissing(db, noteID)
+	case "summarize_item":
+		return p.actionSummarizeItem(ctx, db, noteID, params)
+	case "summarize_missing":
+		return p.actionSummarizeMissing(db, noteID)
 	case "reapply_rules":
 		return actionReapplyRules(db, noteID)
 	default:
@@ -108,9 +112,10 @@ func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteI
 }
 
 // queueEvaluationRun schedules the drain refresh for a reader after an
-// evaluation reset (reclassify_all / evaluate_missing), best effort: the
-// job is what actually runs the queue, a failed enqueue must not fail the
-// action (the items stay pending; the next cron tick drains them).
+// evaluation/summary reset (reclassify_all / evaluate_missing /
+// summarize_missing), best effort: the job is what actually runs the queue,
+// a failed enqueue must not fail the action (the items stay pending; the
+// next cron tick drains them).
 func (p *Plugin) queueEvaluationRun(noteID int64, out map[string]any) {
 	if p.enqueue == nil {
 		return
@@ -163,43 +168,123 @@ func (p *Plugin) actionEvaluateMissing(db *sql.DB, noteID int64) (any, error) {
 	return out, nil
 }
 
+// actionSummarizeItem synchronously runs the built-in summarizer prompt on
+// one article and stores the structured F/O/Q summary (manual refresh on
+// demand or from the article modal).
+func (p *Plugin) actionSummarizeItem(ctx context.Context, db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
+	var pr struct {
+		ItemID int64 `json:"item_id"`
+	}
+	if err := json.Unmarshal(params, &pr); err != nil {
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: invalid params: %v", err)}
+	}
+	if pr.ItemID <= 0 {
+		return nil, &notetype.BadRequestError{Message: "rss: item_id is required"}
+	}
+
+	var it itemForSummarize
+	err := db.QueryRow(`
+		SELECT i.id, i.title, i.url, COALESCE(NULLIF(i.full_content,''), i.feed_content, '')
+		FROM ct_rss_items i
+		JOIN ct_rss_feeds f ON f.id = i.feed_id
+		WHERE i.id = ? AND f.note_id = ?
+	`, pr.ItemID, noteID).Scan(&it.ID, &it.Title, &it.URL, &it.Content)
+	if err == sql.ErrNoRows {
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: item %d not found in note %d", pr.ItemID, noteID)}
+	} else if err != nil {
+		return nil, fmt.Errorf("rss: load item: %w", err)
+	}
+	if strings.TrimSpace(it.Content) == "" {
+		return nil, &notetype.BadRequestError{Message: "rss: this article has no stored content to summarize"}
+	}
+	if ctx.Err() != nil {
+		return nil, &notetype.BadRequestError{Message: "rss: context cancelled"}
+	}
+
+	sum := newSummarizer(db, noteID)
+	release := sum.BeginUse()
+	defer release()
+
+	s, _, err := summarizeOnce(sum, defaultSummarizerPrompt+summarizeContract, summarizeUserMessage(it.Title, "", it.URL, it.Content))
+	if err != nil {
+		msg := err.Error()
+		if len(msg) > 500 {
+			msg = msg[:500]
+		}
+		_, _ = db.Exec(
+			`UPDATE ct_rss_items SET summary_status = 'error', summary_error = ? WHERE id = ?`,
+			msg, it.ID,
+		)
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: summarization failed: %v", err)}
+	}
+	if err := storeSummary(db, it.ID, s); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"item_id":            it.ID,
+		"structured_summary": &s,
+	}, nil
+}
+
+// actionSummarizeMissing queues every article that has no stored summary
+// (summary_status != 'done' — status ” are the rows predating the
+// summarizer, plus pending/errored ones) for LLM summarization and
+// schedules the drain refresh. Existing summaries are kept.
+func (p *Plugin) actionSummarizeMissing(db *sql.DB, noteID int64) (any, error) {
+	res, err := db.Exec(`
+		UPDATE ct_rss_items SET summary_status = 'pending', summary_error = ''
+		WHERE feed_id IN (SELECT id FROM ct_rss_feeds WHERE note_id = ?) AND summary_status != 'done'`, noteID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("rss: queue missing summaries: %w", err)
+	}
+	reset, _ := res.RowsAffected()
+
+	out := map[string]any{"reset": reset, "note_id": noteID}
+	p.queueEvaluationRun(noteID, out)
+	return out, nil
+}
+
 // ArticleDetail is the get_item action response: one article with its
 // content for inline reading. Content is deliberately NOT part of the view
 // payload (200 articles × up to 200 KB would dwarf it) — the card fetches
 // it on demand through this action.
 type ArticleDetail struct {
-	ID                     int64           `json:"item_id"`
-	FeedID                 int64           `json:"feed_id"`
-	FeedName               string          `json:"feed_name"`
-	Title                  string          `json:"title"`
-	URL                    string          `json:"url"`
-	Author                 string          `json:"author"`
-	PublishedAt            string          `json:"published_at"`
-	FetchedAt              string          `json:"fetched_at"`
-	Content                string          `json:"content"`
-	ContentSource          string          `json:"content_source"` // extracted | feed | "" (none stored)
-	FullStatus             string          `json:"full_status"`    // none|fetched|failed|too_big
-	Category               string          `json:"category"`
-	Summary                string          `json:"summary"`
-	Tags                   []string        `json:"tags"`
-	Quality                int             `json:"quality"`
-	Significance           float64         `json:"significance"`
-	Negativity             float64         `json:"negativity"`
-	PersonalRelevance      float64         `json:"personal_relevance"`
-	AffectedNowDirect      float64         `json:"affected_now_direct"`
-	AffectedNowIndirect    float64         `json:"affected_now_indirect"`
-	AffectedFutureDirect   float64         `json:"affected_future_direct"`
-	AffectedFutureIndirect float64         `json:"affected_future_indirect"`
-	Reflection             string          `json:"reflection"`
-	Points                 float64         `json:"points"`
-	Evaluated              bool            `json:"evaluated"`
-	ClassifyStatus         string          `json:"classify_status"`
-	ClassifyError          string          `json:"classify_error"`
-	PenaltyScore           float64         `json:"penalty_score"`
-	Penalty                json.RawMessage `json:"penalty"`
-	Banned                 bool            `json:"banned"`
-	State                  string          `json:"state"`
-	SavedNoteID            int64           `json:"saved_note_id"`
+	ID                     int64              `json:"item_id"`
+	FeedID                 int64              `json:"feed_id"`
+	FeedName               string             `json:"feed_name"`
+	Title                  string             `json:"title"`
+	URL                    string             `json:"url"`
+	Author                 string             `json:"author"`
+	PublishedAt            string             `json:"published_at"`
+	FetchedAt              string             `json:"fetched_at"`
+	Content                string             `json:"content"`
+	ContentSource          string             `json:"content_source"` // extracted | feed | "" (none stored)
+	FullStatus             string             `json:"full_status"`    // none|fetched|failed|too_big
+	Category               string             `json:"category"`
+	Summary                string             `json:"summary"`
+	Tags                   []string           `json:"tags"`
+	Quality                int                `json:"quality"`
+	Significance           float64            `json:"significance"`
+	Negativity             float64            `json:"negativity"`
+	PersonalRelevance      float64            `json:"personal_relevance"`
+	AffectedNowDirect      float64            `json:"affected_now_direct"`
+	AffectedNowIndirect    float64            `json:"affected_now_indirect"`
+	AffectedFutureDirect   float64            `json:"affected_future_direct"`
+	AffectedFutureIndirect float64            `json:"affected_future_indirect"`
+	Reflection             string             `json:"reflection"`
+	Points                 float64            `json:"points"`
+	Evaluated              bool               `json:"evaluated"`
+	StructuredSummary      *StructuredSummary `json:"structured_summary"`
+	SummaryStatus          string             `json:"summary_status"` // ""|pending|done|error|disabled
+	SummaryError           string             `json:"summary_error"`
+	ClassifyStatus         string             `json:"classify_status"`
+	ClassifyError          string             `json:"classify_error"`
+	PenaltyScore           float64            `json:"penalty_score"`
+	Penalty                json.RawMessage    `json:"penalty"`
+	Banned                 bool               `json:"banned"`
+	State                  string             `json:"state"`
+	SavedNoteID            int64              `json:"saved_note_id"`
 }
 
 // actionGetItem returns one article with the stored content for inline
@@ -217,7 +302,7 @@ func actionGetItem(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 	}
 
 	var it ArticleDetail
-	var fullContent, feedContent, tagsJSON, penaltyJSON string
+	var fullContent, feedContent, tagsJSON, penaltyJSON, summaryJSON string
 	var banned, evaluated int
 	err := db.QueryRow(`
 		SELECT i.id, i.feed_id, COALESCE(NULLIF(f.name,''), ''), i.title, i.url, i.author,
@@ -228,6 +313,7 @@ func actionGetItem(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 		       i.affected_now_direct, i.affected_now_indirect,
 		       i.affected_future_direct, i.affected_future_indirect,
 		       i.reflection, i.points, i.evaluated,
+		       i.summary_json, i.summary_status, i.summary_error,
 		       i.classify_status, i.classify_error,
 		       i.penalty_score, i.penalty_json, i.banned, i.state, i.saved_note_id
 		FROM ct_rss_items i
@@ -242,6 +328,7 @@ func actionGetItem(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 		&it.AffectedNowDirect, &it.AffectedNowIndirect,
 		&it.AffectedFutureDirect, &it.AffectedFutureIndirect,
 		&it.Reflection, &it.Points, &evaluated,
+		&summaryJSON, &it.SummaryStatus, &it.SummaryError,
 		&it.ClassifyStatus, &it.ClassifyError,
 		&it.PenaltyScore, &penaltyJSON, &banned, &it.State, &it.SavedNoteID,
 	)
@@ -254,6 +341,7 @@ func actionGetItem(db *sql.DB, noteID int64, params json.RawMessage) (any, error
 	it.Penalty = json.RawMessage(penaltyJSON)
 	it.Banned = banned != 0
 	it.Evaluated = evaluated != 0
+	it.StructuredSummary = parseSummaryJSON(summaryJSON)
 
 	// Content preference matches classification: extracted full content,
 	// falling back to the feed-provided snippet.
@@ -335,10 +423,42 @@ type itemForSave struct {
 	FullStatus  string
 	SavedNoteID int64
 
+	// StructuredSummary is the raw summary_json ("" when none stored).
+	SummaryJSON string
+
 	Significance      float64
 	Negativity        float64
 	PersonalRelevance float64
 	Evaluated         bool
+}
+
+// summarySection renders the telegraph F/O/Q summary as markdown for the
+// saved note.
+func summarySection(raw string) string {
+	s := parseSummaryJSON(raw)
+	if s == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("**Summary**\n\n")
+	for _, sec := range []struct {
+		title string
+		lines []string
+	}{
+		{"What has changed in reality?", s.WhatChanged},
+		{"Why has reality changed?", s.Why},
+		{"What are the new implications?", s.Implications},
+	} {
+		if len(sec.lines) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "*%s*\n", sec.title)
+		for _, line := range sec.lines {
+			fmt.Fprintf(&b, "- %s\n", line)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n") + "\n\n"
 }
 
 // saveAsNoteBody renders the article as markdown for the created note.
@@ -379,7 +499,11 @@ func saveAsNoteBody(it *itemForSave) string {
 		b.WriteString(strings.Join(meta, " · "))
 		b.WriteString("\n\n")
 	}
-	if it.Summary != "" {
+	// The telegraph summary replaces the legacy reflection blockquote when
+	// present; both would be redundant.
+	if it.SummaryJSON != "" {
+		b.WriteString(summarySection(it.SummaryJSON))
+	} else if it.Summary != "" {
 		fmt.Fprintf(&b, "> %s\n\n", it.Summary)
 	}
 	if content != "" {
@@ -410,6 +534,7 @@ func (p *Plugin) actionSaveAsNote(db *sql.DB, noteID int64, params json.RawMessa
 		SELECT i.id, i.feed_id, COALESCE(NULLIF(f.name,''), f.url), i.title, i.url, i.author,
 		       i.published_at, i.summary, i.category, i.quality, i.tags_json,
 		       i.significance, i.negativity, i.personal_relevance, i.evaluated,
+		       i.summary_json,
 		       i.full_content, i.feed_content, i.full_status, i.saved_note_id
 		FROM ct_rss_items i
 		JOIN ct_rss_feeds f ON f.id = i.feed_id
@@ -418,6 +543,7 @@ func (p *Plugin) actionSaveAsNote(db *sql.DB, noteID int64, params json.RawMessa
 		&it.ID, &it.FeedID, &it.FeedName, &it.Title, &it.URL, &it.Author,
 		&it.PublishedAt, &it.Summary, &it.Category, &it.Quality, &tagsJSON,
 		&it.Significance, &it.Negativity, &it.PersonalRelevance, &evaluated,
+		&it.SummaryJSON,
 		&it.FullContent, &it.FeedContent, &it.FullStatus, &it.SavedNoteID,
 	)
 	if err == sql.ErrNoRows {

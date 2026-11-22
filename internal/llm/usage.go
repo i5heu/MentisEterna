@@ -35,6 +35,13 @@ var usageSpecs = []UsageSpec{
 		Wired:       true,
 	},
 	{
+		ID:          "rss_summarize",
+		Feature:     "rss_summarize",
+		Label:       "RSS Summarizer",
+		Description: "Summarizes fetched RSS articles for rss reader notes (telegraph-style F/O/Q lines grouped by what changed, why, and new implications)",
+		Wired:       true,
+	},
+	{
 		ID:          "title",
 		Feature:     "title",
 		Label:       "Note Title Generation",
@@ -108,6 +115,8 @@ func NewFeatureChatClient(usage string) *ChatClient {
 		client = NewSubTaskClient()
 	case "rss_classify":
 		client = NewRSSClassifierClient()
+	case "rss_summarize":
+		client = NewRSSSummarizerClient()
 	}
 	if client == nil {
 		return nil

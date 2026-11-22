@@ -30,45 +30,50 @@ type FeedStatus struct {
 
 // ItemView is one article in the view.
 type ItemView struct {
-	ID                     int64           `json:"id"`
-	FeedID                 int64           `json:"feed_id"`
-	FeedName               string          `json:"feed_name"`
-	Title                  string          `json:"title"`
-	URL                    string          `json:"url"`
-	Author                 string          `json:"author"`
-	PublishedAt            string          `json:"published_at"`
-	Summary                string          `json:"summary"`
-	Category               string          `json:"category"`
-	Tags                   []string        `json:"tags"`
-	Quality                int             `json:"quality"`
-	Significance           float64         `json:"significance"`
-	Negativity             float64         `json:"negativity"`
-	PersonalRelevance      float64         `json:"personal_relevance"`
-	AffectedNowDirect      float64         `json:"affected_now_direct"`
-	AffectedNowIndirect    float64         `json:"affected_now_indirect"`
-	AffectedFutureDirect   float64         `json:"affected_future_direct"`
-	AffectedFutureIndirect float64         `json:"affected_future_indirect"`
-	Points                 float64         `json:"points"`
-	Evaluated              bool            `json:"evaluated"`
-	ClassifyStatus         string          `json:"classify_status"`
-	PenaltyScore           float64         `json:"penalty_score"`
-	Penalty                json.RawMessage `json:"penalty"`
-	Banned                 bool            `json:"banned"`
-	State                  string          `json:"state"`
-	FullStatus             string          `json:"full_status"`
-	SavedNoteID            int64           `json:"saved_note_id"`
+	ID                     int64              `json:"id"`
+	FeedID                 int64              `json:"feed_id"`
+	FeedName               string             `json:"feed_name"`
+	Title                  string             `json:"title"`
+	URL                    string             `json:"url"`
+	Author                 string             `json:"author"`
+	PublishedAt            string             `json:"published_at"`
+	Summary                string             `json:"summary"`
+	Category               string             `json:"category"`
+	Tags                   []string           `json:"tags"`
+	Quality                int                `json:"quality"`
+	Significance           float64            `json:"significance"`
+	Negativity             float64            `json:"negativity"`
+	PersonalRelevance      float64            `json:"personal_relevance"`
+	AffectedNowDirect      float64            `json:"affected_now_direct"`
+	AffectedNowIndirect    float64            `json:"affected_now_indirect"`
+	AffectedFutureDirect   float64            `json:"affected_future_direct"`
+	AffectedFutureIndirect float64            `json:"affected_future_indirect"`
+	Points                 float64            `json:"points"`
+	Evaluated              bool               `json:"evaluated"`
+	StructuredSummary      *StructuredSummary `json:"structured_summary,omitempty"`
+	SummaryStatus          string             `json:"summary_status"`
+	ClassifyStatus         string             `json:"classify_status"`
+	PenaltyScore           float64            `json:"penalty_score"`
+	Penalty                json.RawMessage    `json:"penalty"`
+	Banned                 bool               `json:"banned"`
+	State                  string             `json:"state"`
+	FullStatus             string             `json:"full_status"`
+	SavedNoteID            int64              `json:"saved_note_id"`
 }
 
 // ViewCounts holds the reader's light statistics.
 type ViewCounts struct {
-	Total           int `json:"total"`
-	New             int `json:"new"`
-	Read            int `json:"read"`
-	Starred         int `json:"starred"`
-	Rejected        int `json:"rejected"`
-	PendingClassify int `json:"pending_classify"`
-	Evaluated       int `json:"evaluated"`   // classification carried an evaluation
-	Unevaluated     int `json:"unevaluated"` // done/pending/error rows without evaluation
+	Total            int `json:"total"`
+	New              int `json:"new"`
+	Read             int `json:"read"`
+	Starred          int `json:"starred"`
+	Rejected         int `json:"rejected"`
+	PendingClassify  int `json:"pending_classify"`
+	Evaluated        int `json:"evaluated"`         // classification carried an evaluation
+	Unevaluated      int `json:"unevaluated"`       // done/pending/error rows without evaluation
+	PendingSummarize int `json:"pending_summarize"` // awaiting the summarizer drain
+	Summarized       int `json:"summarized"`        // summary_json landed (status done)
+	Unsummarized     int `json:"unsummarized"`      // missing a summary (legacy ''/pending/error rows)
 }
 
 // View is the BuildView response for an rss note.
@@ -186,6 +191,7 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 		       i.affected_now_direct, i.affected_now_indirect,
 		       i.affected_future_direct, i.affected_future_indirect,
 		       i.points, i.evaluated,
+		       i.summary_json, i.summary_status,
 		       i.penalty_score, i.penalty_json, i.banned, i.state, i.full_status, i.saved_note_id
 		FROM ct_rss_items i
 		JOIN ct_rss_feeds f ON f.id = i.feed_id
@@ -199,7 +205,7 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 
 	for rows.Next() {
 		var it ItemView
-		var tagsJSON, penaltyJSON string
+		var tagsJSON, penaltyJSON, summaryJSON string
 		var banned, evaluated int
 		if err := rows.Scan(&it.ID, &it.FeedID, &it.Title, &it.URL, &it.Author, &it.PublishedAt,
 			&it.Category, &it.Summary, &tagsJSON, &it.Quality, &it.ClassifyStatus,
@@ -207,6 +213,7 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 			&it.AffectedNowDirect, &it.AffectedNowIndirect,
 			&it.AffectedFutureDirect, &it.AffectedFutureIndirect,
 			&it.Points, &evaluated,
+			&summaryJSON, &it.SummaryStatus,
 			&it.PenaltyScore, &penaltyJSON, &banned, &it.State, &it.FullStatus, &it.SavedNoteID); err != nil {
 			return nil, nil, counts, fmt.Errorf("rss: view: scan item: %w", err)
 		}
@@ -214,6 +221,7 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 		it.Penalty = json.RawMessage(penaltyJSON)
 		it.Banned = banned != 0
 		it.Evaluated = evaluated != 0
+		it.StructuredSummary = parseSummaryJSON(summaryJSON)
 		if idx, ok := byID[it.FeedID]; ok {
 			it.FeedName = feeds[idx].Name
 		}
@@ -237,6 +245,19 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 			// runs, items still waiting for their first evaluation — the
 			// "Evaluate missing" action targets exactly these.
 			counts.Unevaluated++
+		}
+		switch {
+		case it.SummaryStatus == "done":
+			counts.Summarized++
+		case it.SummaryStatus == "pending":
+			counts.PendingSummarize++
+			counts.Unsummarized++
+		case it.SummaryStatus == "disabled":
+			// auto_classify is off: summarization opted out entirely
+		default:
+			// '' (rows predating the summarizer) or errored runs — the
+			// "Summarize missing" action targets exactly these.
+			counts.Unsummarized++
 		}
 
 		if rejectedItem(it, threshold, minPoints) {

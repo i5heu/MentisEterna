@@ -102,7 +102,7 @@ tiny   = { model = "granite-4.1-3b-Q4_K_M", base_url = "" }
 # branch of the note hierarchy: the nearest llm_inferencer note binding the
 # usage (OpenRouter / Mistral / any OpenAI-compatible provider; four tiers:
 # big/middle/small/tiny) wins, and this config remains the fallback. rss_classify
-# is wired this way today — see docs/LLMInferencer.md.
+# and rss_summarize are wired this way today — see docs/LLMInferencer.md.
 [llm.features]
 title        = { tier = "tiny" }
 tags         = { tier = "medium" }
@@ -110,6 +110,7 @@ subtasks     = { tier = "smart" }
 ocr          = { tier = "medium" }
 stt          = { tier = "small" }
 rss_classify = { tier = "medium" }
+rss_summarize = { tier = "small" }
 
 [media]
 # Local cache directory for media files. Leave blank to disable media (and

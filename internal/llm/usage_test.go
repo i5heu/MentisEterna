@@ -96,11 +96,16 @@ func TestUsageCatalog(t *testing.T) {
 			t.Errorf("usage %q missing label/description", s.ID)
 		}
 	}
-	if !ids["rss_classify"] || !ids["title"] || !ids["tags"] || !ids["subtasks"] {
+	if !ids["rss_classify"] || !ids["rss_summarize"] || !ids["title"] || !ids["tags"] || !ids["subtasks"] {
 		t.Error("catalog missing a core usage")
 	}
 	if !UsageSpecByID("rss_classify").Wired {
 		t.Error("rss_classify must be wired")
+	}
+	// The summarizer usage must be wired (rss resolves it through the
+	// inferencer note) and distinct from the evaluation usage id.
+	if !UsageSpecByID("rss_summarize").Wired {
+		t.Error("rss_summarize must be wired")
 	}
 	if spec := UsageSpecByID("title"); spec == nil || spec.Wired {
 		t.Error("title must exist and be unwired for now")
@@ -126,6 +131,9 @@ func TestNewFeatureChatClient(t *testing.T) {
 		{"tags", func(c *ChatClient) bool { return c.Model == FeatureModel("tags") }},
 		{"subtasks", func(c *ChatClient) bool { return c.Model == FeatureModel("subtasks") }},
 		{"rss_classify", func(c *ChatClient) bool { return c.Model == FeatureModel("rss_classify") }},
+		// The summarizer must resolve to the small-tier model from the
+		// feature/tier system (its own usage id, its own call stats rows).
+		{"rss_summarize", func(c *ChatClient) bool { return c.Model == FeatureModel("rss_summarize") }},
 	}
 	for _, tc := range cases {
 		c := NewFeatureChatClient(tc.usage)

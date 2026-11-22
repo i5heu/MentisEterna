@@ -101,6 +101,7 @@ func feedServer(t *testing.T) *httptest.Server {
 func TestRefreshNoteEndToEnd(t *testing.T) {
 	withPrivateHosts(t)
 	stubClassifier(t, stubClassifyJSON)
+	stubSummarizer(t, nil, nil) // hermetic: the refresh also drains the summary queue
 	srv := feedServer(t)
 
 	p := notetype.Registry[PluginID].(*Plugin)
@@ -154,6 +155,23 @@ func TestRefreshNoteEndToEnd(t *testing.T) {
 	}
 	if itemSummary != "A significant global development with broad impact." {
 		t.Errorf("summary fallback = %q", itemSummary)
+	}
+	if !strings.Contains(summary, "2 summarized") {
+		t.Errorf("summary missing summarization: %q", summary)
+	}
+	// The summarize stage ran in the same refresh: both items carry a
+	// done structured summary from the stub.
+	var sumStatus, sumJSON string
+	if err := d.QueryRow(
+		`SELECT summary_status, summary_json FROM ct_rss_items WHERE item_key = 'rich-1'`,
+	).Scan(&sumStatus, &sumJSON); err != nil {
+		t.Fatalf("load summarized item: %v", err)
+	}
+	if sumStatus != "done" {
+		t.Errorf("rich-1 summary_status = %q, want done (refresh must drain)", sumStatus)
+	}
+	if s := parseSummaryJSON(sumJSON); s == nil || len(s.WhatChanged) == 0 {
+		t.Errorf("rich-1 summary_json = %q, want the canned stub digest", sumJSON)
 	}
 
 	// Items stored with expected content.
