@@ -276,6 +276,19 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Printf("plugin %s initialized", plugin.ID())
 	}
 
+	// Wire LLM call statistics into the plugin that records them
+	// (llm_inferencer): every chat completion the transport performs —
+	// tokens, routing source, model, latency — reports through the global
+	// sink into the ct_llm_inferencer_stats ledger, surfaced in the
+	// llm_inferencer note's view.
+	for _, plugin := range notetype.Registry {
+		if csr, ok := plugin.(notetype.CallStatsRecorder); ok {
+			csr.SetCallStatsDB(s.db.DB)
+			llm.SetCallStatsSink(csr.RecordCall)
+			log.Printf("plugin %s: llm call stats recorder wired", plugin.ID())
+		}
+	}
+
 	// Initialize the job system: upsert plugin cron jobs and start workers.
 	for _, plugin := range notetype.Registry {
 		pluginJobs := plugin.CronJobs()

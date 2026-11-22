@@ -143,13 +143,23 @@ configured now and activate with the code that wires them.
 binding for a usage — the per-usage "system default"
 (`{Tier, Model, BaseURL}`) shown in the inferencer note's UI.
 
+**Call statistics** also live at this level (`stats.go`): every
+`ChatClient.complete()` decodes the response's OpenAI-compatible `usage`
+block and reports one `CallStats` (usage, routing source, provider, model,
+tokens, latency, outcome) through a global sink — installed once at
+server startup, with no sink in standalone tools. Clients carry the
+routing tags: the feature factories tag themselves (`usage` +
+`ChatSourceConfig`), and the resolver tags remote clients (`note` +
+provider) and local pins (`local`). See §6.
+
 ## 4. Actions
 
 | action | what it does |
 |---|---|
-| `test` | One tiny chat completion ("Reply with the single word: OK") through the **exact production client** the resolver hands out — same transport, auth header, and retry policy. Params: optional `{tier}` or `{model}` (XOR; both empty = default tier). Returns `{ok, latency_ms, model, base_url, provider, reply, error}`. Failures carry the full dialed URL (`llm request to <url> returned 404: …`) — the first thing to check on an endpoint 404. |
+| `test` | One tiny chat completion ("Reply with the single word: OK") through the **exact production client** the resolver hands out — same transport, auth header, and retry policy. Params: optional `{tier}` or `{model}` (XOR; both empty = default tier). Returns `{ok, latency_ms, model, base_url, provider, reply, error}`. Failures carry the full dialed URL (`llm request to <url> returned 404: …`) — the first thing to check on an endpoint 404. Its real provider calls count in the statistics ledger under the pseudo usage `test` ("Connection Test"). |
 | `list_models` | `GET <base>/v1/models` (OpenAI-compatible shape; works for OpenRouter and Mistral). Feeds the frontend model datalist; capped at 500. Same base-URL normalization; errors include the dialed URL. |
 | `clear_api_key` | Deletes the stored key. Refresh strategy `reload_view` so open tabs update. |
+| `clear_stats` | Wipes the whole LLM call ledger (`ct_llm_inferencer_stats`) — every usage, local and remote. Dangerous, refresh `reload_view`. |
 
 ## 5. Wiring a new usage (the deep-paradigm recipe)
 
@@ -165,7 +175,55 @@ binding for a usage — the per-usage "system default"
 3. Flip the catalog entry to `Wired: true`. Any inferencer note that already
    maps the usage starts routing through it immediately.
 
-## 6. RSS classification (`rss_classify`) as wired
+Statistics come along for free: the tags are attached where the clients are
+created — the factories in `internal/llm/tiers.go` tag themselves
+(usage + `config` source), and `ResolveChat` tags its remote clients
+(usage + `note` source + provider) and local pins (usage + `local`). No
+call-site work needed.
+
+## 6. Statistics — the per-call ledger (`stats.go`)
+
+The note answers "what feature used how many tokens, and what ran locally
+vs remotely" from a **ledger of every chat completion in the app**, not
+from sampling or estimates:
+
+```
+ChatClient.complete()             internal/llm — decodes the backend's
+   │                              OpenAI-compatible `usage` block;
+   └─ llm.emitCallStats()         reports one CallStats per call (tokens,
+      │                           routing source, model, latency, outcomes)
+      └─ global sink ───────────► installed at server startup (server.Start):
+                                 notetype.CallStatsRecorder plugins get the
+                                 db handle + become the sink
+         └─ llminferencer.RecordCall()  best-effort INSERT into
+            ct_llm_inferencer_stats     (never blocks or fails a call)
+```
+
+- **One row per call**: usage, routing source (`note` = remote provider /
+  `local` = explicit pin / `config` = plain fallback), provider, base URL,
+  model, status (`ok`/`error` + trimmed error text), prompt/completion/
+  total tokens (as reported by the backend — zero when it omits the
+  `usage` block), and duration. Failures count as calls with zero tokens.
+- **The table is app-global and has no note_id FK** — the one deliberate
+  exception to the plugin-table rule: rows are recorded even when no
+  llm_inferencer note exists (config-source usages) and for usages that
+  never route through the note. The note *surfaces* the ledger; it does
+  not own its lifetime.
+- **Retention**: the `stats_retention` cron job (`@every 24h`) deletes rows
+  older than 90 days (`statsRetentionDays`); the view reports the window
+  (`first_recorded_at`/`last_recorded_at`).
+- **View block** (`View.Stats` — `loadStatsView`): aggregates per
+  usage×routing×model (calls, errors, token sums, average latency of ok
+  calls, last used), the last 15 raw calls, totals, and the **local
+  (local+config) vs remote (note) split**. Errors never fail the note
+  view — a warning is appended and the block degrades to empty.
+- **Frontend**: `LlmInferencerNoteType.vue` renders a "Usage statistics"
+  strip (calls/tokens totals + local↔remote share), the per-usage table,
+  and a collapsible recent-calls list; a confirmed **Clear statistics**
+  button fires the `clear_stats` action. Pure rendering helpers live in
+  `note-types/llm_inferencer/stats.js` (unit-tested).
+
+## 7. RSS classification (`rss_classify`) as wired
 
 `pkg/notetype/rss/classify.go` — the `newClassifier` seam:
 
@@ -181,7 +239,7 @@ Classification (cron batch + manual reclassify) resolves once per run.
 The inferencer note is global, so reader placement in the tree no longer
 matters; a `{local: true}` pin or no binding falls back to `config.toml`.
 
-## 7. Frontend
+## 8. Frontend
 
 `frontend/src/note-types/llm_inferencer/LlmInferencerNoteType.vue` (registry
 id `llm_inferencer`, manifest `singleton: true`):
@@ -209,7 +267,11 @@ id `llm_inferencer`, manifest `singleton: true`):
 - **Viewer**: provider badge, key-set chip, "unique · applies app-wide"
   chip, tier table, and a usage table with four columns: usage (with
   active/pending badge), this note's binding, the model it resolves to
-  via which source, and the config.toml system default. Warnings
+  via which source, and the config.toml system default. The **Usage
+  statistics** strip below it totals calls/tokens per usage with the
+  local↔remote routing badge and share, a per-usage×model table
+  (tokens in/out, average latency, last used), and a collapsible recent
+  calls list — powered by the pure helpers in `stats.js`. Warnings
   (incomplete bindings, endpoint overrides, legacy duplicate notes) and
   a connection test round it off.
 - The emitted payload strips empty tiers (backend validation rejects them)
@@ -220,7 +282,7 @@ id `llm_inferencer`, manifest `singleton: true`):
   the editor, and array-shaped values can never degrade into index keys
   ("0", "1", …).
 
-## 8. Security posture
+## 9. Security posture
 
 - The API key sits in `ct_llm_inferencer_config.api_key` — server-side only.
   It is excluded from every API response (`LoadConfig` masks it; views
@@ -231,7 +293,7 @@ id `llm_inferencer`, manifest `singleton: true`):
 - Provider endpoints are user-configured exactly like `[llm] base_url` in
   `config.toml` (same trust level — a single-user self-hosted app).
 
-## 9. Testing
+## 10. Testing
 
 - `go test ./pkg/notetype/llminferencer/` — plugin harness battery
   (manifest incl. singleton flag/config round-trip/view/actions) plus:
@@ -256,10 +318,27 @@ id `llm_inferencer`, manifest `singleton: true`):
 - `go test ./pkg/notetype/rss/` — the classifier seam stubs resolve
   through the global inferencer note end-to-end (model/endpoint/key from
   the note, config feature client before/without one).
-- `cd frontend && npx jest` — includes `llm_inferencer/__tests__/usages.test.js`:
-  the pure binding helpers (array-proof normalization, mode/binding shapes,
-  the emit whitelist, system-default formatting) guarding the exact
-  "unknown usage 1" failure class client-side.
+- `llminferencer/stats_test.go` (same package battery) — the ledger:
+  record→aggregate (one row per usage×routing×model with token sums,
+  error counts, and the local↔remote split), best-effort recording (nil
+  db, closed db, trimmed error payloads), the `clear_stats` action, the
+  retention sweep (only backdated rows die), the cron contract, and a
+  rapid property test: for arbitrary batches the aggregates must satisfy
+  totals = Σrows, local + remote = totals, per-group exactness, and
+  failed calls carrying zero tokens.
+- `internal/llm/stats_test.go` — emission at the transport: tokens flow
+  from the backend `usage` block into `CallStats` 1:1 on every outcome
+  (success with/without usage block, HTTP error, decode error, empty
+  choices, unreachable endpoint), factory tagging (`title`/`tags`/
+  `subtasks`/`rss_classify` + `config` source), sink-less and panicking
+  sinks (never break a call), concurrency (one record per call), and a
+  rapid pass-through property.
+- `cd frontend && npx jest` — includes `llm_inferencer/__tests__/usages.test.js`
+  (the pure binding helpers: array-proof normalization, mode/binding
+  shapes, the emit whitelist, system-default formatting — guarding the
+  exact "unknown usage 1" failure class client-side) and
+  `__tests__/stats.test.js` (`stats.js` rendering helpers: routing
+  classification, formatters, display rows, the section gate).
 
 Unknown-id tolerance (the contract added after the "unknown usage 1"
 incident): both server gates — `ValidateConfig` (via `dropUnknownIDs`) and

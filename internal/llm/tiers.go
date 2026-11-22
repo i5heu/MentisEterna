@@ -87,23 +87,27 @@ func FeatureBaseURL(feature string) string {
 
 // NewTitleClient returns a chat client bound to the title feature's tier.
 func NewTitleClient() *ChatClient {
-	return NewChatClient(FeatureBaseURL("title"), FeatureModel("title"))
+	return NewChatClient(FeatureBaseURL("title"), FeatureModel("title")).
+		TagUsage("title", ChatSourceConfig, "")
 }
 
 // NewAutoTaggerClient returns a chat client bound to the tags feature's tier.
 func NewAutoTaggerClient() *ChatClient {
-	return NewChatClient(FeatureBaseURL("tags"), FeatureModel("tags"))
+	return NewChatClient(FeatureBaseURL("tags"), FeatureModel("tags")).
+		TagUsage("tags", ChatSourceConfig, "")
 }
 
 // NewSubTaskClient returns a chat client bound to the subtasks feature's tier.
 func NewSubTaskClient() *ChatClient {
-	return NewChatClient(FeatureBaseURL("subtasks"), FeatureModel("subtasks"))
+	return NewChatClient(FeatureBaseURL("subtasks"), FeatureModel("subtasks")).
+		TagUsage("subtasks", ChatSourceConfig, "")
 }
 
 // NewRSSClassifierClient returns a chat client bound to the rss_classify
 // feature's tier (used by the rss note type's article classification).
 func NewRSSClassifierClient() *ChatClient {
-	return NewChatClient(FeatureBaseURL("rss_classify"), FeatureModel("rss_classify"))
+	return NewChatClient(FeatureBaseURL("rss_classify"), FeatureModel("rss_classify")).
+		TagUsage("rss_classify", ChatSourceConfig, "")
 }
 
 // NewTieredOCRClient returns an OCR client bound to the ocr feature's tier.

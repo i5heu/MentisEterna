@@ -47,6 +47,7 @@ Plugins may also implement these optional interfaces as needed:
 - `ViewBuilder` — `BuildView(ctx, db, userID, noteID) (any, error)` — build computed/derived view data
 - `ActionHandler` — `HandleAction(ctx, db, userID, noteID, actionID, params) (any, error)` — execute actions
 - `JobEnqueuer` — `SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []byte) (int64, error))` — lets a plugin's actions enqueue background jobs; the server injects the job manager's `Enqueue`
+- `CallStatsRecorder` — `SetCallStatsDB(db *sql.DB)` + `RecordCall(stats llm.CallStats)` — the app's LLM call ledger: the server injects the db at startup and installs `RecordCall` as the global sink every chat completion reports through (tokens, routing, latency). `RecordCall` must be concurrency-safe, non-blocking, error-swallowing, and never panic. Implemented by `llminferencer`
 
 **Capability declaration is mandatory**: if a plugin's `Manifest` declares `HasConfig=true`, the plugin MUST implement `ConfigValidator`, `ConfigSaver`, and `ConfigLoader`. Similarly for `HasView` (→ `ViewBuilder`) and `HasActions` (→ `ActionHandler`). The server validates this at startup and will `log.Fatal` on mismatch.
 
@@ -87,6 +88,15 @@ map + default tier). Only `rss_classify` is wired today; mappings for
 unwired usages are inert until their call site migrates (see
 docs/LLMInferencer.md §5). API-keyed chat clients skip the LocalAI
 idle-stop machinery.
+
+**Call statistics**: every chat completion in the app (any usage, local or
+remote, incl. the note's connection tests) reports through a global sink
+in `internal/llm` into the llm_inferencer-owned ledger
+`ct_llm_inferencer_stats` — per-call tokens (backend-reported), routing
+source (`note` remote / `local` pin / `config` fallback), model, latency,
+and errors. The note's view aggregates it (per usage×routing×model, recent
+calls, local↔remote split, 90-day retention via the `stats_retention` cron
+job; `clear_stats` action wipes it). See docs/LLMInferencer.md §6.
 
 ## MCP Endpoint
 
@@ -188,6 +198,7 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 
 - **Table names**: always prefix with `ct_<pluginID>_` (e.g. `ct_recipe_ingredients`).
 - **Foreign keys**: always `REFERENCES notes(id) ON DELETE CASCADE`.
+  Exception: app-global ledgers that the note only SURFACES (llm_inferencer's `ct_llm_inferencer_stats`: rows exist before/without the note — config-source calls — so theirs must not cascade away with it).
 - **Config shape consistency**: `ValidateConfig`, `SaveConfig`, and `LoadConfig` must all use the **same JSON structure**. Wrap arrays in an object: `{"items": [...]}` not `[...]`. The test harness catches shape mismatches automatically.
 - **Upserts in plugin tables**: DELETE old rows, then INSERT new ones. `INSERT OR REPLACE` with foreign keys can cause issues.
 - **Plugin actions (RPC)**: Declare actions in the `Manifest` (with `HasActions: true`) and implement `ActionHandler` on your plugin struct. The server automatically exposes `POST /notes/:id/actions/:actionID` and the legacy `POST /notes/:id/action`.
@@ -201,7 +212,7 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 | `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) + metadata fields | ConfigValidator, ConfigSaver, ConfigLoader |
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
 | `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
-| `pkg/notetype/llminferencer/` | `llm_inferencer` | The app's single LLM inference provider note (singleton: OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings (`{tier}`/`{model}`/`{local: true}` pin to config.toml); write-only API key; `ResolveChat(db, usage)` resolves globally, falling back to config.toml (the per-usage system defaults are shown in the view) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler |
+| `pkg/notetype/llminferencer/` | `llm_inferencer` | The app's single LLM inference provider note (singleton: OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings (`{tier}`/`{model}`/`{local: true}` pin to config.toml); write-only API key; `ResolveChat(db, usage)` resolves globally, falling back to config.toml (the per-usage system defaults are shown in the view); also owns the app-wide **LLM call statistics ledger** (`ct_llm_inferencer_stats`: per-call tokens/routing/model/latency/errors — 90-day retention cron, `clear_stats` action, aggregates + local↔remote split in the view) — see [docs/LLMInferencer.md](docs/LLMInferencer.md) §6 | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, CallStatsRecorder, CronJobs |
 | `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM classification (prompt resolved from the nearest `rss_prompt` note in the hierarchy) + ban words / penalty points typed in the reader note's body | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
 
 ## RSS Reader

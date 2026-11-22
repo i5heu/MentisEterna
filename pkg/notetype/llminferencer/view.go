@@ -67,7 +67,11 @@ type View struct {
 	DefaultTier    string      `json:"default_tier"`
 	Tiers          []TierView  `json:"tiers"`
 	Usages         []UsageView `json:"usages"`
-	Warnings       []string    `json:"warnings,omitempty"`
+	// Stats aggregates the app's LLM call ledger: what feature burned
+	// which tokens where (remote provider vs the local config.toml
+	// system) — see stats.go. Nil only without a database.
+	Stats    *StatsView `json:"stats,omitempty"`
+	Warnings []string   `json:"warnings,omitempty"`
 }
 
 // BuildView implements notetype.ViewBuilder.
@@ -86,13 +90,22 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 		return nil, err
 	}
 	if !ok {
-		return View{
+		view := View{
 			Provider:       ProviderOpenRouter,
 			ProviderLabel:  providerLabel(ProviderOpenRouter),
 			DefaultBaseURL: providerDefaultBaseURL[ProviderOpenRouter],
 			Tiers:          []TierView{},
 			Usages:         usageViews(nil, nil, nil),
-		}, nil
+		}
+		// The call ledger is app-wide — it exists even before this note
+		// has a config row.
+		stats, serr := loadStatsView(db)
+		if serr != nil {
+			view.Warnings = append(view.Warnings, fmt.Sprintf("statistics unavailable: %v", serr))
+			stats = emptyStatsView()
+		}
+		view.Stats = stats
+		return view, nil
 	}
 
 	var warnings []string
@@ -135,6 +148,12 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 		}
 	}
 
+	stats, serr := loadStatsView(db)
+	if serr != nil {
+		warnings = append(warnings, fmt.Sprintf("statistics unavailable: %v", serr))
+		stats = emptyStatsView()
+	}
+
 	return View{
 		Provider:       row.Provider,
 		ProviderLabel:  providerLabel(row.Provider),
@@ -144,6 +163,7 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 		DefaultTier:    row.DefaultTier,
 		Tiers:          tiers,
 		Usages:         usageViews(row.Usages, row.Tiers, &warnings),
+		Stats:          stats,
 		Warnings:       warnings,
 	}, nil
 }

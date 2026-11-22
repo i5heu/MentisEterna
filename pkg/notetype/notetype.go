@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/i5heu/MentisEterna/internal/llm"
 )
 
 // CronJob describes a background task registered by a plugin.
@@ -135,6 +137,18 @@ type ActionHandler interface {
 // server has registered as an ad-hoc job.
 type JobEnqueuer interface {
 	SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []byte) (int64, error))
+}
+
+// CallStatsRecorder is implemented by plugins that persist the app's LLM
+// chat-call statistics (tokens, routing, latency — llm_inferencer). The
+// server injects the app database at startup via SetCallStatsDB and
+// installs RecordCall as the global sink the chat transport
+// (internal/llm) reports every chat completion through. RecordCall must
+// tolerate concurrent calls, never block the transport, swallow its own
+// errors, and never panic.
+type CallStatsRecorder interface {
+	SetCallStatsDB(db *sql.DB)
+	RecordCall(stats llm.CallStats)
 }
 
 // ErrUnknownAction is returned by ActionHandler when the requested action is not recognised.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/i5heu/MentisEterna/internal/config"
@@ -131,7 +132,17 @@ type ChatClient struct {
 	// every request (remote providers). API-keyed clients are external
 	// endpoints: the LocalAI idle-stop machinery never fires against them.
 	APIKey string
-	http   *http.Client
+
+	// Telemetry tags (see stats.go): the app usage this client serves,
+	// which routing resolved it, and the binding provider's name. The
+	// usage-aware factories set them; generic clients stay untagged ("").
+	// Every chat call reports them alongside the backend-reported token
+	// counts to the global call-stats sink.
+	Usage    string
+	Source   string
+	Provider string
+
+	http *http.Client
 }
 
 // NewChatClient creates a chat client for the given base URL and model.
@@ -149,6 +160,17 @@ func NewChatClientWithKey(baseURL, model, apiKey string) *ChatClient {
 		APIKey:  apiKey,
 		http:    newLLMHTTPClient(),
 	}
+}
+
+// TagUsage labels the traffic this client generates for the app's LLM call
+// statistics: the usage id (see the usage catalog in usage.go), the routing
+// source (ChatSource*), and the binding provider's name ("" for local
+// routing). It mutates and returns the client for chaining.
+func (c *ChatClient) TagUsage(usage, source, provider string) *ChatClient {
+	c.Usage = usage
+	c.Source = source
+	c.Provider = provider
+	return c
 }
 
 // OpenAI-compatible embedding request/response types.
@@ -217,9 +239,44 @@ type chatCompletionResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`
 	} `json:"choices"`
+	Usage *chatUsage `json:"usage"`
 }
 
+// chatUsage is the OpenAI-compatible token accounting block of a chat
+// response; LocalAI, OpenRouter, and Mistral all report it. Backends may
+// omit it (nil) — the call is still counted, with zero tokens.
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// complete performs one chat exchange and reports it to the global call
+// stats sink (see stats.go): routing tags, backend-reported token usage,
+// latency, and the outcome — successful or not.
 func (c *ChatClient) complete(messages []chatMessage) (string, error) {
+	start := time.Now()
+	reply, usage, err := c.doComplete(messages)
+	stats := CallStats{
+		Usage:            c.Usage,
+		Source:           c.Source,
+		Provider:         c.Provider,
+		BaseURL:          c.BaseURL,
+		Model:            c.Model,
+		OK:               err == nil,
+		PromptTokens:     usage.promptTokens(),
+		CompletionTokens: usage.completionTokens(),
+		TotalTokens:      usage.totalTokens(),
+		DurationMS:       time.Since(start).Milliseconds(),
+	}
+	if err != nil {
+		stats.Error = err.Error()
+	}
+	emitCallStats(stats)
+	return reply, err
+}
+
+func (c *ChatClient) doComplete(messages []chatMessage) (string, *chatUsage, error) {
 	reqBody := chatCompletionRequest{
 		Model:    c.Model,
 		Messages: messages,
@@ -227,13 +284,13 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return "", nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	url := OpenAIEndpoint(c.BaseURL, "chat/completions")
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		return "", nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
@@ -241,7 +298,7 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("llm request: %w", err)
+		return "", nil, fmt.Errorf("llm request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -249,19 +306,42 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 		body, _ := io.ReadAll(resp.Body)
 		// The URL is part of the message: 404s are presque always base-URL
 		// mismatches, and the called endpoint is the first thing to check.
-		return "", fmt.Errorf("llm request to %s returned %d: %s", url, resp.StatusCode, string(body))
+		return "", nil, fmt.Errorf("llm request to %s returned %d: %s", url, resp.StatusCode, string(body))
 	}
 
 	var cr chatCompletionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return "", nil, fmt.Errorf("decode response: %w", err)
 	}
 
 	if len(cr.Choices) == 0 {
-		return "", fmt.Errorf("llm returned no choices")
+		return "", nil, fmt.Errorf("llm returned no choices")
 	}
 
-	return cr.Choices[0].Message.Content, nil
+	return cr.Choices[0].Message.Content, cr.Usage, nil
+}
+
+// promptTokens/completionTokens/totalTokens read the optional usage block
+// without nil checks at every call site.
+func (u *chatUsage) promptTokens() int {
+	if u == nil {
+		return 0
+	}
+	return u.PromptTokens
+}
+
+func (u *chatUsage) completionTokens() int {
+	if u == nil {
+		return 0
+	}
+	return u.CompletionTokens
+}
+
+func (u *chatUsage) totalTokens() int {
+	if u == nil {
+		return 0
+	}
+	return u.TotalTokens
 }
 
 // GenerateTitle asks the LLM to produce a short, concise title given a note's

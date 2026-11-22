@@ -91,23 +91,28 @@ func KnownUsageIDs() []string {
 // NewFeatureChatClient builds the config.toml-bound chat client for a usage
 // (feature tier system, [llm.tiers] / [llm.features]). It returns nil when
 // the usage is unknown or not a chat-type feature — callers must treat nil
-// as "no client".
+// as "no client". The client carries its usage and the "config" routing
+// tag for call statistics (llm_inferencer's local pins re-tag it "local").
 func NewFeatureChatClient(usage string) *ChatClient {
 	spec := UsageSpecByID(usage)
 	if spec == nil {
 		return nil
 	}
+	var client *ChatClient
 	switch spec.Feature {
 	case "title":
-		return NewTitleClient()
+		client = NewTitleClient()
 	case "tags":
-		return NewAutoTaggerClient()
+		client = NewAutoTaggerClient()
 	case "subtasks":
-		return NewSubTaskClient()
+		client = NewSubTaskClient()
 	case "rss_classify":
-		return NewRSSClassifierClient()
+		client = NewRSSClassifierClient()
 	}
-	return nil
+	if client == nil {
+		return nil
+	}
+	return client.TagUsage(usage, ChatSourceConfig, "")
 }
 
 // SystemDefault describes what the config.toml feature/tier system serves for

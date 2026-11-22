@@ -28,6 +28,8 @@ package llminferencer
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"sync"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
@@ -66,13 +68,26 @@ func init() {
 }
 
 // Plugin is the "llm_inferencer" note type.
-type Plugin struct{}
+type Plugin struct {
+	// Stats sink state (notetype.CallStatsRecorder): the db the server
+	// injects at startup; every chat call in the app reports through
+	// RecordCall into ct_llm_inferencer_stats (see stats.go).
+	statsMu sync.RWMutex
+	statsDB *sql.DB
+}
 
 // ID implements notetype.Plugin.
 func (p *Plugin) ID() string { return PluginID }
 
 // InitSchema creates the plugin tables. The config row (including the API
 // key) and tier models cascade away with their note.
+//
+// The stats table is the ONE deliberate exception to the note_id-FK rule:
+// it is the app-wide LLM call ledger — rows are recorded even when no
+// llm_inferencer note exists and for usages that never route through this
+// note (local/config sources, title/tags/subtasks on the config.toml
+// system), so it must not cascade away with the singleton note. The llm
+// note SURFACES the ledger; it does not own its lifetime.
 func (p *Plugin) InitSchema(db *sql.DB) error {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS ct_llm_inferencer_config (
@@ -93,6 +108,27 @@ func (p *Plugin) InitSchema(db *sql.DB) error {
 			PRIMARY KEY (note_id, tier),
 			FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
 		);
+
+		CREATE TABLE IF NOT EXISTS ct_llm_inferencer_stats (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			created_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			usage             TEXT    NOT NULL DEFAULT '',
+			source            TEXT    NOT NULL DEFAULT '',
+			provider          TEXT    NOT NULL DEFAULT '',
+			base_url          TEXT    NOT NULL DEFAULT '',
+			model             TEXT    NOT NULL DEFAULT '',
+			status            TEXT    NOT NULL DEFAULT 'ok',
+			error             TEXT    NOT NULL DEFAULT '',
+			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens      INTEGER NOT NULL DEFAULT 0,
+			duration_ms       INTEGER NOT NULL DEFAULT 0
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_ct_llm_inferencer_stats_usage
+			ON ct_llm_inferencer_stats(usage);
+		CREATE INDEX IF NOT EXISTS idx_ct_llm_inferencer_stats_created
+			ON ct_llm_inferencer_stats(created_at);
 	`); err != nil {
 		return err
 	}
@@ -161,6 +197,19 @@ func (p *Plugin) Manifest() notetype.Manifest {
 				RefreshStrategy: "reload_view",
 				SuccessMessage:  "API key cleared",
 			},
+			{
+				ID:          "clear_stats",
+				Label:       "Clear Statistics",
+				Description: "Delete ALL recorded LLM call statistics (tokens, routing, latency) — every usage, local and remote. Irreversible",
+				ParamsSchema: json.RawMessage(`{
+					"type": "object",
+					"properties": {},
+					"required": []
+				}`),
+				Dangerous:       true,
+				RefreshStrategy: "reload_view",
+				SuccessMessage:  "Statistics cleared",
+			},
 		},
 		HasConfig:  true,
 		HasView:    true,
@@ -169,8 +218,24 @@ func (p *Plugin) Manifest() notetype.Manifest {
 	}
 }
 
-// CronJobs implements notetype.Plugin.
-func (p *Plugin) CronJobs() []notetype.CronJob { return nil }
+// CronJobs implements notetype.Plugin: one daily sweep that keeps the LLM
+// call ledger (ct_llm_inferencer_stats) bounded — raw rows older than the
+// retention window (90 days) are deleted.
+func (p *Plugin) CronJobs() []notetype.CronJob {
+	return []notetype.CronJob{
+		{
+			Name:     "stats_retention",
+			Schedule: "@every 24h",
+			Task: func(db *sql.DB, _ []byte) (string, error) {
+				n, err := sweepStats(db)
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("deleted %d llm call stats rows older than %d days", n, statsRetentionDays), nil
+			},
+		},
+	}
+}
 
 // validTier reports whether a tier name is one of the four capability tiers.
 func validTier(tier string) bool {

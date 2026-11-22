@@ -22,18 +22,20 @@ type ResolvedChat struct {
 	Warning          string `json:"warning,omitempty"`
 }
 
-// Source values for ResolvedChat.Source.
+// Source values for ResolvedChat.Source (and the stats ledger): the
+// canonical strings live in internal/llm so client tags and persisted
+// rows can never drift apart.
 const (
 	// SourceNote: the llm_inferencer note bound the usage to one of its
 	// remote provider tiers / models.
-	SourceNote = "note"
+	SourceNote = llm.ChatSourceNote
 	// SourceConfig: nothing bound the usage — the config.toml
 	// feature/tier system (the local LLM) serves it.
-	SourceConfig = "config"
+	SourceConfig = llm.ChatSourceConfig
 	// SourceLocal: the note explicitly pinned the usage to the config.toml
 	// feature/tier system with a {local: true} usage binding — the user
 	// chose the local LLM for this usage.
-	SourceLocal = "local"
+	SourceLocal = llm.ChatSourceLocal
 )
 
 // inferencerRow is the server-side view of one inferencer note's persisted
@@ -192,6 +194,9 @@ func ResolveChat(db *sql.DB, usage string) (*llm.ChatClient, ResolvedChat, error
 				if client == nil {
 					return nil, res, fmt.Errorf("llm_inferencer: unknown usage %q", usage)
 				}
+				// NewFeatureChatClient tags (usage, "config"); the explicit
+				// pin is its own routing source in the stats ledger.
+				client.TagUsage(usage, SourceLocal, "")
 				res = ResolvedChat{
 					Usage:            usage,
 					Source:           SourceLocal,
@@ -207,7 +212,10 @@ func ResolveChat(db *sql.DB, usage string) (*llm.ChatClient, ResolvedChat, error
 			if err != nil {
 				return nil, res, err
 			}
-			client := llm.NewChatClientWithKey(baseURL, b.Model, row.Key)
+			// Tagged for the call ledger: this is a remote, provider-bound
+			// call of the app usage.
+			client := llm.NewChatClientWithKey(baseURL, b.Model, row.Key).
+				TagUsage(usage, SourceNote, row.Provider)
 			res = ResolvedChat{
 				Usage:            usage,
 				Source:           SourceNote,

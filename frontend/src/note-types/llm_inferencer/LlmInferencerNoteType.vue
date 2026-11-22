@@ -90,6 +90,163 @@
                 </tbody>
             </table>
 
+            <h4 class="infx-sub">
+                Usage statistics
+                <button
+                    class="btn-ghost btn-sm infx-sub-btn infx-danger"
+                    :disabled="busy || !statsHas"
+                    title="Delete every recorded LLM call statistic — all usages, local and remote. Irreversible"
+                    @click="clearStats"
+                >
+                    Clear statistics
+                </button>
+            </h4>
+            <p class="infx-help">
+                Every LLM chat call in the app is recorded here: which usage
+                (feature) fired it, how many tokens the serving backend
+                reported, where it was routed — remotely through this note's
+                provider or locally on the config.toml system — and how
+                fast it answered. Raw rows are kept for
+                {{ statsRetentionDays }} days.
+            </p>
+
+            <div v-if="statsHas" class="infx-stats-strip">
+                <div class="infx-stat">
+                    <span class="infx-stat-n mono">{{ fmtNum(statsTotalCalls) }}</span>
+                    <span class="infx-stat-l">
+                        calls
+                        <span v-if="statsView.totals.errors" class="infx-err-inline">
+                            ({{ fmtNum(statsView.totals.errors) }} failed)</span
+                        >
+                    </span>
+                </div>
+                <div class="infx-stat">
+                    <span class="infx-stat-n mono">{{ fmtTokens(statsTotalTokens) }}</span>
+                    <span class="infx-stat-l">tokens total</span>
+                </div>
+                <div class="infx-stat">
+                    <span class="infx-stat-n mono">{{ fmtTokens(statsView.totals.prompt_tokens) }}</span>
+                    <span class="infx-stat-l">prompt</span>
+                </div>
+                <div class="infx-stat">
+                    <span class="infx-stat-n mono">{{
+                        fmtTokens(statsView.totals.completion_tokens)
+                    }}</span>
+                    <span class="infx-stat-l">completion</span>
+                </div>
+                <div class="infx-split">
+                    <span class="infx-badge infx-badge-provider"
+                        >Remote {{ fmtNum(statsView.remote.calls) }} calls ·
+                        {{ fmtTokens(statsView.remote.total_tokens) }} tokens
+                        <template v-if="remoteTokenShare">({{ remoteTokenShare }} of tokens)</template>
+                    </span>
+                    <span class="infx-badge infx-badge-ok"
+                        >Local {{ fmtNum(statsView.local.calls) }} calls ·
+                        {{ fmtTokens(statsView.local.total_tokens) }} tokens
+                        <template v-if="localTokenShare">({{ localTokenShare }} of tokens)</template>
+                    </span>
+                </div>
+            </div>
+            <p v-else class="infx-help infx-muted">
+                No LLM calls recorded yet — token usage, routing, and
+                latency per app feature show up here as calls happen.
+            </p>
+
+            <table v-if="statsView && statsRows.length" class="infx-table">
+                <thead>
+                    <tr>
+                        <th>Usage</th>
+                        <th>Routed</th>
+                        <th>Model</th>
+                        <th>Calls</th>
+                        <th>Tokens in / out</th>
+                        <th>Total</th>
+                        <th>Ø time</th>
+                        <th>Last used</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="r in statsRows" :key="r.key">
+                        <td>
+                            {{ r.label }}
+                            <span
+                                v-if="r.errors"
+                                class="infx-tag infx-tag-err"
+                                :title="'failed calls recorded for this row'"
+                                >{{ fmtNum(r.errors) }} ✕</span
+                            >
+                        </td>
+                        <td>
+                            <span
+                                class="infx-badge"
+                                :class="
+                                    r.routing === 'remote'
+                                        ? 'infx-badge-provider'
+                                        : 'infx-badge-ok'
+                                "
+                                :title="sourceLabel(r.source)"
+                                >{{ r.routing }}</span
+                            >
+                        </td>
+                        <td class="mono">
+                            <template v-if="r.provider">{{
+                                r.provider
+                            }}</template>
+                            <template v-else>config.toml</template>
+                            · {{ r.model }}
+                        </td>
+                        <td class="mono">{{ fmtNum(r.calls) }}</td>
+                        <td class="mono">
+                            {{ fmtTokens(r.promptTokens) }} /
+                            {{ fmtTokens(r.completionTokens) }}
+                        </td>
+                        <td class="mono">{{ fmtTokens(r.totalTokens) }}</td>
+                        <td class="mono infx-muted">{{
+                            fmtDuration(r.avgDurationMS)
+                        }}</td>
+                        <td class="infx-muted infx-nowrap">{{
+                            fmtWhen(r.lastUsedAt)
+                        }}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <details
+                v-if="statsView && statsView.recent && statsView.recent.length"
+                class="infx-recent"
+            >
+                <summary>
+                    Recent calls ({{ statsView.recent.length }})
+                </summary>
+                <ul class="infx-recent-list">
+                    <li
+                        v-for="(c, i) in statsView.recent"
+                        :key="i"
+                        :class="{ 'infx-recent-err': !c.ok }"
+                    >
+                        <span class="infx-muted mono">{{ fmtWhen(c.at) }}</span>
+                        <span>{{ c.label || c.usage }}</span>
+                        <span
+                            class="infx-badge"
+                            :class="
+                                routingOf(c.source) === 'remote'
+                                    ? 'infx-badge-provider'
+                                    : 'infx-badge-ok'
+                            "
+                            >{{ routingOf(c.source) }}</span
+                        >
+                        <span class="mono">{{ c.model }}</span>
+                        <span class="mono infx-muted"
+                            >{{ fmtTokens(c.total_tokens) }} tok ·
+                            {{ fmtDuration(c.duration_ms) }}</span
+                        >
+                        <span v-if="!c.ok" class="infx-err-inline mono">{{
+                            c.error
+                        }}</span>
+                    </li>
+                </ul>
+            </details>
+
             <ul v-if="warnings.length" class="infx-warnings">
                 <li v-for="w in warnings" :key="w">{{ w }}</li>
             </ul>
@@ -358,6 +515,17 @@ import {
     emitUsages,
     systemDefaultText,
 } from "./usages.js";
+import {
+    analyticsRows,
+    fmtDuration,
+    fmtNum,
+    fmtTokens,
+    fmtWhen,
+    hasStats,
+    percentOf,
+    routingOf,
+    sourceLabel,
+} from "./stats.js";
 
 /**
  * LLM Inferencer note-type component.
@@ -602,6 +770,69 @@ const usageRows = computed(() => {
 });
 
 const warnings = computed(() => view.value?.warnings || []);
+
+// --- statistics (the call ledger the server aggregates into the view) ---
+const statsView = computed(() => view.value?.stats || null);
+const statsHas = computed(() => hasStats(statsView.value));
+const statsRows = computed(() => analyticsRows(statsView.value?.rows));
+const statsTotalCalls = computed(
+    () => Number(statsView.value?.totals?.calls) || 0,
+);
+const statsTotalTokens = computed(
+    () => Number(statsView.value?.totals?.total_tokens) || 0,
+);
+const statsRetentionDays = computed(
+    () => statsView.value?.retention_days || 90,
+);
+// Local↔remote share of the token budget ("" when nothing ran yet).
+const remoteTokenShare = computed(() =>
+    percentOf(statsView.value?.remote?.total_tokens, statsTotalTokens.value),
+);
+const localTokenShare = computed(() =>
+    percentOf(statsView.value?.local?.total_tokens, statsTotalTokens.value),
+);
+
+// Clear the app's LLM call ledger via the clear_stats action, then patch
+// the local view copy to zeroed aggregates (the server view refreshes on
+// the next note load).
+function zeroSplit() {
+    return {
+        calls: 0,
+        errors: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+    };
+}
+
+async function clearStats() {
+    if (
+        !window.confirm(
+            "Delete ALL recorded LLM call statistics?\n" +
+                "Every app feature's tokens, routing, and latency history — " +
+                "local and remote — will be gone. This cannot be undone.",
+        )
+    ) {
+        return;
+    }
+    const res = await runAction("clear_stats", {});
+    if (!res) return;
+    if (view.value) {
+        view.value = {
+            ...view.value,
+            stats: {
+                rows: [],
+                recent: [],
+                totals: zeroSplit(),
+                local: zeroSplit(),
+                remote: zeroSplit(),
+                first_recorded_at: "",
+                last_recorded_at: "",
+                retention_days: statsRetentionDays.value,
+            },
+        };
+    }
+}
 
 // Emit only meaningful fields: the backend rejects tier entries without a
 // model, the local draft always renders all four tiers, and the write-only
@@ -899,6 +1130,74 @@ async function clearApiKey() {
     gap: 0.3rem;
     padding: 0.45rem 0;
     border-bottom: 1px solid rgba(127, 127, 127, 0.1);
+}
+/* --- statistics block --- */
+.infx-stats-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.45rem 0;
+    font-size: 0.8rem;
+}
+.infx-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+.infx-stat-n {
+    font-size: 1.05rem;
+}
+.infx-stat-l {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.65;
+}
+.infx-split {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-left: auto;
+}
+.infx-tag-err {
+    background: rgba(200, 80, 70, 0.25);
+    color: #e06c60;
+}
+.infx-err-inline {
+    color: #e06c60;
+}
+.infx-nowrap {
+    white-space: nowrap;
+}
+.infx-danger {
+    color: #e06c60;
+}
+.infx-recent {
+    font-size: 0.78rem;
+    opacity: 0.9;
+}
+.infx-recent summary {
+    cursor: pointer;
+    opacity: 0.75;
+    margin: 0.35rem 0;
+}
+.infx-recent-list {
+    list-style: none;
+    margin: 0.25rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.infx-recent-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.infx-recent-err {
+    color: #e06c60;
 }
 .infx-usage-head {
     display: flex;

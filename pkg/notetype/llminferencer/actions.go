@@ -41,6 +41,8 @@ func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteI
 		return p.actionListModels(ctx, db, noteID)
 	case "clear_api_key":
 		return p.actionClearAPIKey(ctx, db, noteID)
+	case "clear_stats":
+		return p.actionClearStats(ctx, db)
 	default:
 		return nil, notetype.ErrUnknownAction
 	}
@@ -105,8 +107,10 @@ func (p *Plugin) actionTest(ctx context.Context, db *sql.DB, noteID int64, param
 	}
 
 	// The production client: same transport, auth header, and retry policy
-	// ResolveChat hands to consumers.
-	client := llm.NewChatClientWithKey(baseURL, model, row.Key)
+	// ResolveChat hands to consumers. Tagged as a connection test so its
+	// (real, billable) provider calls show up in the ledger's statistics.
+	client := llm.NewChatClientWithKey(baseURL, model, row.Key).
+		TagUsage(statsUsageTest, SourceNote, row.Provider)
 	start := time.Now()
 	reply, err := client.Complete([]llm.ChatMessage{{Role: "user", Content: "Reply with the single word: OK"}})
 	res := TestResult{
@@ -164,6 +168,17 @@ func (p *Plugin) actionClearAPIKey(ctx context.Context, db *sql.DB, noteID int64
 		return nil, fmt.Errorf("llm_inferencer: clear api key: %w", err)
 	}
 	return map[string]any{"cleared": true, "api_key_set": false}, nil
+}
+
+// actionClearStats wipes the LLM call ledger (the clear_stats action).
+func (p *Plugin) actionClearStats(ctx context.Context, db *sql.DB) (any, error) {
+	if db == nil {
+		return nil, &notetype.BadRequestError{Message: "llm_inferencer: clear_stats requires a database"}
+	}
+	if err := clearStats(db); err != nil {
+		return nil, err
+	}
+	return map[string]any{"cleared": true}, nil
 }
 
 // --- provider HTTP helpers ---
