@@ -177,6 +177,19 @@ func (p *Plugin) Manifest() notetype.Manifest {
 				SuccessMessage:  "Item state updated",
 			},
 			{
+				ID:          "get_item",
+				Label:       "View Article",
+				Description: "Return one article with its stored content (extracted full text, falling back to the feed snippet) for inline reading",
+				ParamsSchema: json.RawMessage(`{
+					"type": "object",
+					"properties": {"item_id": {"type": "integer"}},
+					"required": ["item_id"]
+				}`),
+				Dangerous:       false,
+				RefreshStrategy: "none",
+				SuccessMessage:  "",
+			},
+			{
 				ID:          "reclassify",
 				Label:       "Reclassify Item",
 				Description: "Re-run the LLM classification for one article",

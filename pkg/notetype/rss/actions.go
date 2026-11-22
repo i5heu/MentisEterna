@@ -87,13 +87,100 @@ func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteI
 		return p.actionSaveAsNote(db, noteID, params)
 	case "set_item_state":
 		return actionSetItemState(db, noteID, params)
+	case "get_item":
+		return actionGetItem(db, noteID, params)
 	case "reclassify":
 		return p.actionReclassify(ctx, db, noteID, params)
 	case "reapply_rules":
-		return nil, &notetype.BadRequestError{Message: "rss: rules are not implemented yet"}
+		return actionReapplyRules(db, noteID)
 	default:
 		return nil, notetype.ErrUnknownAction
 	}
+}
+
+// ArticleDetail is the get_item action response: one article with its
+// content for inline reading. Content is deliberately NOT part of the view
+// payload (200 articles × up to 200 KB would dwarf it) — the card fetches
+// it on demand through this action.
+type ArticleDetail struct {
+	ID             int64           `json:"item_id"`
+	FeedID         int64           `json:"feed_id"`
+	FeedName       string          `json:"feed_name"`
+	Title          string          `json:"title"`
+	URL            string          `json:"url"`
+	Author         string          `json:"author"`
+	PublishedAt    string          `json:"published_at"`
+	FetchedAt      string          `json:"fetched_at"`
+	Content        string          `json:"content"`
+	ContentSource  string          `json:"content_source"` // extracted | feed | "" (none stored)
+	FullStatus     string          `json:"full_status"`    // none|fetched|failed|too_big
+	Category       string          `json:"category"`
+	Summary        string          `json:"summary"`
+	Tags           []string        `json:"tags"`
+	Quality        int             `json:"quality"`
+	ClassifyStatus string          `json:"classify_status"`
+	ClassifyError  string          `json:"classify_error"`
+	PenaltyScore   float64         `json:"penalty_score"`
+	Penalty        json.RawMessage `json:"penalty"`
+	Banned         bool            `json:"banned"`
+	State          string          `json:"state"`
+	SavedNoteID    int64           `json:"saved_note_id"`
+}
+
+// actionGetItem returns one article with the stored content for inline
+// reading: the extracted full content if present, else the feed-provided
+// snippet.
+func actionGetItem(db *sql.DB, noteID int64, params json.RawMessage) (any, error) {
+	var pr struct {
+		ItemID int64 `json:"item_id"`
+	}
+	if err := json.Unmarshal(params, &pr); err != nil {
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: invalid params: %v", err)}
+	}
+	if pr.ItemID <= 0 {
+		return nil, &notetype.BadRequestError{Message: "rss: item_id is required"}
+	}
+
+	var it ArticleDetail
+	var fullContent, feedContent, tagsJSON, penaltyJSON string
+	var banned int
+	err := db.QueryRow(`
+		SELECT i.id, i.feed_id, COALESCE(NULLIF(f.name,''), ''), i.title, i.url, i.author,
+		       i.published_at, i.fetched_at, i.full_status,
+		       i.full_content, i.feed_content,
+		       i.category, i.summary, i.tags_json, i.quality,
+		       i.classify_status, i.classify_error,
+		       i.penalty_score, i.penalty_json, i.banned, i.state, i.saved_note_id
+		FROM ct_rss_items i
+		JOIN ct_rss_feeds f ON f.id = i.feed_id
+		WHERE i.id = ? AND f.note_id = ?
+	`, pr.ItemID, noteID).Scan(
+		&it.ID, &it.FeedID, &it.FeedName, &it.Title, &it.URL, &it.Author,
+		&it.PublishedAt, &it.FetchedAt, &it.FullStatus,
+		&fullContent, &feedContent,
+		&it.Category, &it.Summary, &tagsJSON, &it.Quality,
+		&it.ClassifyStatus, &it.ClassifyError,
+		&it.PenaltyScore, &penaltyJSON, &banned, &it.State, &it.SavedNoteID,
+	)
+	if err == sql.ErrNoRows {
+		return nil, &notetype.BadRequestError{Message: fmt.Sprintf("rss: item %d not found in note %d", pr.ItemID, noteID)}
+	} else if err != nil {
+		return nil, fmt.Errorf("rss: load item: %w", err)
+	}
+	it.Tags = parseTagsJSON(tagsJSON)
+	it.Penalty = json.RawMessage(penaltyJSON)
+	it.Banned = banned != 0
+
+	// Content preference matches classification: extracted full content,
+	// falling back to the feed-provided snippet.
+	switch {
+	case fullContent != "":
+		it.Content, it.ContentSource = fullContent, "extracted"
+	case feedContent != "":
+		it.Content, it.ContentSource = feedContent, "feed"
+	}
+
+	return &it, nil
 }
 
 // actionRefresh enqueues the refresh_feeds job for this reader (force),

@@ -300,6 +300,7 @@ oldest-beyond-cap.
 | `refresh` | `{}` | Enqueue `rss/refresh_feeds_now` `{note_id}`; returns `{run_id}` |
 | `save_as_note` | `{item_id}` | Create child note (type `standard`) under the reader note: INSERT `notes` (title, type, parent) + `updates` (markdown: link/author/date, summary, content); enqueue `_system/vss_index` `{note_id}`; set `saved_note_id`, state→`read`; returns `{note_id}` for navigation |
 | `set_item_state` | `{item_id, state}` | `read` / `new` / `starred` / `rejected` (manual reject) |
+| `get_item` | `{item_id}` | Return one article with its stored content for inline reading — `full_content` preferred (`content_source:"extracted"`), `feed_content` fallback (`"feed"`), empty when neither stored — plus the full metadata the view omits. Content is kept out of the view payload (size) and loaded on demand by the reader modal; `RefreshStrategy: none` (pure read, no ws notify); rejected items stay viewable |
 | `reclassify` | `{item_id}` | Re-run classification synchronously (60 s bound) with the currently-scoped prompt |
 | `reapply_rules` | `{}` | Re-read body rules, recompute penalty/banned for all items (no LLM); returns counts |
 
@@ -340,6 +341,13 @@ Frontend (`frontend/src/note-types/rss/`):
   toggle; "Reapply rules" button after body edits. Prompt status chip: shows
   which prompt is in scope or nudges "add an RSS Prompt note" (add-child
   flow with the type picker).
+- **Article viewer**: clicking a card's title (or its "Read" button) opens
+  a reading modal that loads the article's stored content on demand through
+  the `get_item` action — the extracted full text, else the feed snippet
+  (labelled as such), else a link to the original. The modal carries the
+  item's meta chips (feed, author, date, classification) and the same
+  actions as the card (Star / Read / Save as Note / Reclassify); Esc or
+  Close dismisses. Rejected (dimmed) cards are readable the same way.
 - **Editor**: feeds add/remove/edit (url, name, enabled), interval,
   threshold, full-content, retention/cap inputs, classify toggle
   (`usePluginAction` / `useNoteTypeDraft` composables; hydrate-on-`note.id`

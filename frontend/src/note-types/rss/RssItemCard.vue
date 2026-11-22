@@ -1,17 +1,22 @@
 <template>
     <div class="rss-item" :class="{ 'rss-item-dimmed': dimmed }">
         <div class="rss-item-head">
+            <button
+                class="rss-item-title"
+                title="Read the stored article content"
+                @click="$emit('open')"
+            >
+                {{ item.title || "(untitled)" }}
+            </button>
             <a
                 v-if="item.url"
-                class="rss-item-title"
+                class="rss-ext"
                 :href="item.url"
                 target="_blank"
                 rel="noopener noreferrer"
-                >{{ item.title || "(untitled)" }}</a
+                title="Open the original page in a new tab"
+                >↗</a
             >
-            <span v-else class="rss-item-title rss-item-title-plain">{{
-                item.title || "(untitled)"
-            }}</span>
             <button
                 v-if="item.state === 'starred'"
                 class="btn-ghost btn-sm rss-star"
@@ -69,6 +74,14 @@
             <button
                 class="btn-ghost btn-sm"
                 :disabled="busy"
+                @click="$emit('open')"
+                title="Read the stored article content"
+            >
+                Read
+            </button>
+            <button
+                class="btn-ghost btn-sm"
+                :disabled="busy"
                 @click="$emit('save')"
                 :title="item.saved_note_id ? 'Already saved as a note' : 'Save this article as a real child note'"
             >
@@ -110,7 +123,7 @@ const props = defineProps({
     dimmed: { type: Boolean, default: false },
 });
 
-defineEmits(["mark", "reclassify", "save"]);
+defineEmits(["open", "mark", "reclassify", "save"]);
 
 const penaltyTooltip = computed(() => {
     const entries = Array.isArray(props.item.penalty)
@@ -156,14 +169,23 @@ const publishedLabel = computed(() => {
 }
 
 .rss-item-title {
-    font-weight: 600;
-    text-decoration: none;
-    color: var(--font-color, inherit);
     flex: 1;
+    font-weight: 600;
+    font-size: inherit;
+    font-family: inherit;
+    color: var(--font-color, inherit);
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
 }
 
-.rss-item-title-plain {
-    flex: 1;
+.rss-ext {
+    text-decoration: none;
+    color: var(--font-color-secondary);
+    font-size: 0.85rem;
+    padding: 0 0.2rem;
 }
 
 .rss-star {

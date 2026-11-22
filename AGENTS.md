@@ -220,6 +220,11 @@ The `rss` note type puts the whole subsystem in one note (see
   uncles, nearest wins) — none found ⇒ built-in default prompt. Output is
   structured JSON `{category, summary, quality, tags}` bound to the
   `[llm.features] rss_classify` feature (medium tier by default).
+- **Stored article text is viewable inline**: item content is kept out of
+  the view payload (size); the `get_item` action returns one article's
+  stored content on demand (extracted `full_content` preferred, else the
+  feed snippet), and the reader's card title / "Read" button opens a modal
+  showing it.
 - One cron job (`rss/refresh_feeds`, `@every 15m`): nil payload refreshes
   due feeds of all readers; payload `{"note_id":N,"force":true}` (from the
   refresh action) force-refreshes one reader. Feed fetches are parallel
@@ -234,6 +239,31 @@ The `rss` note type puts the whole subsystem in one note (see
 ## Frontend Note-Type Architecture
 
 Note-type rendering is powered by a **registry** in `frontend/src/note-types/registry.js`. This is the single source of truth — it drives both the type picker in `NotesView.vue` and the renderer lookup in `NoteTypeRenderer.vue`.
+
+### Theming — dark mode only
+
+The app has a **single dark theme** (no light mode, no toggle). `App.vue` sets
+`:root { color-scheme: dark }` and defines the tokens below — note there is
+**no `--bg-color` / `--bg-color-secondary` variable** (historical components
+name it and silently eat their fallbacks, which breaks when the fallback is
+light — e.g. a white modal panel). Style anything new from these tokens:
+
+| Token | Value (fallbacks in parens) | Use for |
+|---|---|---|
+| `--panel-bg` (#061320) / `--raised-bg` (#0a1d2d) | dark surfaces | modal/panel backgrounds, badges/chips instead of light grays |
+| `--html-bg` (#01101f) / `--body-bg` (#051b2e) | page layers | full-bleed backdrops |
+| `--font-color` (#e0e8e4) / `--font-color-secondary` (#a5b0ad) | text | primary/secondary text |
+| `--border-color` (#7e7567) | borders | outlines, dividers |
+| `--accent-teal` (#6d9484) | accents | in-body links, highlights |
+| `--shadow-color` (rgba(0,0,0,0.6)) | shadows | panel/elevation shadows |
+
+Rules of thumb: never hardcode white/light backgrounds (`#fff`, `#fff8`, light
+rgba overlays like `rgba(255,...)`); translucent tint badges (e.g.
+`rgba(217,83,79,0.25)` for "banned") are fine — they render on dark surfaces.
+Modal/reference styling: `DeviceTeleportModal.vue` (overlay
+`rgba(0,0,0,0.6)`, panel `--panel-bg` + `--border-color` + `--shadow-color`,
+z-index 2050).
+
 
 ### File structure
 

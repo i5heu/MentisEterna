@@ -126,6 +126,7 @@
                     :key="item.id"
                     :item="item"
                     :busy="busy"
+                    @open="openArticle(item)"
                     @mark="set_item_state(item, $event)"
                     @reclassify="reclassify(item)"
                     @save="saveAsNote(item)"
@@ -144,12 +145,171 @@
                         :item="item"
                         :busy="busy"
                         dimmed
+                        @open="openArticle(item)"
                         @mark="set_item_state(item, $event)"
                         @reclassify="reclassify(item)"
                         @save="saveAsNote(item)"
                     />
                 </div>
             </details>
+
+            <!-- ==================== Article viewer ==================== -->
+            <div
+                v-if="activeItemId"
+                class="rss-modal-overlay"
+                @click.self="closeArticle"
+            >
+                <div class="rss-modal" role="dialog" aria-modal="true">
+                    <div class="rss-modal-head">
+                        <h3 class="rss-modal-title">
+                            {{
+                                modalMeta?.title ||
+                                "(untitled)"
+                            }}
+                        </h3>
+                        <a
+                            v-if="activeItem?.url"
+                            class="btn-ghost btn-sm"
+                            :href="activeItem.url"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            >Original ↗</a
+                        >
+                        <button
+                            class="btn-ghost btn-sm"
+                            @click="closeArticle"
+                        >
+                            Close
+                        </button>
+                    </div>
+
+                    <div v-if="modalMeta" class="rss-modal-meta">
+                        <span class="rss-chip">{{
+                            modalMeta.feed_name || "unknown feed"
+                        }}</span>
+                        <span v-if="modalMeta.author" class="rss-chip">{{
+                            modalMeta.author
+                        }}</span>
+                        <span
+                            v-if="publishedLabel"
+                            class="rss-chip"
+                            >{{ publishedLabel }}</span
+                        >
+                        <span
+                            v-if="modalMeta.category"
+                            class="rss-chip"
+                            >{{ modalMeta.category }}</span
+                        >
+                        <span
+                            class="rss-chip rss-chip-quality"
+                            :title="`LLM quality rating: ${modalMeta.quality}/10`"
+                            >Q{{ modalMeta.quality }}</span
+                        >
+                        <span
+                            v-if="modalMeta.penalty_score > 0"
+                            class="rss-chip rss-chip-penalty"
+                            >−{{ modalMeta.penalty_score }}</span
+                        >
+                        <span
+                            v-if="modalMeta.banned"
+                            class="rss-chip rss-chip-warn"
+                            >banned</span
+                        >
+                    </div>
+
+                    <p
+                        v-if="article && article.summary"
+                        class="rss-modal-summary"
+                    >
+                        {{ article.summary }}
+                    </p>
+
+                    <div class="rss-modal-body">
+                        <p v-if="articleLoading" class="rss-modal-hint">
+                            Loading article content…
+                        </p>
+                        <p v-else-if="articleError" class="rss-error">
+                            {{ articleError }}
+                        </p>
+                        <template v-else-if="article">
+                            <pre
+                                v-if="article.content"
+                                class="rss-modal-content"
+                                >{{ article.content }}</pre
+                            >
+                            <p v-else class="rss-modal-hint">
+                                No article text was stored for this item<span
+                                    v-if="activeItem && activeItem.url"
+                                >
+                                    —
+                                    <a
+                                        :href="activeItem.url"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        >open the original</a
+                                    ></span
+                                >.
+                            </p>
+                            <p
+                                v-if="article.content_source === 'feed'"
+                                class="rss-modal-hint"
+                            >
+                                Showing the feed-provided snippet; the full
+                                page could not be extracted.
+                            </p>
+                        </template>
+                    </div>
+
+                    <div
+                        v-if="activeItem"
+                        class="rss-modal-actions"
+                    >
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy"
+                            @click="set_item_state(activeItem, 'starred')"
+                        >
+                            {{ activeItem.state === "starred" ? "★" : "☆" }}
+                            Star
+                        </button>
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy"
+                            @click="
+                                set_item_state(
+                                    activeItem,
+                                    activeItem.state === 'read' ? 'new' : 'read',
+                                )
+                            "
+                        >
+                            {{
+                                activeItem.state === "read"
+                                    ? "Mark unread"
+                                    : "Mark read"
+                            }}
+                        </button>
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy"
+                            @click="saveAsNote(activeItem)"
+                            :title="
+                                activeItem.saved_note_id
+                                    ? 'Already saved as a note'
+                                    : 'Save this article as a real child note'
+                            "
+                        >
+                            {{ activeItem.saved_note_id ? "Saved" : "Save as Note" }}
+                        </button>
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy"
+                            @click="reclassify(activeItem)"
+                        >
+                            Reclassify
+                        </button>
+                    </div>
+                </div>
+            </div>
         </template>
 
         <!-- ==================== Editor ==================== -->
@@ -279,7 +439,7 @@ threshold: 8</pre>
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { fetchNote, fetchNoteTypes } from "../../api.js";
 import RssItemCard from "./RssItemCard.vue";
 
@@ -327,6 +487,86 @@ const filteredItems = computed(() => {
         return true;
     });
 });
+
+// --- Article viewer: extracted content, fetched on demand via get_item ---
+// The view payload deliberately omits item content (it would dwarf the
+// response); the modal loads it when an article is opened.
+const activeItemId = ref(0);
+const article = ref(null);
+const articleLoading = ref(false);
+const articleError = ref("");
+let openSeq = 0;
+
+const activeItem = computed(() => {
+    const id = activeItemId.value;
+    if (!id || !view.value) return null;
+    return (
+        (view.value.items || []).find((it) => it.id === id) ||
+        (view.value.rejected || []).find((it) => it.id === id) ||
+        null
+    );
+});
+
+// Article detail once loaded; falls back to the live list item while loading,
+// so the modal can render its header immediately.
+const modalMeta = computed(() => article.value ?? activeItem.value);
+
+const publishedLabel = computed(() => {
+    const s = modalMeta.value?.published_at;
+    if (!s) return "";
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return s;
+    return d.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+    });
+});
+
+// If the item leaves the view lists (e.g. purged by retention after a
+// refresh), close the modal — its footer actions would otherwise dangle.
+watch(activeItem, (it) => {
+    if (!it && activeItemId.value) closeArticle();
+});
+
+async function openArticle(item) {
+    const seq = ++openSeq;
+    activeItemId.value = item.id;
+    article.value = null;
+    articleError.value = "";
+    articleLoading.value = true;
+    try {
+        const { pluginActionV2 } = await import("../../api.js");
+        const res = await pluginActionV2(
+            props.token,
+            props.note.id,
+            "get_item",
+            { item_id: item.id },
+        );
+        if (seq === openSeq) article.value = res;
+    } catch (e) {
+        if (seq === openSeq) articleError.value = e?.message || String(e);
+    } finally {
+        if (seq === openSeq) articleLoading.value = false;
+    }
+}
+
+function closeArticle() {
+    activeItemId.value = 0;
+    article.value = null;
+    articleError.value = "";
+}
+
+function onArticleKeydown(e) {
+    if (e.key === "Escape") closeArticle();
+}
+watch(activeItemId, (id) => {
+    if (id) window.addEventListener("keydown", onArticleKeydown);
+    else window.removeEventListener("keydown", onArticleKeydown);
+});
+onBeforeUnmount(() =>
+    window.removeEventListener("keydown", onArticleKeydown),
+);
 
 // --- Editor state (config channel) ---
 const defaultConfig = () => ({
@@ -641,5 +881,104 @@ function feedChipTitle(f) {
     gap: 0.25rem;
     font-size: 0.83rem;
     color: var(--font-color-secondary);
+}
+
+/* --- Article viewer modal ---
+   Dark-mode only: this app has a single dark theme (App.vue :root,
+   color-scheme: dark) — use its surface tokens, never light fallbacks
+   (there is no --bg-color variable at all). */
+.rss-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 2050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+}
+
+.rss-modal {
+    background: var(--panel-bg, #061320);
+    color: var(--font-color, #e0e8e4);
+    border: 1px solid var(--border-color, #7e7567);
+    border-radius: 10px;
+    width: min(760px, 100%);
+    max-height: min(86vh, 100%);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 12px 40px var(--shadow-color, rgba(0, 0, 0, 0.6));
+}
+
+.rss-modal-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.8rem 1rem 0.4rem;
+}
+
+.rss-modal-title {
+    margin: 0;
+    font-size: 1.12rem;
+    flex: 1;
+}
+
+.rss-modal-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    padding: 0 1rem 0.6rem;
+    border-bottom: 1px solid var(--border-color, #7e7567);
+}
+
+.rss-chip-quality {
+    background: rgba(92, 184, 92, 0.18);
+}
+
+.rss-chip-penalty {
+    background: rgba(240, 173, 78, 0.22);
+}
+
+.rss-modal-summary {
+    margin: 0.7rem 1rem 0;
+    font-style: italic;
+    color: var(--font-color-secondary);
+    font-size: 0.92rem;
+}
+
+.rss-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.85rem 1rem;
+}
+
+.rss-modal-content {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--font-color, #e0e8e4);
+}
+
+.rss-modal-hint a,
+.rss-modal-body a {
+    color: var(--accent-teal, #6d9484);
+}
+
+.rss-modal-hint {
+    font-size: 0.88rem;
+    font-style: italic;
+    color: var(--font-color-secondary);
+}
+
+.rss-modal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.6rem 1rem;
+    border-top: 1px solid var(--border-color, #7e7567);
 }
 </style>
