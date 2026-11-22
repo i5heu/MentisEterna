@@ -173,3 +173,18 @@ func TestUsageSystemDefault(t *testing.T) {
 		t.Error("unknown usages must report no system default")
 	}
 }
+
+func TestKnownUsageIDs(t *testing.T) {
+	ids := KnownUsageIDs()
+	if len(ids) != len(UsageSpecs()) {
+		t.Fatalf("KnownUsageIDs has %d entries, want %d", len(ids), len(UsageSpecs()))
+	}
+	for _, id := range ids {
+		if !KnownUsage(id) {
+			t.Errorf("KnownUsageIDs lists %q but KnownUsage rejects it", id)
+		}
+	}
+	if KnownUsage("1") || KnownUsage("nope") {
+		t.Error("KnownUsage must reject ids outside the catalog")
+	}
+}

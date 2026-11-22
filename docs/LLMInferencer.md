@@ -26,7 +26,7 @@ surfaced in the note's UI ((system default tier → model), with a
 | Providers | `openrouter` (default base `https://openrouter.ai/api`), `mistral` (`https://api.mistral.ai`), and `compatible` (any OpenAI-compatible endpoint, base URL required). Endpoint URLs are built by `llm.OpenAIEndpoint(base, path)`: **any common base shape works** — the API root, an OpenAI-SDK-style base ending in `/v1` (what provider docs tell users to paste), or even the full endpoint URL — and is normalized to `<base>/v1/chat/completions` (and `/v1/models`), so the version segment is never doubled into a provider 404. Both OpenRouter and Mistral speak the OpenAI chat-completions shape. |
 | API key | **Stored in the note config, write-only.** `LoadConfig` never returns it — note views only see `api_key_set: true/false`. Saving with an empty `api_key` **keeps** the stored key (normal UI round-trips can't wipe it); typing a new one replaces it; the `clear_api_key` action removes it. The key lives only in `ct_llm_inferencer_config.api_key` (and encrypted backups) — it is never serialized into any view, action result, or classifier metadata. |
 | Tiers | Four fixed capability tiers: `big`, `middle`, `small`, `tiny`. Each tier has a model and an optional per-tier `base_url` override. |
-| Usage mapping | A `usages` map: usage id → `{tier}`, `{model}` (direct model override), or `{local: true}` (explicit pin to the config.toml local LLM — beats the note's `default_tier`). XOR: exactly one of the three. Mappings for usages whose call sites aren't migrated yet are accepted and shown as "pending backend wiring" — they activate when the backend starts routing that usage. |
+| Usage mapping | A `usages` map: usage id → `{tier}`, `{model}` (direct model override), or `{local: true}` (explicit pin to the config.toml local LLM — beats the note's `default_tier`). XOR: exactly one of the three. Mappings for usages whose call sites aren't migrated yet are accepted and shown as "pending backend wiring" — they activate when the backend starts routing that usage. **Unknown ids are server metadata: validation and save DROP ids outside the catalog** (usage ids and tier names — from stale/foreign clients, e.g. the "unknown usage 1" junk key) instead of wedging the note; shapes a user could author (binding modes, provider, endpoints, default tier) still fail loudly. |
 | Resolution | Global through the app's single note: call sites ask `ResolveChat(db, usage)` with no anchor. Nothing binds → `config.toml` feature/tier client. An explicit `{local: true}` binding resolves to the same `config.toml` client, but reported as `Source: "local"` (the pin is the user's explicit choice, distinct from a plain fallback). |
 | System defaults | The view reports, per usage, what `config.toml` would serve (`system_default: {tier, model, base_url}` via `llm.UsageSystemDefault`), and effective bindings (explicit / `via_default` / `local` flag). The frontend shows these defaults next to every usage in viewer and editor, and the editor's **Reset to system defaults** button clears the usage map + default tier so every usage uses the `config.toml` defaults again (provider, endpoint, key, and tier model definitions stay). |
 | OCR / STT / embeddings | Deliberately out of scope: different API shapes (image/audio/file endpoints, dedicated models). They stay bound to `config.toml`. |
@@ -72,7 +72,10 @@ Config JSON shape (identical across `ValidateConfig` / `SaveConfig` /
 - `base_url` empty = provider default; per-tier `base_url` (most specific)
   beats the note-level `base_url`, which beats the provider default. A
   trailing `/v1` (or a full endpoint URL) is normalized at request time, so
-  both conventions dial the same endpoint.
+  both conventions dial the same endpoint. For `openrouter`/`mistral` the
+  base URL is **optional** (the endpoint is built in — the frontend shows
+  the resolved default and only reveals the field for `compatible` providers
+  or deliberate overrides, with a "Use provider default" reset).
 - Unknown usage ids are rejected by validation (typos surface immediately);
   known-but-unwired ids are allowed (shown as pending backend wiring).
 
@@ -187,7 +190,10 @@ id `llm_inferencer`, manifest `singleton: true`):
   make NotesView's edit-mode type select drop `llm_inferencer` once an
   instance exists (the search type filter keeps it). Editing the existing
   note keeps it listed; the server 400s violations regardless.
-- **Editor**: provider select, base URL (placeholder = provider default),
+- **Editor**: provider select, a base URL that is **not necessary for known
+  providers** (the field stays hidden behind "Override endpoint…" — it
+  shows the provider's built-in endpoint and a "Use provider default"
+  reset; `compatible` endpoints still require it),
   write-only key input (password field; "leave empty to keep, type to
   replace"), default-tier select, one model row per tier with a per-tier
   **Test** button, and a per-usage mapping editor with four modes:
@@ -207,7 +213,12 @@ id `llm_inferencer`, manifest `singleton: true`):
   (incomplete bindings, endpoint overrides, legacy duplicate notes) and
   a connection test round it off.
 - The emitted payload strips empty tiers (backend validation rejects them)
-  and only includes `api_key` when the user typed one.
+  and only includes `api_key` when the user typed one. Usage bindings are
+  whitelisted to the rendered catalog rows (`emitUsages` in
+  `note-types/llm_inferencer/usages.js` — pure, unit-tested helpers shared
+  with the registry normalizer): junk keys can never reach the server from
+  the editor, and array-shaped values can never degrade into index keys
+  ("0", "1", …).
 
 ## 8. Security posture
 
@@ -245,3 +256,15 @@ id `llm_inferencer`, manifest `singleton: true`):
 - `go test ./pkg/notetype/rss/` — the classifier seam stubs resolve
   through the global inferencer note end-to-end (model/endpoint/key from
   the note, config feature client before/without one).
+- `cd frontend && npx jest` — includes `llm_inferencer/__tests__/usages.test.js`:
+  the pure binding helpers (array-proof normalization, mode/binding shapes,
+  the emit whitelist, system-default formatting) guarding the exact
+  "unknown usage 1" failure class client-side.
+
+Unknown-id tolerance (the contract added after the "unknown usage 1"
+incident): both server gates — `ValidateConfig` (via `dropUnknownIDs`) and
+`SaveConfig` (via `sanitizeConfig`) — drop ids outside
+`llm.KnownUsageIDs`/the four tiers before validating, so no stale or
+foreign client payload can make an llm_inferencer note unsavable;
+`TestSaveConfigSanitizesUnknownEntries` and
+`TestLLMInferencerSaveSanitizesUnknownUsagePayload` pin it down.

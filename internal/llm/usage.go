@@ -78,6 +78,16 @@ func UsageSpecByID(id string) *UsageSpec {
 // KnownUsage reports whether id is in the usage catalog (wired or not).
 func KnownUsage(id string) bool { return UsageSpecByID(id) != nil }
 
+// KnownUsageIDs returns the catalog's usage ids in stable order (for error
+// messages and clients needing the valid set).
+func KnownUsageIDs() []string {
+	ids := make([]string, len(usageSpecs))
+	for i, spec := range usageSpecs {
+		ids[i] = spec.ID
+	}
+	return ids
+}
+
 // NewFeatureChatClient builds the config.toml-bound chat client for a usage
 // (feature tier system, [llm.tiers] / [llm.features]). It returns nil when
 // the usage is unknown or not a chat-type feature — callers must treat nil

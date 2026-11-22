@@ -103,6 +103,9 @@ func validateBaseURL(field, raw string) error {
 }
 
 // ValidateConfig implements notetype.ConfigValidator.
+//
+// Unknown ids (stale/foreign clients) drop first — see dropUnknownIDs; the
+// shapes a user could author still fail loudly with a precise message.
 func (p *Plugin) ValidateConfig(payload json.RawMessage) error {
 	if len(payload) == 0 {
 		return nil
@@ -111,6 +114,7 @@ func (p *Plugin) ValidateConfig(payload json.RawMessage) error {
 	if err := json.Unmarshal(payload, &cfg); err != nil {
 		return fmt.Errorf("llm_inferencer: invalid payload: %w", err)
 	}
+	dropUnknownIDs(&cfg)
 	return validateConfig(cfg)
 }
 
@@ -155,7 +159,8 @@ func validateConfig(cfg Config) error {
 
 	for usage, ub := range cfg.Usages {
 		if llm.UsageSpecByID(usage) == nil {
-			return fmt.Errorf("llm_inferencer: unknown usage %q (not in the app usage catalog)", usage)
+			return fmt.Errorf("llm_inferencer: unknown usage %q — not in the app usage catalog (valid: %s)",
+				usage, strings.Join(llm.KnownUsageIDs(), ", "))
 		}
 		switch {
 		case ub.Local && (ub.Tier != "" || ub.Model != ""):
@@ -214,6 +219,59 @@ func (cfg *Config) normalize() {
 	}
 }
 
+// dropUnknownIDs removes entries whose ids are SERVER catalog metadata this
+// server does not know: usage ids outside internal/llm's catalog and tier
+// names outside the four capability tiers. Both validation gates run it —
+// a stale client carrying ids this server has never heard of (the "unknown
+// usage 1" failure) must never wedge a save. What REMAINS is still strictly
+// validated: shapes a real user could author (binding modes, provider,
+// endpoints, default tier) fail loudly.
+func dropUnknownIDs(cfg *Config) {
+	for usage := range cfg.Usages {
+		if !llm.KnownUsage(usage) {
+			delete(cfg.Usages, usage)
+		}
+	}
+	for tier := range cfg.Tiers {
+		if !validTier(tier) {
+			delete(cfg.Tiers, tier)
+		}
+	}
+}
+
+// sanitizeConfig makes a foreign payload persistable (SaveConfig only):
+// dropUnknownIDs plus canonicalizing what remains — conflicts resolve to a
+// single binding (local > tier > model), empty bindings and tiers without
+// a model drop, an unknown provider resets to the default. ValidateConfig
+// stays strict about these shapes; SaveConfig is the tolerant last mile so
+// a wedged, unsavable note is impossible.
+func sanitizeConfig(cfg *Config) {
+	dropUnknownIDs(cfg)
+	for usage, ub := range cfg.Usages {
+		switch {
+		case ub.Local:
+			cfg.Usages[usage] = UsageBinding{Local: true}
+		case ub.Tier != "":
+			cfg.Usages[usage] = UsageBinding{Tier: strings.TrimSpace(ub.Tier)}
+		case strings.TrimSpace(ub.Model) != "":
+			cfg.Usages[usage] = UsageBinding{Model: strings.TrimSpace(ub.Model)}
+		default:
+			delete(cfg.Usages, usage) // nothing meaningful to keep
+		}
+	}
+	for tier, tb := range cfg.Tiers {
+		if strings.TrimSpace(tb.Model) == "" {
+			delete(cfg.Tiers, tier)
+		}
+	}
+	if !validTier(cfg.DefaultTier) {
+		cfg.DefaultTier = ""
+	}
+	if !validProvider(cfg.Provider) {
+		cfg.Provider = ProviderOpenRouter
+	}
+}
+
 // SaveConfig implements notetype.ConfigSaver.
 //
 // Write-only API key semantics: the payload's api_key only ever REPLACES the
@@ -225,7 +283,9 @@ func (p *Plugin) SaveConfig(ctx context.Context, tx *sql.Tx, userID int, noteID 
 		if err := json.Unmarshal(config, &cfg); err != nil {
 			return fmt.Errorf("llm_inferencer: unmarshal payload: %w", err)
 		}
-		// Validate with the raw payload, then normalize (trim/default maps).
+		// Tolerate ids this server doesn't know (see sanitizeConfig), then
+		// validate what remains and normalize (trim/default maps).
+		sanitizeConfig(&cfg)
 		if err := validateConfig(cfg); err != nil {
 			return err
 		}

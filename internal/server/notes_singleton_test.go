@@ -125,3 +125,58 @@ func TestSingletonFlagInNoteTypesCatalog(t *testing.T) {
 		t.Error("non-singleton types must allow multiple notes")
 	}
 }
+
+// TestLLMInferencerSaveSanitizesUnknownUsagePayload reproduces the reported
+// failure mode: a client payload carrying a numeric junk key ("usages": {"1":
+// …}) — e.g. from a stale frontend — previously wedged the whole note save
+// with "unknown usage 1". SaveConfig now drops unknown ids, so the note stays
+// editable and the valid bindings persist.
+func TestLLMInferencerSaveSanitizesUnknownUsagePayload(t *testing.T) {
+	s := newTestServer(t)
+	if err := notetype.Registry["llm_inferencer"].InitSchema(s.db.DB); err != nil {
+		t.Fatalf("llm_inferencer schema: %v", err)
+	}
+	n := helperCreateNoteRaw(t, s, `{"title":"The LLM","body":"","type":"llm_inferencer"}`)
+
+	savePayload := `{
+		"title": "The LLM",
+		"body": "",
+		"type": "llm_inferencer",
+		"custom_data": {
+			"provider": "openrouter",
+			"default_tier": "big",
+			"tiers": {"big": {"model": "prov/big"}},
+			"usages": {"1": {"tier": "big"}, "rss_classify": {"tier": "big"}}
+		}
+	}`
+	r := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/notes/%d", n.ID), strings.NewReader(savePayload))
+	w := httptest.NewRecorder()
+	s.updateNote(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("sanitized save must succeed, got %d: %s", w.Code, w.Body.String())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/notes/%d", n.ID), nil)
+	w = httptest.NewRecorder()
+	s.getNote(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("getNote: %d", w.Code)
+	}
+	var detail struct {
+		Plugin struct {
+			Config struct {
+				Usages map[string]map[string]any `json:"usages"`
+			} `json:"config"`
+		} `json:"plugin"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, junk := detail.Plugin.Config.Usages["1"]; junk {
+		t.Errorf("junk usage key persisted: %v", detail.Plugin.Config.Usages)
+	}
+	rc, ok := detail.Plugin.Config.Usages["rss_classify"]
+	if !ok || rc["tier"] != "big" {
+		t.Errorf("valid binding lost: %v", detail.Plugin.Config.Usages)
+	}
+}

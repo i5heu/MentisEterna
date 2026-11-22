@@ -118,24 +118,57 @@
             </div>
 
             <div class="infx-field">
-                <label class="infx-label">Base URL</label>
-                <input
-                    v-model="draft.base_url"
-                    type="text"
-                    class="infx-input mono"
-                    :placeholder="providerDefaultBaseURL"
-                />
-                <p class="infx-help">
-                    Empty uses the provider default ({{ providerDefaultBaseURL
-                    }}). Any common shape works — an API root like
-                    <span class="mono">https://openrouter.ai/api</span>, an
-                    OpenAI-style base ending in
-                    <span class="mono">/v1</span>, or the full endpoint; the
-                    app normalizes it to
-                    <span class="mono">&lt;base&gt;/v1/chat/completions</span>.
-                    <template v-if="draft.provider === 'compatible'">
-                        <strong>Required.</strong>
-                    </template>
+                <label class="infx-label">
+                    Base URL
+                    <span
+                        v-if="providerHasDefault"
+                        class="infx-muted infx-label-opt"
+                        >(optional — the provider's endpoint is built in)</span
+                    >
+                </label>
+                <template v-if="showBaseURLField">
+                    <input
+                        v-model="draft.base_url"
+                        type="text"
+                        class="infx-input mono"
+                        :placeholder="providerDefaultBaseURL"
+                    />
+                    <p class="infx-help">
+                        <template v-if="!providerHasDefault">
+                            <strong>Required.</strong>
+                        </template>
+                        <template v-else>
+                            Empty uses the provider default.
+                        </template>
+                        Any common shape works — an API root like
+                        <span class="mono">https://openrouter.ai/api</span>,
+                        an OpenAI-style base ending in
+                        <span class="mono">/v1</span>, or the full endpoint;
+                        the app normalizes it to
+                        <span class="mono">&lt;base&gt;/v1/chat/completions</span
+                        >.
+                        <button
+                            v-if="providerHasDefault && draft.base_url.trim()"
+                            type="button"
+                            class="btn-ghost btn-sm"
+                            @click="clearBaseURLOverride"
+                        >
+                            Use provider default
+                        </button>
+                    </p>
+                </template>
+                <p v-else class="infx-help">
+                    Uses the provider's built-in endpoint:
+                    <span class="mono"
+                        >{{ providerDefaultBaseURL }}/v1/chat/completions</span
+                    >
+                    <button
+                        type="button"
+                        class="btn-ghost btn-sm"
+                        @click="endpointOverrideOpen = true"
+                    >
+                        Override endpoint…
+                    </button>
                 </p>
             </div>
 
@@ -317,6 +350,14 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
+import {
+    TIERS,
+    normalizeUsages,
+    usageModeOf,
+    bindingForMode,
+    emitUsages,
+    systemDefaultText,
+} from "./usages.js";
 
 /**
  * LLM Inferencer note-type component.
@@ -347,8 +388,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["selectNote", "update:customData"]);
-
-const TIERS = ["big", "middle", "small", "tiny"];
 
 const PROVIDER_DEFAULTS = {
     openrouter: "https://openrouter.ai/api",
@@ -396,22 +435,6 @@ function emptyDraft() {
     };
 }
 
-function normalizeUsages(raw) {
-    const out = {};
-    if (!raw || typeof raw !== "object") return out;
-    for (const [id, b] of Object.entries(raw)) {
-        if (!b || typeof b !== "object") continue;
-        if (b.local === true) {
-            out[id] = { local: true };
-        } else if (typeof b.tier === "string" && b.tier) {
-            out[id] = { tier: b.tier };
-        } else if (typeof b.model === "string" && b.model) {
-            out[id] = { model: b.model.trim() };
-        }
-    }
-    return out;
-}
-
 function normalize(raw) {
     const d = emptyDraft();
     d.provider = raw?.provider || "openrouter";
@@ -442,42 +465,25 @@ function hydrate() {
 
 watch(() => props.note?.id, hydrate, { immediate: true });
 
-// Emit only meaningful fields: the backend rejects tier entries without a
-// model, the local draft always renders all four tiers, and the write-only
-// API key is sent only when the user actually typed one (empty = keep).
-watch(
-    draft,
-    (val) => {
-        if (hydrating) return;
-        const payload = {
-            provider: val.provider,
-            base_url: val.base_url.trim(),
-            default_tier: val.default_tier,
-            api_key_set: val.api_key_set,
-            usages: JSON.parse(JSON.stringify(val.usages)),
-            tiers: {},
-        };
-        if (val.api_key.trim()) {
-            payload.api_key = val.api_key.trim();
-        }
-        for (const tier of TIERS) {
-            const t = val.tiers[tier];
-            if (t && t.model && t.model.trim()) {
-                payload.tiers[tier] = {
-                    model: t.model.trim(),
-                    base_url: (t.base_url || "").trim(),
-                };
-            }
-        }
-        emit("update:customData", payload);
-    },
-    { deep: true },
-);
-
 // --- derived state ---
 const providerDefaultBaseURL = computed(
     () => PROVIDER_DEFAULTS[draft.provider] || "",
 );
+
+// Known providers carry a built-in endpoint — the Base URL is only necessary
+// for "compatible" endpoints or as a deliberate provider-default override.
+const providerHasDefault = computed(() => !!PROVIDER_DEFAULTS[draft.provider]);
+const endpointOverrideOpen = ref(false);
+const showBaseURLField = computed(
+    () =>
+        !providerHasDefault.value ||
+        !!draft.base_url.trim() ||
+        endpointOverrideOpen.value,
+);
+function clearBaseURLOverride() {
+    draft.base_url = "";
+    endpointOverrideOpen.value = false;
+}
 
 const effectiveBaseURL = computed(() => {
     if (view.value) return view.value.base_url || view.value.default_base_url || "";
@@ -517,12 +523,6 @@ const tierRows = computed(() => {
         base_url: draft.tiers[t].base_url || "",
     }));
 });
-
-// systemDefaultText formats a usage's config.toml default: "tier → model".
-function systemDefaultText(sys) {
-    if (!sys || !sys.model) return "—";
-    return `${sys.tier || "system"} → ${sys.model}`;
-}
 
 // The usage catalog + effective resolution per usage. With the view
 // present (saved note), every row carries the system default from
@@ -603,23 +603,51 @@ const usageRows = computed(() => {
 
 const warnings = computed(() => view.value?.warnings || []);
 
+// Emit only meaningful fields: the backend rejects tier entries without a
+// model, the local draft always renders all four tiers, and the write-only
+// API key is sent only when the user actually typed one (empty = keep).
+// Usage bindings are whitelisted to the rows the editor renders — junk
+// keys can never reach the server from here.
+watch(
+    draft,
+    (val) => {
+        if (hydrating) return;
+        const payload = {
+            provider: val.provider,
+            base_url: val.base_url.trim(),
+            default_tier: val.default_tier,
+            api_key_set: val.api_key_set,
+            usages: emitUsages(val.usages, usageRows.value.map((r) => r.id)),
+            tiers: {},
+        };
+        if (val.api_key.trim()) {
+            payload.api_key = val.api_key.trim();
+        }
+        for (const tier of TIERS) {
+            const t = val.tiers[tier];
+            if (t && t.model && t.model.trim()) {
+                payload.tiers[tier] = {
+                    model: t.model.trim(),
+                    base_url: (t.base_url || "").trim(),
+                };
+            }
+        }
+        emit("update:customData", payload);
+    },
+    { deep: true },
+);
+
 // --- usage mapping helpers ---
 function usageMode(id) {
-    const b = draft.usages[id];
-    if (!b) return "none";
-    if (b.local) return "local";
-    return b.tier ? "tier" : "model";
+    return usageModeOf(draft.usages[id]);
 }
 
 function setUsageMode(id, mode) {
-    if (mode === "none") {
+    const binding = bindingForMode(mode, draft.usages[id]);
+    if (!binding) {
         delete draft.usages[id];
-    } else if (mode === "local") {
-        draft.usages[id] = { local: true };
-    } else if (mode === "tier") {
-        draft.usages[id] = { tier: "small" };
     } else {
-        draft.usages[id] = { model: "" };
+        draft.usages[id] = binding;
     }
 }
 
@@ -761,6 +789,10 @@ async function clearApiKey() {
 .infx-label {
     font-size: 0.78rem;
     opacity: 0.85;
+}
+.infx-label-opt {
+    font-weight: normal;
+    opacity: 0.65;
 }
 .infx-help {
     font-size: 0.75rem;

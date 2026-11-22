@@ -117,23 +117,37 @@ func TestManifestDeclaresSingleton(t *testing.T) {
 
 func TestValidateConfigRules(t *testing.T) {
 	p := &Plugin{}
+	// Unknown ids are server-catalog metadata the payload cannot author —
+	// a stale or foreign client carrying them (e.g. the "unknown usage 1"
+	// failure) drops them silently; the save never wedges.
+	tolerant := []string{
+		`{"provider":"openrouter","usages":{"does-not-exist":{"tier":"big"}}}`,
+		`{"provider":"openrouter","usages":{"1":{"tier":"big"},"rss_classify":{"local":true}}}`,
+		`{"provider":"openrouter","tiers":{"huge":{"model":"x"}}}`,
+	}
+	for i, payload := range tolerant {
+		if err := p.ValidateConfig(json.RawMessage(payload)); err != nil {
+			t.Errorf("tolerant case %d: unknown ids must be tolerated, got error for %s: %v", i, payload, err)
+		}
+	}
+	// Shapes a user could author still fail loudly with a precise message.
 	bad := []string{
 		`{"provider":"not-a-provider"}`,
 		`{"provider":"compatible"}`,                                                 // no base_url
 		`{"provider":"mistral","base_url":"ftp://x"}`,                               // scheme
-		`{"provider":"openrouter","default_tier":"huge"}`,                           // bad tier
-		`{"provider":"openrouter","tiers":{"huge":{"model":"x"}}}`,                  // unknown tier
+		`{"provider":"openrouter","default_tier":"huge"}`,                           // bad default tier
 		`{"provider":"openrouter","tiers":{"big":{"model":""}}}`,                    // empty model
 		`{"provider":"openrouter","tiers":{"big":{"model":"x","base_url":"nope"}}}`, // bad tier base URL
-		`{"provider":"openrouter","usages":{"does-not-exist":{"tier":"big"}}}`,      // unknown usage
-		fmt.Sprintf(`{"provider":"openrouter","tiers":{"big":{"model":"m"}},"usages":{"rss_classify":{"tier":"big","model":"direct"}}}`), // both
-		fmt.Sprintf(`{"provider":"openrouter","tiers":{"big":{"model":"m"}},"usages":{"%s":{"tier":"nope"}}}`, strings.Repeat("x", 50)),  // bad usage tier
-		`{"provider":"openrouter","usages":{"rss_classify":{}}}`,                                                                         // empty binding
-		`{"provider":"openrouter","usages":[{}}]}`,                                                                                       // malformed
+		fmt.Sprintf(`{"provider":"openrouter","tiers":{"big":{"model":"m"}},"usages":{"rss_classify":{"tier":"big","model":"direct"}}}`),        // both
+		fmt.Sprintf(`{"provider":"openrouter","tiers":{"big":{"model":"m"}},"usages":{"rss_classify":{"tier":"%s"}}}`, strings.Repeat("x", 50)), // bad usage tier
+		`{"provider":"openrouter","usages":{"rss_classify":{}}}`,                                                                                // empty binding on a known id
+		`{"provider":"openrouter","usages":{"rss_classify":{"local":true,"tier":"big"}}}`,                                                       // local + tier on a known id
+		`{"provider":"openrouter","usages":{"rss_classify":{"local":true,"model":"direct"}}}`,                                                   // local + model
+		`{"provider":"openrouter","usages":[{"}}]}`,                                                                                             // malformed
 	}
 	for i, payload := range bad {
 		if err := p.ValidateConfig(json.RawMessage(strings.TrimSpace(payload))); err == nil {
-			t.Errorf("case %d: expected validation error for %s", i, payload)
+			t.Errorf("bad case %d: expected validation error for %s", i, payload)
 		}
 	}
 	good := []string{
@@ -144,10 +158,11 @@ func TestValidateConfigRules(t *testing.T) {
 		`{"provider":"openrouter","api_key":"sk-live","tiers":{"tiny":{"model":"m"}},"usages":{"title":{"model":"prov/big"}}}`,
 		`{"provider":"openrouter","default_tier":"tiny","tiers":{"tiny":{"model":"m"}}}`,
 		`{"provider":"openrouter","default_tier":"tiny","tiers":{"tiny":{"model":"m"}},"usages":{"rss_classify":{"local":true},"title":{"tier":"tiny"}}}`,
+		`{"provider":"openrouter","usages":{"1":{"tier":"big"},"rss_classify":{"tier":"small"}}}`, // junk id drops, valid stays
 	}
 	for i, payload := range good {
 		if err := p.ValidateConfig(json.RawMessage(payload)); err != nil {
-			t.Errorf("case %d: unexpected error for %q: %v", i, payload, err)
+			t.Errorf("good case %d: unexpected error for %q: %v", i, payload, err)
 		}
 	}
 }
@@ -863,5 +878,70 @@ func TestActionsNormalizeV1StyleBase(t *testing.T) {
 		if strings.Contains(p, "/v1/v1") {
 			t.Errorf("dialed doubled path %q", p)
 		}
+	}
+}
+
+// TestSaveConfigSanitizesUnknownEntries: SaveConfig is the tolerant copy of
+// validation — foreign or stale clients can ship ids this server has never
+// heard of (e.g. the "unknown usage 1" failure); the save must drop them
+// instead of wedging the note, while ValidateConfig still reports them.
+func TestSaveConfigSanitizesUnknownEntries(t *testing.T) {
+	db := testDB(t)
+	noteID := createNote(t, db, "Inferencer", PluginID, 0)
+
+	payload := `{
+		"provider": "openrouter",
+		"api_key": "sk-keep",
+		"default_tier": "big",
+		"tiers": {"big": {"model": "prov/big"}, "huge": {"model": "junk"}},
+		"usages": {
+			"1": {"tier": "big"},
+			"rss_classify": {"tier": "big", "local": true},
+			"title": {},
+			"tags": {"model": "prov/tags"}
+		}
+	}`
+	saveCfg(t, db, noteID, payload)
+
+	loaded := loadCfgJSON(t, db, noteID)
+	usages, ok := loaded["usages"].(map[string]any)
+	if !ok {
+		t.Fatalf("usages missing from loaded config: %v", loaded)
+	}
+	for _, junk := range []string{"1", "title"} {
+		if _, exists := usages[junk]; exists {
+			t.Errorf("junk usage %q persisted: %v", junk, usages)
+		}
+	}
+	// Conflict (tier + local) canonicalizes to the local pin.
+	rc, ok := usages["rss_classify"].(map[string]any)
+	if !ok || rc["local"] != true {
+		t.Errorf("rss_classify must canonically keep the local pin: %v", usages)
+	}
+	// Valid binding survives untouched.
+	tags, hasTags := usages["tags"].(map[string]any)
+	if !hasTags || tags["model"] != "prov/tags" {
+		t.Errorf("valid binding lost: %v", usages)
+	}
+	// Unknown tier name dropped, valid one kept, key preserved.
+	tiers, _ := loaded["tiers"].(map[string]any)
+	if _, exists := tiers["huge"]; exists {
+		t.Errorf("unknown tier persisted: %v", tiers)
+	}
+	if tiers["big"] == nil {
+		t.Error("valid tier lost")
+	}
+	key, has, keyErr := storedAPIKey(db, noteID)
+	if keyErr != nil || !has || key != "sk-keep" {
+		t.Errorf("api key lost during sanitized save: has=%v err=%v", has, keyErr)
+	}
+
+	// ValidateConfig shares the tolerant contract: unknown ids drop, shape
+	// errors on known ids still fail loudly.
+	if err := (&Plugin{}).ValidateConfig(json.RawMessage(`{"provider":"openrouter","usages":{"1":{"tier":"big"}}}`)); err != nil {
+		t.Fatalf("unknown usage ids must be tolerated, got: %v", err)
+	}
+	if err := (&Plugin{}).ValidateConfig(json.RawMessage(`{"provider":"openrouter","usages":{"rss_classify":{}}}`)); err == nil {
+		t.Fatal("empty binding on a known usage id must still error")
 	}
 }

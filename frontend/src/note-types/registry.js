@@ -26,6 +26,7 @@
 
 import { defineAsyncComponent } from "vue";
 import { fetchNoteTypes } from "../api.js";
+import { normalizeUsages as normalizeUsageBindings } from "./llm_inferencer/usages.js";
 
 // ---------------------------------------------------------------------------
 // Standard helpers used by several types
@@ -508,19 +509,10 @@ const registry = [
                     base_url: (t && typeof t === "object" && t.base_url) || "",
                 };
             }
-            const usages = {};
-            if (raw?.usages && typeof raw.usages === "object") {
-                for (const [id, b] of Object.entries(raw.usages)) {
-                    if (!b || typeof b !== "object") continue;
-                    if (b.local === true) {
-                        usages[id] = { local: true };
-                    } else if (typeof b.tier === "string" && b.tier) {
-                        usages[id] = { tier: b.tier };
-                    } else if (typeof b.model === "string" && b.model) {
-                        usages[id] = { model: b.model };
-                    }
-                }
-            }
+            // Shared array-proof normalizer: an array-shaped usages value
+            // must never degrade into index keys ("0", "1", …) — the exact
+            // "unknown usage 1" save failure class.
+            const usages = normalizeUsageBindings(raw?.usages);
             return {
                 provider: raw?.provider || "openrouter",
                 base_url: raw?.base_url || "",
