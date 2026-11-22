@@ -240,9 +240,9 @@ The `rss` note type puts the whole subsystem in one note (see
   `10 × (wSig·significance + wRel·relevance + wPos·(1−negativity) +
   wHum·humansTerm) − rule penalties` (weights + `min_points:` floor are body
   rules; defaults sig=0.5 / rel=0.25 / pos=0.15 / hum=0.10, min_points=2.0,
-  0=off). The reader timeline is ranked by points; evaluated items below
-  `min_points` land in the rejected bucket (legacy-classified items are
-  exempt — `evaluated` flag). `reclassify_all` re-queues every article for
+  0=off). The reader timeline defaults to **unread first, ranked by points**
+  (read items sink); evaluated items below `min_points` land in the rejected
+  bucket (legacy-classified items are exempt — `evaluated` flag). `reclassify_all` re-queues every article for
   a fresh evaluation (the refresh job's classify stage drains the queue).
 - **Stored article text is viewable inline**: item content is kept out of
   the view payload (size); the `get_item` action returns one article's

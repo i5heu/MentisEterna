@@ -14,7 +14,7 @@ hierarchy. Articles are fetched into fast plugin tables; an explicit
 | Shape | **One note = the whole reader.** Feeds + settings in its config, rules (ban words / penalties / point weights) in its **own body** (user-written lines, parsed by the plugin — the plugin reads bodies like `recipe`/`print` do, never writes to them), articles in plugin tables under the note. |
 | Prompt | The only exception: evaluation prompt lives in a separate **`rss_prompt` note** whose body (latest `updates` row) is the system prompt. Resolved from the hierarchy: nearest `rss_prompt` in the note's subtree, then siblings, then up the ancestor chain (nearest wins). None found ⇒ built-in default prompt (the significance-evaluation prompt). |
 | LLM evaluation | Output is **structured JSON**: `evaluationReflectionParagraph`, significance (0.0–1.0), negativity (0.0/0.5/1.0), personalRelevance (0.0–1.0), four humans-affected counts (millions), tags; we add contract framing + validation + one retry. |
-| Points | Each evaluated article gets **points 0–10**: `10 × (wSig·significance + wRel·relevance + wPos·(1−negativity) + wHum·humansTerm) − rule penalties`. Weights and the `min_points` reject floor are body rules; the timeline is ranked by points. |
+| Points | Each evaluated article gets **points 0–10**: `10 × (wSig·significance + wRel·relevance + wPos·(1−negativity) + wHum·humansTerm) − rule penalties`. Weights and the `min_points` reject floor are body rules; the timeline's default sort is **unread first, ranked by points** (read items sink). |
 | Ban words / penalties | Matching article → rejected bucket, hidden behind a "show rejected" toggle; never silently destroyed. Penalty points accumulate and subtract from points; ≥ threshold ⇒ rejected (threshold 0 = disabled). Evaluated items below `min_points` (default 2.0; 0 = off) ⇒ rejected — only applies to items whose classification actually carried evaluation data. |
 | Article storage | Plugin tables, not auto-notes. "Save as Note" creates a real child note (with embeddings) under the RSS note — ingest-pipeline pattern. |
 
@@ -398,11 +398,16 @@ Frontend (`frontend/src/note-types/rss/`):
     "standard"` (children are saved articles + the optional prompt note)
   - `rss_prompt` — "RSS Prompt", `component: null` (body textarea path, same
     as `standard`), no custom data
-- **Viewer**: feed status line + Refresh button ("refreshing" until the
-  `rss` job done event on the ws bus — same source JobQueue.vue uses;
-  fallback: 10 s view polling while the note is open), **Re-evaluate all**
-  button (queues every article for a fresh LLM evaluation), **Reapply
-  rules**, sort picker (★ points desc default / newest / oldest), filter
+- **Viewer**: feed status line + Refresh button. Working state and view
+  renewal are **driven by the ws `jobs.changed` events** (the rss plugin's
+  refresh runs are broadcast on every lifecycle change — planned/running/
+  done/errored — same source JobQueue.vue listens to): the view re-fetches
+  when the job finishes, so the spinner and the "N evaluating" chip settle
+  with the real job, never before, never indefinitely. A bounded fallback
+  poll (5 s, ≤12 min, settles as soon as the pending queue drains) covers
+  ws outages. **Re-evaluate all** button (queues every article for a fresh
+  LLM evaluation), **Reapply rules**, sort picker (default **unread first ·
+  ★ points**; also best-points / newest / oldest), filter
   chips (feed / state), item cards: ★ points badge (green/amber/red tint by
   negativity; tooltip = significance/negativity/relevance/humans/penalty
   breakdown), legacy category + Q badges, penalty badges (tooltip from

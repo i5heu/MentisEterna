@@ -29,6 +29,7 @@
                 </div>
                 <div v-if="view" class="rss-toolbar-group rss-filters">
                     <select v-model="sortMode" class="rss-select" title="Timeline ordering">
+                        <option value="unread">Unread first · ★ points</option>
                         <option value="score">★ Best points</option>
                         <option value="new">Newest first</option>
                         <option value="old">Oldest first</option>
@@ -507,7 +508,7 @@ weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10</pre>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { fetchNote, fetchNoteTypes } from "../../api.js";
 import RssItemCard from "./RssItemCard.vue";
 
@@ -528,7 +529,7 @@ const actionError = ref("");
 const actionInfo = ref("");
 const stateFilter = ref("all");
 const feedFilter = ref(0);
-const sortMode = ref("score"); // score | new | old
+const sortMode = ref("unread"); // unread | score | new | old
 const showRejected = ref(false);
 const view = ref(null);
 
@@ -557,20 +558,29 @@ const filteredItems = computed(() => {
     });
 });
 
-// The backend orders by date; the points ranking is applied here so the
-// sort mode is instantly switchable without a re-fetch.
+// The backend orders by date; the ranking/unread ordering is applied here so
+// the sort mode is instantly switchable without a re-fetch. Default: unread
+// articles first (everything not state "read"), ranked by points, then
+// newest.
 const displayItems = computed(() => {
     const items = filteredItems.value.slice();
+    const points = (it) => Number(it.points) || 0;
+    const date = (it) => String(it.published_at || "");
     if (sortMode.value === "score") {
         items.sort(
             (a, b) =>
-                (Number(b.points) || 0) - (Number(a.points) || 0) ||
-                String(b.published_at || "").localeCompare(
-                    String(a.published_at || ""),
-                ),
+                points(b) - points(a) || date(b).localeCompare(date(a)),
         );
     } else if (sortMode.value === "old") {
         items.reverse();
+    } else if (sortMode.value === "unread") {
+        const isRead = (it) => (it.state === "read" ? 1 : 0);
+        items.sort(
+            (a, b) =>
+                isRead(a) - isRead(b) ||
+                points(b) - points(a) ||
+                date(b).localeCompare(date(a)),
+        );
     }
     return items;
 });
@@ -764,22 +774,105 @@ async function refreshView() {
     }
 }
 
+// --- Job-driven UI renewal ---
+//
+// Evaluation runs inside the rss/refresh_feeds job (cron or enqueued by the
+// Refresh / Re-evaluate-all actions). The server broadcasts every run
+// lifecycle event over the ws ("jobs.changed" live messages), so the view
+// renews exactly when the job finishes — the work spinner never lingers
+// past the real job. A bounded poll acts as the fallback when the ws is
+// down.
+
+let pollTimer = null;
+let pollTries = 0;
+// 12 min at 5 s — comfortably above the job's own 10-minute bound, so the
+// polling can never spin "indefinitely"; it also settles early as soon as
+// the pending-queue drains.
+const pollMaxTries = 144;
+
+function clearPollTimer() {
+    if (pollTimer) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+function startPolling(info) {
+    if (info) actionInfo.value = info;
+    refreshing.value = true;
+    pollTries = 0;
+    clearPollTimer();
+    pollTimer = window.setInterval(async () => {
+        pollTries++;
+        await refreshView();
+        settleIfDone(pollTries > pollMaxTries);
+    }, 5000);
+}
+
+// Settle the working state when nothing is left to evaluate; warn if the
+// cap was reached with work still outstanding (the job event will still
+// settle it later).
+function settleIfDone(capped = false) {
+    const pending = view.value?.counts?.pending_classify ?? 0;
+    if (pending === 0 && pollTries >= 2) {
+        clearPollTimer();
+        refreshing.value = false;
+        actionInfo.value = capped
+            ? "Still evaluating — check back after the next refresh"
+            : "";
+    } else if (capped) {
+        clearPollTimer();
+        refreshing.value = false;
+        actionInfo.value =
+            "Evaluation still running in the background — Re-evaluate all keeps its results";
+    }
+}
+
+// The live-message listener for this reader's jobs (mounted only while the
+// component lives — no dangling listeners on note switches).
+function onLiveMessage(event) {
+    const msg = event?.detail;
+    if (msg?.type !== "jobs.changed") return;
+    const job = msg.job;
+    if (!job || job.plugin_id !== "rss" || job.job_name !== "refresh_feeds") {
+        return;
+    }
+    if (job.status === "done") {
+        // Single source of truth: view reload when the job finished; if the
+        // queue drained, the spinner clears right here.
+        refreshView().then(() => {
+            const pending = view.value?.counts?.pending_classify ?? 0;
+            if (pending === 0) {
+                clearPollTimer();
+                refreshing.value = false;
+                actionInfo.value = "";
+            } else {
+                pollTries = 0; // evaluation resumed for a next batch — keep polling (bounded)
+            }
+        });
+    } else if (job.status === "errored" || job.status === "cancelled") {
+        clearPollTimer();
+        refreshing.value = false;
+        actionError.value = job.error || `refresh job ${job.status}`;
+        refreshView();
+    } else if (job.status === "running" || job.status === "planned") {
+        refreshing.value = true;
+        refreshView();
+    }
+}
+
+onMounted(() => {
+    window.addEventListener("live:message", onLiveMessage);
+});
+onBeforeUnmount(() => {
+    window.removeEventListener("live:message", onLiveMessage);
+    clearPollTimer();
+});
+
 async function refreshNow() {
     const res = await runAction("refresh", {}, { info: "Refresh scheduled…" });
     if (!res) return;
-    refreshing.value = true;
-    actionInfo.value = "Refreshing feeds…";
-    // Poll until the scheduled job run has completed (bounded).
-    let tries = 0;
-    const timer = setInterval(async () => {
-        tries++;
-        await refreshView();
-        if (tries >= 12) {
-            clearInterval(timer);
-            refreshing.value = false;
-            actionInfo.value = "";
-        }
-    }, 2500);
+    startPolling("Refreshing feeds…");
 }
 
 async function reapplyRules() {
@@ -789,27 +882,14 @@ async function reapplyRules() {
     await refreshView();
 }
 
-// Queue every article for a fresh LLM evaluation, then poll until the
-// scheduled refresh job has drained the queue.
+// Queue every article for a fresh LLM evaluation, then track it: the job
+// event renews the view when the drain finishes; polling covers ws outages.
 async function reclassifyAll() {
     const res = await runAction("reclassify_all", {}, {
         info: "Queuing re-evaluation…",
     });
     if (!res) return;
-    refreshing.value = true;
-    actionInfo.value = `Re-evaluating ${res.reset ?? 0} articles…`;
-    let tries = 0;
-    const timer = setInterval(async () => {
-        tries++;
-        await refreshView();
-        const pending = view.value?.counts?.pending_classify ?? 0;
-        if ((pending === 0 && tries >= 2) || tries >= 24) {
-            clearInterval(timer);
-            refreshing.value = false;
-            actionInfo.value =
-                pending === 0 ? "Re-evaluation finished" : "";
-        }
-    }, 2500);
+    startPolling(`Re-evaluating ${res.reset ?? 0} articles…`);
 }
 
 async function set_item_state(item, state) {
