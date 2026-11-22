@@ -144,3 +144,32 @@ func TestNewFeatureChatClient(t *testing.T) {
 		t.Error("unknown usage must return nil")
 	}
 }
+
+func TestUsageSystemDefault(t *testing.T) {
+	for _, spec := range UsageSpecs() {
+		sd, ok := UsageSystemDefault(spec.ID)
+		if !ok {
+			t.Errorf("usage %q: no system default", spec.ID)
+			continue
+		}
+		if sd.Model == "" {
+			t.Errorf("usage %q: empty default model", spec.ID)
+		}
+		if sd.Tier == "" {
+			t.Errorf("usage %q: empty default tier", spec.ID)
+		}
+		// The default must match the feature clients handed out as fallback.
+		c := NewFeatureChatClient(spec.ID)
+		if c == nil {
+			t.Errorf("usage %q: no feature client", spec.ID)
+			continue
+		}
+		if c.Model != sd.Model || c.BaseURL != sd.BaseURL {
+			t.Errorf("usage %q: client (%s @ %s) disagrees with default (%s @ %s)",
+				spec.ID, c.Model, c.BaseURL, sd.Model, sd.BaseURL)
+		}
+	}
+	if sd, ok := UsageSystemDefault("no-such-usage"); ok || sd.Model != "" {
+		t.Error("unknown usages must report no system default")
+	}
+}

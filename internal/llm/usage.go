@@ -100,6 +100,31 @@ func NewFeatureChatClient(usage string) *ChatClient {
 	return nil
 }
 
+// SystemDefault describes what the config.toml feature/tier system serves for
+// a usage: the effective tier, model, and endpoint. These are the app's
+// built-in defaults — what llm_inferencer notes override with their mappings,
+// and what an llm_inferencer usage binding of {local: true} pins a usage to.
+type SystemDefault struct {
+	Tier    string `json:"tier,omitempty"` // smart/medium/small/tiny (config.toml)
+	Model   string `json:"model"`
+	BaseURL string `json:"base_url,omitempty"`
+}
+
+// UsageSystemDefault returns the config.toml feature/tier binding for a usage
+// (per-feature tier override, per-tier model/base URL, built-in defaults
+// last). ok=false only for usages outside the catalog.
+func UsageSystemDefault(usage string) (SystemDefault, bool) {
+	spec := UsageSpecByID(usage)
+	if spec == nil {
+		return SystemDefault{}, false
+	}
+	return SystemDefault{
+		Tier:    FeatureTier(spec.Feature),
+		Model:   FeatureModel(spec.Feature),
+		BaseURL: FeatureBaseURL(spec.Feature),
+	}, true
+}
+
 // TierNamesSorted returns tier names sorted alphabetically (helper for
 // consumers iterating config tiers).
 func TierNamesSorted() []string {

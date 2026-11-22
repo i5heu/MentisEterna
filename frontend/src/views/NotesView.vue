@@ -346,7 +346,7 @@
                                 @change="onTypeChange()"
                             >
                                 <option
-                                    v-for="opt in typeOptions"
+                                    v-for="opt in editableTypeOptions"
                                     :key="opt.value"
                                     :value="opt.value"
                                 >
@@ -1668,6 +1668,7 @@ import {
     getNoteTypeOrDefault,
     getDefaultChildType,
     isLazyChildren,
+    isSingletonType,
     fetchAndMergeManifests,
 } from "../note-types/registry.js";
 import {
@@ -1767,6 +1768,30 @@ function insertAtCursor(text) {
 
 // Note-type options from the registry (single source of truth)
 const typeOptions = getTypeOptions();
+
+// Singleton note types (one per app, e.g. llm_inferencer): track which
+// already exist so pickers stop offering them once taken.
+const singletonTypeTaken = computed(() => {
+    const taken = new Set();
+    for (const n of notes.value) {
+        if (n?.type && isSingletonType(n.type)) taken.add(n.type);
+    }
+    if (selected.value?.type && isSingletonType(selected.value.type)) {
+        taken.add(selected.value.type);
+    }
+    return taken;
+});
+
+// Options for the edit-mode type select. Singleton types stay listed while
+// they belong to the selected note or while no instance exists yet; once
+// another note holds the type it disappears (the server 400s anyway).
+const editableTypeOptions = computed(() =>
+    typeOptions.filter((opt) => {
+        if (!isSingletonType(opt.value)) return true;
+        if (opt.value === selected.value?.type) return true;
+        return !singletonTypeTaken.value.has(opt.value);
+    })
+);
 const saveError = ref("");
 const showDeleteModal = ref(false);
 const deleting = ref(false);

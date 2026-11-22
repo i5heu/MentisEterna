@@ -1,35 +1,45 @@
-# LLM Inferencer — Remote LLM Provider Notes
+# LLM Inferencer — the App's Remote LLM Provider Note
 
 An `llm_inferencer` note type for MentisEterna: a **remote LLM inference
 provider configured entirely in a note** — the "business logic lives in
-notes" paradigm applied to model selection. One note defines the provider
-endpoint (OpenRouter, Mistral La Plateforme, or any OpenAI-compatible
-server), the API key, a model for each of the four capability tiers —
-**big / middle / small / tiny** — and maps the app's LLM usages
-(e.g. `rss_classify`) to those tiers. Usages resolve through the **note
-hierarchy** (nearest inferencer note wins) and fall back to the
-`config.toml` feature/tier system when nothing binds.
+notes" paradigm applied to model selection. **The note type is a
+singleton: exactly one LLM Inferencer note may exist per app** (the server
+rejects creating or switching to a second one with a 400, and the frontend
+type picker hides the type once an instance exists). That one note defines
+the provider endpoint (OpenRouter, Mistral La Plateforme, or any
+OpenAI-compatible server), the API key, a model for each of the four
+capability tiers — **big / middle / small / tiny** — and maps the app's
+LLM usages (e.g. `rss_classify`) to those tiers, to direct models, or
+explicitly to the **local LLM** (the `config.toml` feature/tier system).
+
+The note applies **globally**: usages resolve through it from anywhere in
+the note tree. Unmapped usages — and usages pinned to local — resolve
+through the `config.toml` feature/tier system, whose per-usage defaults are
+surfaced in the note's UI ((system default tier → model), with a
+**Reset to system defaults** button that clears all overrides).
 
 ## Product decisions (settled with user)
 
 | Decision | Choice |
 |---|---|
+| **Uniqueness** | **One `llm_inferencer` note per app** (manifest `Singleton: true`). `createNoteCore` and `updateNote` count existing notes of the type inside the write transaction and reject a second one with a 400. The frontend type picker hides the type while an instance exists (edit one instead). Legacy databases created before the rule may hold several notes: resolution uses the lowest note id and warns — delete the extras. |
 | Providers | `openrouter` (default base `https://openrouter.ai/api`), `mistral` (`https://api.mistral.ai`), and `compatible` (any OpenAI-compatible endpoint, base URL required). The chat client appends `/v1/chat/completions`; both OpenRouter and Mistral speak the OpenAI chat-completions shape. |
 | API key | **Stored in the note config, write-only.** `LoadConfig` never returns it — note views only see `api_key_set: true/false`. Saving with an empty `api_key` **keeps** the stored key (normal UI round-trips can't wipe it); typing a new one replaces it; the `clear_api_key` action removes it. The key lives only in `ct_llm_inferencer_config.api_key` (and encrypted backups) — it is never serialized into any view, action result, or classifier metadata. |
 | Tiers | Four fixed capability tiers: `big`, `middle`, `small`, `tiny`. Each tier has a model and an optional per-tier `base_url` override. |
-| Usage mapping | A `usages` map: usage id → `{tier}` or `{model}` (direct model override, XOR). An empty map + `default_tier` binds all usages to one tier. Mappings for usages whose call sites aren't migrated yet are accepted and shown as "pending backend wiring" — they activate when the backend starts routing that usage. |
-| Resolution | Same nearest-wins walk as `rss_prompt`: anchor's own subtree (BFS) → siblings → uncles up the ancestor chain → **top level** (notes without a parent are the implicit tree root). Nothing binds → `config.toml` feature/tier client. |
+| Usage mapping | A `usages` map: usage id → `{tier}`, `{model}` (direct model override), or `{local: true}` (explicit pin to the config.toml local LLM — beats the note's `default_tier`). XOR: exactly one of the three. Mappings for usages whose call sites aren't migrated yet are accepted and shown as "pending backend wiring" — they activate when the backend starts routing that usage. |
+| Resolution | Global through the app's single note: call sites ask `ResolveChat(db, usage)` with no anchor. Nothing binds → `config.toml` feature/tier client. An explicit `{local: true}` binding resolves to the same `config.toml` client, but reported as `Source: "local"` (the pin is the user's explicit choice, distinct from a plain fallback). |
+| System defaults | The view reports, per usage, what `config.toml` would serve (`system_default: {tier, model, base_url}` via `llm.UsageSystemDefault`), and effective bindings (explicit / `via_default` / `local` flag). The frontend shows these defaults next to every usage in viewer and editor, and the editor's **Reset to system defaults** button clears the usage map + default tier so every usage uses the `config.toml` defaults again (provider, endpoint, key, and tier model definitions stay). |
 | OCR / STT / embeddings | Deliberately out of scope: different API shapes (image/audio/file endpoints, dedicated models). They stay bound to `config.toml`. |
 | Wired in v1 | `rss_classify` (RSS article classification). Others (`title`, `tags`, `subtasks`) are pre-wired into the catalog and the resolver — see "Wiring a new usage" below. |
 
 ## 1. The note and its config
 
 ```
-🧠 GPT-6 via OpenRouter (type: llm_inferencer)
+🧠 LLM Inferencer (type: llm_inferencer — ONE per app, applies app-wide)
 │   config: provider, base_url, api_key (write-only), tiers{big,middle,small,tiny},
-│           default_tier, usages{rss_classify: {tier: small}, ...}
+│           default_tier, usages{rss_classify: {tier: small} | {model: x} | {local: true}, ...}
 │   view:   provider label, key-set flag, tier table, resolved usage bindings,
-│           warnings (incomplete bindings, endpoint overrides)
+│           per-usage system (config.toml) defaults, warnings
 ```
 
 Config JSON shape (identical across `ValidateConfig` / `SaveConfig` /
@@ -50,7 +60,8 @@ Config JSON shape (identical across `ValidateConfig` / `SaveConfig` /
   },
   "usages": {
     "rss_classify": { "tier": "small" },
-    "title":       { "model": "prov/other" }
+    "title":       { "local": true },
+    "tags":        { "model": "prov/other" }
   }
 }
 ```
@@ -69,36 +80,32 @@ note). Both cascade away with the note.
 
 ## 2. Resolution (`resolve.go`)
 
-`ResolveChat(db, fromNoteID, usage)` walks for the nearest
-`llm_inferencer` note that yields a **concrete model** for the usage:
+`ResolveChat(db, usage)` — no anchor parameter: the note type is a
+singleton, so the one note (wherever it sits in the tree) applies globally.
 
-1. the anchor's own subtree (BFS by `parent_id`, shallowest then lowest id),
-2. each ancestor's children — siblings, then uncles — up the chain,
-3. the **top level** (implicit tree root: notes with `parent_id IS NULL`)
-   — the last scope, so one top-level inferencer note binds the whole tree
-   and any closer note overrides it locally.
+1. The app's `llm_inferencer` note — if it yields a **concrete model** for
+   the usage — binds:
+   - explicit `usages[usage].model` → binds with that model,
+   - explicit `usages[usage].tier` with a configured model on that tier →
+     binds; **without** a model the binding is incomplete and does NOT
+     capture (surfaced as a view warning),
+   - explicit `usages[usage].local` → `Source: "local"`: the usage is
+     pinned to the config.toml feature/tier client (the local LLM) —
+     the note's `default_tier` does NOT capture it,
+   - otherwise `default_tier` when that tier has a model → binds,
+   - otherwise the note is skipped for that usage.
 
-Binding rules per candidate note:
+2. Nothing (or nobody) binds → the `config.toml` feature/tier client
+   (`llm.NewFeatureChatClient`) — `Source: "config"`.
 
-- explicit `usages[usage].model` → binds with that model,
-- explicit `usages[usage].tier` with a configured model on that tier → binds,
-  **without** a model the binding is incomplete and does NOT capture
-  (surfaced as a view warning),
-- otherwise `default_tier` when that tier has a model → binds,
-- otherwise the note is skipped.
+Databases from **before the singleton rule** may hold several
+`llm_inferencer` notes: they resolve in id order (lowest wins), the
+winner carries a warning, and the view warns about the duplicates —
+delete the extras; the server refuses to create new ones.
 
-Multiple binders at the same level → lowest note id wins, and the winner
-carries a warning (e.g. "multiple llm_inferencer notes bind rss_classify at
-the same level: using note 42").
-
-The anchor note itself is never a candidate (same semantics as `rss_prompt`;
-its *children*, *siblings*, and *ancestors' children* are).
-
-Nothing binds → the `config.toml` feature/tier client
-(`llm.NewFeatureChatClient`) — `Source: "config"` in the returned
-`ResolvedChat`. The resolved **API key never leaves the resolver as data**:
-it goes straight into the `*llm.ChatClient` it returns; `ResolvedChat` is
-JSON-safe.
+The resolved **API key never leaves the resolver as data**: it goes
+straight into the `*llm.ChatClient` it returns; `ResolvedChat` is
+JSON-safe. `ResolvedChat.Source` is one of `note` / `local` / `config`.
 
 ## 3. Provider client (`internal/llm`)
 
@@ -120,6 +127,10 @@ The **usage catalog** also lives in `internal/llm` (`usage.go`):
 `Wired` = the call site resolves through `ResolveChat` today. Others can be
 configured now and activate with the code that wires them.
 
+`llm.UsageSystemDefault(usage)` returns the effective `config.toml`
+binding for a usage — the per-usage "system default"
+(`{Tier, Model, BaseURL}`) shown in the inferencer note's UI.
+
 ## 4. Actions
 
 | action | what it does |
@@ -132,11 +143,10 @@ configured now and activate with the code that wires them.
 
 1. Add the usage entry to `usageSpecs` in `internal/llm/usage.go` (id,
    feature key, label, description, `Wired: false`).
-2. At the call site (where the note/context is known), replace the fixed
-   feature client with a resolution:
+2. At the call site, replace the fixed feature client with a resolution:
 
    ```go
-   client, res, err := llminferencer.ResolveChat(db, noteID, "<usage>")
+   client, res, err := llminferencer.ResolveChat(db, "<usage>")
    // on err: fall back to llm.NewFeatureChatClient("<usage>")
    ```
 
@@ -145,35 +155,48 @@ configured now and activate with the code that wires them.
 
 ## 6. RSS classification (`rss_classify`) as wired
 
-`pkg/notetype/rss/classify.go` — the `newClassifier` seam is now
-`newClassifier(db, noteID)`:
+`pkg/notetype/rss/classify.go` — the `newClassifier` seam:
 
 ```go
-client, _, err := llminferencer.ResolveChat(db, noteID, "rss_classify")
+client, _, err := llminferencer.ResolveChat(db, "rss_classify")
 if err != nil || client == nil {
     return llmClassifier{client: llm.NewRSSClassifierClient()} // graceful degradation
 }
 return llmClassifier{client: client}
 ```
 
-Classification (cron batch + manual reclassify) resolves once per run,
-anchored at the reader note — so a reader nested under a branch with its own
-inferencer note classifies through that branch's provider, and everything
-else falls back up the tree, ultimately to `config.toml`.
+Classification (cron batch + manual reclassify) resolves once per run.
+The inferencer note is global, so reader placement in the tree no longer
+matters; a `{local: true}` pin or no binding falls back to `config.toml`.
 
 ## 7. Frontend
 
 `frontend/src/note-types/llm_inferencer/LlmInferencerNoteType.vue` (registry
-id `llm_inferencer`):
+id `llm_inferencer`, manifest `singleton: true`):
 
+- **Uniqueness in the picker**: `isSingletonType(id)` + the manifest flag
+  make NotesView's edit-mode type select drop `llm_inferencer` once an
+  instance exists (the search type filter keeps it). Editing the existing
+  note keeps it listed; the server 400s violations regardless.
 - **Editor**: provider select, base URL (placeholder = provider default),
   write-only key input (password field; "leave empty to keep, type to
   replace"), default-tier select, one model row per tier with a per-tier
-  **Test** button, and a per-usage mapping editor (not mapped / by tier /
-  direct model) with the live preview `→ tier small → prov/small`. A
-  "Load models" button fills a `<datalist>` for the model inputs.
-- **Viewer**: provider badge, key-set chip, tier table, resolved usage
-  bindings with active/pending badges, warnings, and a connection test.
+  **Test** button, and a per-usage mapping editor with four modes:
+  **Not mapped (system default)** / **By tier** / **Direct model** /
+  **Local (config.toml)**. Every usage row previews the effective
+  resolution (`Resolves to <model> via <source> · System default:
+  tier → model`). A **Load models** button fills a `<datalist>` for the
+  model inputs.
+- **Reset to system defaults**: the usage-mappings header button clears
+  the usage map and the default tier (with a confirm) so every usage uses
+  the `config.toml` system defaults again; provider/endpoint/key/tier
+  definitions stay.
+- **Viewer**: provider badge, key-set chip, "unique · applies app-wide"
+  chip, tier table, and a usage table with four columns: usage (with
+  active/pending badge), this note's binding, the model it resolves to
+  via which source, and the config.toml system default. Warnings
+  (incomplete bindings, endpoint overrides, legacy duplicate notes) and
+  a connection test round it off.
 - The emitted payload strips empty tiers (backend validation rejects them)
   and only includes `api_key` when the user typed one.
 
@@ -191,15 +214,22 @@ id `llm_inferencer`):
 ## 9. Testing
 
 - `go test ./pkg/notetype/llminferencer/` — plugin harness battery
-  (manifest/config round-trip/view/actions) plus: write-only key semantics
-  (mask + keep-on-empty + replace + clear), binding rules, hierarchy
-  resolution (subtree/sibling/uncle/top-level, nearest wins, lowest-id ties,
-  incomplete-binding fall-through, per-tier base URL), action tests against
-  `httptest` providers (auth header, latency, replies, model list), guards
-  for nil db (harness contract).
+  (manifest incl. singleton flag/config round-trip/view/actions) plus:
+  write-only key semantics (mask + keep-on-empty + replace + clear),
+  binding rules (incl. `{local: true}` pins), global resolution (single
+  note binds anywhere in the tree, legacy duplicates: lowest id wins +
+  warning, incomplete-binding fall-through, per-tier base URL, local pin
+  beats default tier), action tests against `httptest` providers (auth
+  header, latency, replies, model list), guards for nil db (harness
+  contract), and the view's per-usage system defaults + duplicate warning.
+- `go test ./internal/server/ -run TestSingleton` — singleton enforcement:
+  second create rejected 400, switching another note's type rejected 400,
+  editing/downgrading the singleton stays legal, `singleton: true` in the
+  `/note-types` catalog.
 - `go test ./internal/llm/` — keyed-client behavior (Bearer header, no auth
-  header when keyless, idle-stop never fires for keyed clients) and the
-  usage catalog/feature factory.
-- `go test ./pkg/notetype/rss/` — the classifier seam stubs are
-  `newClassifier(db, noteID)`; one integration test proves resolution
-  through a sibling inferencer note end-to-end.
+  header when keyless, idle-stop never fires for keyed clients), the usage
+  catalog/feature factory, and `UsageSystemDefault` matching the feature
+  clients.
+- `go test ./pkg/notetype/rss/` — the classifier seam stubs resolve
+  through the global inferencer note end-to-end (model/endpoint/key from
+  the note, config feature client before/without one).

@@ -34,7 +34,7 @@ Every note type must implement the `Plugin` base interface:
 
 - `ID() string` — unique short name (e.g. `"yourtype"`)
 - `InitSchema(db *sql.DB) error` — create `ct_yourtype_*` tables with `FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE`
-- `Manifest() Manifest` — static type metadata (label, icon, category, editor/viewer modes, actions, capabilities)
+- `Manifest() Manifest` — static type metadata (label, icon, category, editor/viewer modes, actions, capabilities, `Singleton` = only one note of this type per app; the server enforces it on create and type changes and the frontend hides the type from pickers once taken)
 - `CronJobs() []CronJob` — background tasks (or return nil)
 
 ### Optional capability interfaces
@@ -60,23 +60,33 @@ The server populates `plugin.config` and `plugin.view` on note detail responses 
 - `POST /notes/:id/action` — legacy action route (delegates to same dispatcher)
 - `POST /mcp` — MCP (Model Context Protocol) endpoint, streamable-http transport (see "MCP Endpoint")
 
-## LLM Inferencer Notes & Usage Resolution
+## LLM Inferencer Note & Usage Resolution
 
 Remote LLM inference (OpenRouter, Mistral, any OpenAI-compatible endpoint) is
-configured in `llm_inferencer` note types: provider + base URL + a
-**write-only API key** (stored in `ct_llm_inferencer_config.api_key`, never
-returned by LoadConfig — empty on save keeps it, `clear_api_key` removes it)
-+ four tier models (**big/middle/small/tiny**) + `usages` mappings
-(`{tier}` or direct `{model}`) + optional `default_tier`.
+configured in the app's **single** `llm_inferencer` note — the note type is a
+**singleton** (manifest `Singleton: true`): the server rejects creating or
+switching to a second one with a 400 (`singletonCheck` in notes.go), and the
+frontend type picker hides the type once an instance exists. The note
+carries: provider + base URL + a **write-only API key** (stored in
+`ct_llm_inferencer_config.api_key`, never returned by LoadConfig — empty on
+save keeps it, `clear_api_key` removes it) + four tier models
+(**big/middle/small/tiny**) + `usages` mappings (`{tier}`, direct `{model}`,
+or `{local: true}` = explicit pin to the config.toml local LLM, which beats
+`default_tier`) + optional `default_tier`.
 
 The usage catalog (`internal/llm/usage.go`) lists the app's LLM usages
 (rss_classify, title, tags, subtasks) with a `Wired` flag. Wired usages
-resolve per call site via `llminferencer.ResolveChat(db, anchorNoteID, usage)`:
-nearest binder in the note hierarchy (own subtree → siblings → uncles →
-top level) wins, else the `config.toml` feature/tier client. Only
-`rss_classify` is wired today; mappings for unwired usages are inert until
-their call site migrates (see docs/LLMInferencer.md §5). API-keyed chat
-clients skip the LocalAI idle-stop machinery.
+resolve per call site via `llminferencer.ResolveChat(db, usage)` — no
+anchor: the singleton note applies globally from anywhere in the tree. It
+binds usages that map to a tier/model of its provider; `{local: true}`
+pins and unmapped usages resolve to the `config.toml` feature/tier client
+(`Source: "local"` / `"config"`). The view surfaces the per-usage
+config.toml defaults (`llm.UsageSystemDefault`) next to every mapping, and
+the frontend offers a **Reset to system defaults** button (clears the usage
+map + default tier). Only `rss_classify` is wired today; mappings for
+unwired usages are inert until their call site migrates (see
+docs/LLMInferencer.md §5). API-keyed chat clients skip the LocalAI
+idle-stop machinery.
 
 ## MCP Endpoint
 
@@ -191,7 +201,7 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 | `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) + metadata fields | ConfigValidator, ConfigSaver, ConfigLoader |
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
 | `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
-| `pkg/notetype/llminferencer/` | `llm_inferencer` | LLM inference provider note (OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings; write-only API key; `ResolveChat` resolves usages through the note hierarchy | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler |
+| `pkg/notetype/llminferencer/` | `llm_inferencer` | The app's single LLM inference provider note (singleton: OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings (`{tier}`/`{model}`/`{local: true}` pin to config.toml); write-only API key; `ResolveChat(db, usage)` resolves globally, falling back to config.toml (the per-usage system defaults are shown in the view) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler |
 | `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM classification (prompt resolved from the nearest `rss_prompt` note in the hierarchy) + ban words / penalty points typed in the reader note's body | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
 
 ## RSS Reader

@@ -464,6 +464,31 @@ type createNoteInput struct {
 	Tags       []string
 }
 
+// singletonCheck enforces a note type's Singleton manifest flag: at most one
+// note of a singleton type may exist in the whole app (e.g. llm_inferencer,
+// the single global LLM provider configuration). excludeID lets updateNote
+// skip the note it is re-saving (a note keeping its own singleton type stays
+// legal). Returns a *notetype.BadRequestError on conflict (→ HTTP 400).
+func singletonCheck(q interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, noteType string, excludeID int64) error {
+	plugin, exists := notetype.Registry[noteType]
+	if !exists || !plugin.Manifest().Singleton {
+		return nil
+	}
+	var n int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM notes WHERE type = ? AND id != ?`, noteType, excludeID).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		m := plugin.Manifest()
+		return &notetype.BadRequestError{Message: fmt.Sprintf(
+			"only one %s note is allowed per app and one already exists (edit the existing one, or delete it first)",
+			m.Label)}
+	}
+	return nil
+}
+
 // createNoteCore creates a note with its body, plugin config, and tags, plus
 // every post-creation side effect (recipe classification, media
 // reconciliation, embedding/title/auto-tag jobs, live notification). Invalid
@@ -491,6 +516,11 @@ func (s *Server) createNoteCore(in createNoteInput) (NoteDetail, error) {
 		return NoteDetail{}, err
 	}
 	defer tx.Rollback()
+
+	// Singleton note types (one per app) — checked inside the transaction.
+	if err := singletonCheck(tx, in.Type, 0); err != nil {
+		return NoteDetail{}, err
+	}
 
 	res, err := tx.Exec(`INSERT INTO notes (title, parent_id, type) VALUES (?, ?, ?)`, in.Title, in.ParentID, in.Type)
 	if err != nil {
@@ -634,6 +664,18 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+
+	// Singleton note types (one per app) — the note itself is excluded so
+	// an existing singleton note can still be edited.
+	if err := singletonCheck(tx, in.Type, id); err != nil {
+		var badReq *notetype.BadRequestError
+		if errors.As(err, &badReq) {
+			http.Error(w, badReq.Error(), http.StatusBadRequest)
+			return
+		}
+		writeErr(w, err)
+		return
+	}
 
 	res, err := tx.Exec(`UPDATE notes SET title = ?, parent_id = ?, type = ? WHERE id = ?`, in.Title, in.ParentID, in.Type, id)
 	if err != nil {

@@ -12,6 +12,12 @@
                 >
                     {{ keySet ? "API key stored" : "No API key stored" }}
                 </span>
+                <span
+                    class="infx-badge infx-badge-solo"
+                    title="Only one LLM Inferencer note can exist per app — it applies to the whole note tree"
+                >
+                    unique · applies app-wide
+                </span>
                 <span v-if="effectiveBaseURL" class="infx-base-url mono">{{
                     effectiveBaseURL
                 }}</span>
@@ -57,8 +63,9 @@
                 <thead>
                     <tr>
                         <th>Usage</th>
-                        <th>Binds to</th>
-                        <th>Model</th>
+                        <th>This note</th>
+                        <th>Resolves to</th>
+                        <th>System default (config.toml)</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -71,8 +78,14 @@
                                 >{{ u.wired ? "active" : "pending wiring" }}</span
                             >
                         </td>
-                        <td class="mono">{{ u.bindLabel }}</td>
-                        <td class="mono">{{ u.model }}</td>
+                        <td class="mono" :class="{ 'infx-incomplete': u.incomplete }">
+                            {{ u.bindLabel }}
+                        </td>
+                        <td class="mono">
+                            {{ u.model }}
+                            <span class="infx-muted">({{ u.source }})</span>
+                        </td>
+                        <td class="mono infx-muted">{{ u.sysText }}</td>
                     </tr>
                 </tbody>
             </table>
@@ -213,11 +226,22 @@
                 </option>
             </datalist>
 
-            <h4 class="infx-sub">Usage mappings</h4>
+            <h4 class="infx-sub">
+                Usage mappings
+                <button
+                    class="btn-ghost btn-sm infx-sub-btn"
+                    title="Clear every usage mapping and the default tier so all usages use the config.toml system defaults again"
+                    @click="resetUsageMappings"
+                >
+                    Reset to system defaults
+                </button>
+            </h4>
             <p class="infx-help">
-                Usages resolve through the nearest inferencer note in the
-                hierarchy (children → siblings → ancestors) and fall back to
-                config.toml when nothing binds.
+                This note is the app's single LLM Inferencer — its mappings
+                apply app-wide. Unmapped usages keep using the system
+                defaults from config.toml (shown per usage); "Local
+                (config.toml)" pins a usage to those defaults even when you
+                set a default tier.
             </p>
             <div v-for="u in usageRows" :key="u.id" class="infx-usage-row">
                 <div class="infx-usage-head">
@@ -236,9 +260,10 @@
                         class="infx-select"
                         @change="setUsageMode(u.id, $event.target.value)"
                     >
-                        <option value="none">Not mapped</option>
+                        <option value="none">Not mapped (system default)</option>
                         <option value="tier">By tier</option>
                         <option value="model">Direct model</option>
+                        <option value="local">Local (config.toml)</option>
                     </select>
                     <select
                         v-if="usageMode(u.id) === 'tier'"
@@ -263,12 +288,17 @@
                         placeholder="provider/model-id"
                         @input="setUsageModel(u.id, $event.target.value)"
                     />
-                    <span v-if="u.resolvedLabel" class="infx-resolved mono">
-                        → {{ u.resolvedLabel }}
-                    </span>
                 </div>
+                <p class="infx-help infx-resolv">
+                    Resolves to <span class="mono">{{ u.model }}</span> via
+                    <span class="mono">{{ u.source }}</span>
+                    <template v-if="u.sysModel">
+                        · System default:
+                        <span class="mono">{{ u.sysText }}</span>
+                    </template>
+                </p>
                 <p
-                    v-if="usageMode(u.id) === 'tier' && !u.resolvedModel"
+                    v-if="usageMode(u.id) === 'tier' && !u.model"
                     class="infx-help infx-help-warn"
                 >
                     That tier has no model yet — set it in Tier models above.
@@ -286,13 +316,21 @@ import { computed, reactive, ref, watch } from "vue";
 /**
  * LLM Inferencer note-type component.
  *
- * Editor: provider/base URL/write-only API key, four tier models
- * (big/middle/small/tiny), and per-usage bindings (tier or direct model).
- * The draft is emitted via update:customData; an empty api_key keeps the
- * stored key (write-only semantics), an explicit value replaces it.
+ * The note type is a singleton: exactly ONE llm_inferencer note exists per
+ * app and its mappings apply globally.
  *
- * Viewer: resolved bindings and status from the server view (the parent
- * routes plugin.view into the uiSchema prop).
+ * Editor: provider/base URL/write-only API key, four tier models
+ * (big/middle/small/tiny), and per-usage bindings — a tier of this
+ * provider, a direct model, or "Local (config.toml)": an explicit pin to
+ * the system defaults from config.toml. A "Reset to system defaults"
+ * button clears all mappings (and the default tier) so every usage uses
+ * the config.toml defaults again. The draft is emitted via
+ * update:customData; an empty api_key keeps the stored key (write-only
+ * semantics), an explicit value replaces it.
+ *
+ * Viewer: resolved bindings with the system (config.toml) default shown
+ * next to every usage, plus status from the server view (the parent routes
+ * plugin.view into the uiSchema prop).
  */
 
 const props = defineProps({
@@ -358,10 +396,13 @@ function normalizeUsages(raw) {
     if (!raw || typeof raw !== "object") return out;
     for (const [id, b] of Object.entries(raw)) {
         if (!b || typeof b !== "object") continue;
-        const tier = typeof b.tier === "string" ? b.tier : "";
-        const model = typeof b.model === "string" ? b.model : "";
-        if (tier) out[id] = { tier };
-        else if (model) out[id] = { model };
+        if (b.local === true) {
+            out[id] = { local: true };
+        } else if (typeof b.tier === "string" && b.tier) {
+            out[id] = { tier: b.tier };
+        } else if (typeof b.model === "string" && b.model) {
+            out[id] = { model: b.model.trim() };
+        }
     }
     return out;
 }
@@ -445,12 +486,12 @@ const keySet = computed(() => {
 
 const verdict = computed(() => {
     if (!view.value) return "";
-    const bound = view.value.usages?.some?.((u) => u.binding) || false;
+    const usages = view.value.usages || [];
+    const bound = usages.some((u) => u.binding);
     if (!bound) {
-        return "Nothing mapped yet — map a usage below or set a default tier so this inferencer serves it.";
+        return "Nothing is mapped to this provider — every usage currently uses the system (config.toml) defaults. Map a usage below or set a default tier to route usages through this provider.";
     }
-    const unwired =
-        view.value.usages?.filter?.((u) => u.binding && !u.wired) || [];
+    const unwired = usages.filter((u) => u.binding && !u.wired) || [];
     if (unwired.length) {
         return `Configured mappings for ${unwired.length} usage(s) take effect once the backend routes them through inferencer notes.`;
     }
@@ -472,47 +513,87 @@ const tierRows = computed(() => {
     }));
 });
 
-// The usage catalog: from the server view when present, else the mapped
-// draft keys (the full catalog is server metadata).
+// systemDefaultText formats a usage's config.toml default: "tier → model".
+function systemDefaultText(sys) {
+    if (!sys || !sys.model) return "—";
+    return `${sys.tier || "system"} → ${sys.model}`;
+}
+
+// The usage catalog + effective resolution per usage. With the view
+// present (saved note), every row carries the system default from
+// config.toml; the draft decides what each usage currently resolves to:
+// an explicit binding, a local pin, the note's default tier, or — last —
+// the system default.
 const usageRows = computed(() => {
+    const rowsFor = (id, label, description, wired, incomplete, sys) => {
+        const sysText = systemDefaultText(sys);
+        const local = draft.usages[id];
+        let bindLabel = "—";
+        let model = sys?.model || "—";
+        let source = "system default";
+        if (local?.local) {
+            bindLabel = "local: config.toml";
+            model = sys?.model || "—";
+            source = "local (config.toml)";
+        } else if (local?.tier) {
+            const m = (draft.tiers[local.tier]?.model || "").trim();
+            bindLabel = `tier ${local.tier}`;
+            if (m) {
+                model = m;
+                source = "this note";
+            } else {
+                bindLabel = `tier ${local.tier} (no model)`;
+                model = sys?.model || "—";
+                source = "system default";
+            }
+        } else if (local?.model) {
+            bindLabel = `model ${local.model}`;
+            model = local.model;
+            source = "this note";
+        } else if (draft.default_tier) {
+            const m = (draft.tiers[draft.default_tier]?.model || "").trim();
+            if (m) {
+                bindLabel = `default tier ${draft.default_tier}`;
+                model = m;
+                source = "this note";
+            } else {
+                bindLabel = `default tier ${draft.default_tier} (no model)`;
+                model = sys?.model || "—";
+                source = "system default";
+            }
+        }
+        return {
+            id,
+            label,
+            description,
+            wired,
+            incomplete: !!incomplete,
+            bindLabel,
+            model,
+            source,
+            pinned: !!local?.local,
+            sysTier: sys?.tier || "",
+            sysModel: sys?.model || "",
+            sysText,
+        };
+    };
+
     if (view.value && Array.isArray(view.value.usages)) {
-        return view.value.usages.map((u) => {
-            const local = draft.usages[u.id];
-            const resolvedModel = local?.model || u.binding?.model || "";
-            const resolvedLabel = local?.tier
-                ? `tier ${local.tier} → ${resolvedModel}`
-                : local?.model
-                  ? `model ${local.model}`
-                  : u.binding
-                    ? `tier ${u.binding.tier} → ${u.binding.model}`
-                    : "";
-            return {
-                id: u.id,
-                label: u.label,
-                description: u.description,
-                wired: u.wired,
-                incomplete: !!u.incomplete,
-                bindLabel: u.binding
-                    ? u.binding.tier
-                        ? `tier ${u.binding.tier}`
-                        : "direct model"
-                    : "—",
-                model: u.binding?.model || "",
-                resolvedModel,
-                resolvedLabel,
-            };
-        });
+        return view.value.usages.map((u) =>
+            rowsFor(
+                u.id,
+                u.label,
+                u.description,
+                u.wired,
+                u.incomplete,
+                u.system_default,
+            ),
+        );
     }
-    return Object.keys(draft.usages).map((id) => ({
-        id,
-        label: id,
-        description: "",
-        wired: false,
-        bindLabel: draft.usages[id].tier ? `tier ${draft.usages[id].tier}` : "direct model",
-        model: draft.usages[id].model || "",
-        resolvedModel: draft.usages[id].model || "",
-        resolvedLabel: "",
-    }));
+    // No server view yet (unsaved note): only the mapped usages are known.
+    return Object.keys(draft.usages).map((id) =>
+        rowsFor(id, id, "", false, false, null),
+    );
 });
 
 const warnings = computed(() => view.value?.warnings || []);
@@ -521,12 +602,15 @@ const warnings = computed(() => view.value?.warnings || []);
 function usageMode(id) {
     const b = draft.usages[id];
     if (!b) return "none";
+    if (b.local) return "local";
     return b.tier ? "tier" : "model";
 }
 
 function setUsageMode(id, mode) {
     if (mode === "none") {
         delete draft.usages[id];
+    } else if (mode === "local") {
+        draft.usages[id] = { local: true };
     } else if (mode === "tier") {
         draft.usages[id] = { tier: "small" };
     } else {
@@ -541,6 +625,21 @@ function setUsageTier(id, tier) {
 function setUsageModel(id, model) {
     draft.usages[id] = { model: model.trim() };
     if (!draft.usages[id].model) delete draft.usages[id];
+}
+
+// Reset every override so all usages resolve through the config.toml
+// system defaults again: clears the usage map and the default tier.
+// Provider, endpoint, API key, and the tier model definitions stay.
+function resetUsageMappings() {
+    const mapped = Object.keys(draft.usages).length;
+    const parts = ["Reset all usage mappings and the default tier?"];
+    if (mapped) parts.push(`${mapped} mapped usage(s) will be cleared.`);
+    parts.push(
+        "Every usage then uses the system (config.toml) defaults again.",
+    );
+    if (!window.confirm(parts.join(" "))) return;
+    draft.default_tier = "";
+    Object.keys(draft.usages).forEach((id) => delete draft.usages[id]);
 }
 
 // --- actions ---
@@ -639,6 +738,10 @@ async function clearApiKey() {
 .infx-badge-warn {
     background: rgba(190, 130, 40, 0.2);
     color: #d8a04a;
+}
+.infx-badge-solo {
+    background: rgba(140, 90, 180, 0.22);
+    color: #b98cd6;
 }
 .infx-base-url {
     font-size: 0.75rem;
@@ -750,6 +853,9 @@ async function clearApiKey() {
     border-bottom: 1px solid rgba(127, 127, 127, 0.1);
     vertical-align: top;
 }
+.infx-incomplete {
+    color: #d8a04a;
+}
 .infx-usage-row {
     display: flex;
     flex-direction: column;
@@ -778,6 +884,9 @@ async function clearApiKey() {
 .infx-resolved {
     font-size: 0.75rem;
     opacity: 0.7;
+}
+.infx-resolv .mono {
+    opacity: 0.9;
 }
 .infx-warnings {
     font-size: 0.78rem;

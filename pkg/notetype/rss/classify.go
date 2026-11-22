@@ -64,14 +64,16 @@ func (l llmClassifier) BeginUse() func() {
 }
 
 // newClassifier is the production seam for tests. The classifier resolves
-// through the note hierarchy: the nearest llm_inferencer note binding the
-// "rss_classify" usage (OpenRouter / Mistral / any OpenAI-compatible
-// provider, with the note-stored API key) wins; with no binding the
-// config.toml feature/tier system client applies. On resolver failure the
-// config client is used so a broken inferencer note degrades gracefully
-// rather than blocking classification.
+// through the app's single llm_inferencer note (a singleton — one global LLM
+// provider configuration): when it binds the "rss_classify" usage
+// (OpenRouter / Mistral / any OpenAI-compatible provider, with the
+// note-stored API key), that provider wins; a {local: true} binding or no
+// binding at all falls back to the config.toml feature/tier system client
+// (the local LLM). On resolver failure the config client is used so a
+// broken inferencer note degrades gracefully rather than blocking
+// classification.
 var newClassifier = func(db *sql.DB, noteID int64) classifier {
-	client, _, err := llminferencer.ResolveChat(db, noteID, "rss_classify")
+	client, _, err := llminferencer.ResolveChat(db, "rss_classify")
 	if err != nil || client == nil {
 		return llmClassifier{client: llm.NewRSSClassifierClient()}
 	}

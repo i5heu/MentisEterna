@@ -104,6 +104,15 @@ func TestLlmInferencerPlugin(t *testing.T) {
 	})
 }
 
+// --- singleton manifest ---
+
+func TestManifestDeclaresSingleton(t *testing.T) {
+	m := (&Plugin{}).Manifest()
+	if !m.Singleton {
+		t.Fatal("llm_inferencer must declare Singleton — the LLM provider note is limited to one per app")
+	}
+}
+
 // --- config validation ---
 
 func TestValidateConfigRules(t *testing.T) {
@@ -134,6 +143,7 @@ func TestValidateConfigRules(t *testing.T) {
 		`{"provider":"compatible","base_url":"http://192.168.1.5:8080"}`,
 		`{"provider":"openrouter","api_key":"sk-live","tiers":{"tiny":{"model":"m"}},"usages":{"title":{"model":"prov/big"}}}`,
 		`{"provider":"openrouter","default_tier":"tiny","tiers":{"tiny":{"model":"m"}}}`,
+		`{"provider":"openrouter","default_tier":"tiny","tiers":{"tiny":{"model":"m"}},"usages":{"rss_classify":{"local":true},"title":{"tier":"tiny"}}}`,
 	}
 	for i, payload := range good {
 		if err := p.ValidateConfig(json.RawMessage(payload)); err != nil {
@@ -278,6 +288,21 @@ func TestBindsUsageRules(t *testing.T) {
 		t.Fatal("default tier without model must not bind")
 	}
 
+	// Explicit {local: true} pin: binds as a local pin and beats the
+	// default tier (and works with no tier models configured at all).
+	localPinned := &inferencerRow{
+		NoteID:      1,
+		Usages:      map[string]UsageBinding{"rss_classify": {Local: true}},
+		Tiers:       map[string]TierBinding{"middle": {Model: "prov/mid"}},
+		DefaultTier: "middle",
+	}
+	if b := localPinned.bindsUsage("rss_classify"); b == nil || !b.Local || !b.Explicit {
+		t.Fatalf("local pin must bind as local: %+v", b)
+	}
+	if b := localPinned.bindsUsage("tags"); b == nil || b.Local || b.Model != "prov/mid" {
+		t.Fatalf("default tier must fill non-pinned usages: %+v", b)
+	}
+
 	// Explicit binding overrides the default tier for other usages too.
 	// (default applies only to usages without an explicit entry)
 	mixed := &inferencerRow{
@@ -294,12 +319,12 @@ func TestBindsUsageRules(t *testing.T) {
 	}
 }
 
-// --- hierarchy resolution ---
+// --- resolution (global: the note type is a singleton) ---
 
-// resolveFor asserts resolution from an anchor and returns the client.
-func resolveFor(t *testing.T, db *sql.DB, anchor int64, usage string) (*llm.ChatClient, ResolvedChat) {
+// resolveFor asserts resolution and returns the client.
+func resolveFor(t *testing.T, db *sql.DB, usage string) (*llm.ChatClient, ResolvedChat) {
 	t.Helper()
-	client, res, err := ResolveChat(db, anchor, usage)
+	client, res, err := ResolveChat(db, usage)
 	if err != nil {
 		t.Fatalf("ResolveChat: %v", err)
 	}
@@ -311,9 +336,9 @@ func resolveFor(t *testing.T, db *sql.DB, anchor int64, usage string) (*llm.Chat
 
 func TestResolveFallbackToConfig(t *testing.T) {
 	db := testDB(t)
-	reader := createNote(t, db, "Reader", "rss", 0)
+	createNote(t, db, "Reader", "rss", 0)
 
-	client, res := resolveFor(t, db, reader, "rss_classify")
+	client, res := resolveFor(t, db, "rss_classify")
 	if res.Source != SourceConfig {
 		t.Fatalf("source = %q, want config fallback", res.Source)
 	}
@@ -323,21 +348,25 @@ func TestResolveFallbackToConfig(t *testing.T) {
 	if client.BaseURL != llm.FeatureBaseURL("rss_classify") {
 		t.Errorf("fallback base URL = %q", client.BaseURL)
 	}
-	if client.APIKey == "" && strings.Contains(client.BaseURL, "localhost") == false {
-		// No assertion to make; fallback clients are unkeyed by definition.
-		_ = client
+	if client.APIKey != "" {
+		t.Error("config fallback clients are unkeyed")
 	}
 }
 
-func TestResolveSubtreeChildWins(t *testing.T) {
+func TestResolveSingleNoteBindsGlobally(t *testing.T) {
 	db := testDB(t)
-	reader := createNote(t, db, "Reader", "rss", 0)
-	child := createNote(t, db, "Nested inferencer", PluginID, reader)
-	saveCfg(t, db, child, validPayload)
+	// The anchor is a top-level reader; the note sits DEEP inside an
+	// unrelated branch of the tree — the singleton is global.
+	root := createNote(t, db, "Unrelated", "standard", 0)
+	branch := createNote(t, db, "Branch", "standard", root)
+	nested := createNote(t, db, "Nested", "standard", branch)
+	inferencer := createNote(t, db, "Inferencer", PluginID, nested)
+	saveCfg(t, db, inferencer, validPayload)
+	createNote(t, db, "Reader", "rss", 0) // anchor-like consumer, anywhere in the tree
 
-	client, res := resolveFor(t, db, reader, "rss_classify")
-	if res.Source != SourceNote || res.InferencerNoteID != child {
-		t.Fatalf("resolved %v, want the reader's child note %d", res, child)
+	client, res := resolveFor(t, db, "rss_classify")
+	if res.Source != SourceNote || res.InferencerNoteID != inferencer {
+		t.Fatalf("resolved %v, want the global note %d", res, inferencer)
 	}
 	if res.Tier != "small" || res.Model != "prov/small" || client.Model != "prov/small" {
 		t.Errorf("tier resolution: res=%+v client=%+v", res, client)
@@ -350,67 +379,17 @@ func TestResolveSubtreeChildWins(t *testing.T) {
 	}
 }
 
-func TestResolveSiblingAndAncestor(t *testing.T) {
+func TestResolveLegacyMultipleNotesLowestIDWins(t *testing.T) {
+	// Databases from before the singleton rule may hold several notes:
+	// resolution prefers the lowest id and reports a warning.
 	db := testDB(t)
-	// root (implicit)
-	// ├── News (folder-ish standard note)
-	// │   ├── Reader (rss)          ← anchor
-	// │   └── Local inferencer     ← sibling, binds via default tier
-	// └── Root inferencer           ← top-level: bound only if nearer levels don't
-	parent := createNote(t, db, "News", "standard", 0)
-	createNote(t, db, "Root inferencer", PluginID, 0) // no config saved → does not bind
-	reader := createNote(t, db, "Reader", "rss", parent)
 
-	// Root-level note does not bind rss_classify (only default fallback later).
-	// With nothing binding: config fallback.
-	if _, res := resolveFor(t, db, reader, "rss_classify"); res.Source != SourceConfig {
-		t.Fatalf("nothing binds yet: %v", res)
-	}
-
-	// A sibling with a default tier now binds.
-	sibling := createNote(t, db, "Local inferencer", PluginID, parent)
-	saveCfg(t, db, sibling, `{"provider":"mistral","default_tier":"big","tiers":{"big":{"model":"mistral/mega"}}}`)
-
-	client, res := resolveFor(t, db, reader, "rss_classify")
-	if res.Source != SourceNote || res.InferencerNoteID != sibling {
-		t.Fatalf("sibling default-tier binding: %v", res)
-	}
-	if client.Model != "mistral/mega" || client.BaseURL != "https://api.mistral.ai" {
-		t.Errorf("mistral resolution: %+v", client)
-	}
-	if client.APIKey != "" {
-		t.Error("no key stored; client must be unkeyed")
-	}
-}
-
-func TestResolveNearestLevelWins(t *testing.T) {
-	db := testDB(t)
-	parent := createNote(t, db, "News", "standard", 0)
-	reader := createNote(t, db, "Reader", "rss", parent)
-
-	root := createNote(t, db, "Root inferencer", PluginID, 0)
-	saveCfg(t, db, root, `{"provider":"openrouter","usages":{"rss_classify":{"tier":"tiny"}},"tiers":{"tiny":{"model":"prov/root-tiny"}}}`)
-
-	uncle := createNote(t, db, "Uncle inferencer", PluginID, parent)
-	saveCfg(t, db, uncle, `{"provider":"openrouter","usages":{"rss_classify":{"tier":"tiny"}},"tiers":{"tiny":{"model":"prov/uncle-tiny"}}}`)
-
-	client, res := resolveFor(t, db, reader, "rss_classify")
-	if res.InferencerNoteID != uncle || client.Model != "prov/uncle-tiny" {
-		t.Fatalf("nearest level must win: %+v", res)
-	}
-}
-
-func TestResolveMultipleAtSameLevelLowestIDWins(t *testing.T) {
-	db := testDB(t)
-	parent := createNote(t, db, "News", "standard", 0)
-	reader := createNote(t, db, "Reader", "rss", parent)
-
-	a := createNote(t, db, "A", PluginID, parent)
+	a := createNote(t, db, "A", PluginID, 0)
 	saveCfg(t, db, a, `{"provider":"openrouter","default_tier":"tiny","tiers":{"tiny":{"model":"prov/a"}}}`)
-	b := createNote(t, db, "B", PluginID, parent)
-	saveCfg(t, db, b, `{"provider":"openrouter","default_tier":"tiny","tiers":{"tiny":{"model":"prov/b"}}}`)
+	b := createNote(t, db, "B", PluginID, 0)
+	saveCfg(t, db, b, `{"provider":"mistral","default_tier":"tiny","tiers":{"tiny":{"model":"prov/b"}}}`)
 
-	client, res := resolveFor(t, db, reader, "rss_classify")
+	client, res := resolveFor(t, db, "rss_classify")
 	if res.InferencerNoteID != a || client.Model != "prov/a" {
 		t.Fatalf("lowest id must win: %+v", res)
 	}
@@ -421,55 +400,22 @@ func TestResolveMultipleAtSameLevelLowestIDWins(t *testing.T) {
 
 func TestResolveIncompleteBindingFallsThrough(t *testing.T) {
 	db := testDB(t)
-	parent := createNote(t, db, "News", "standard", 0)
-	reader := createNote(t, db, "Reader", "rss", parent)
 
-	// Sibling binds rss_classify to a tier with NO model → must not capture.
-	incomplete := createNote(t, db, "Incomplete", PluginID, parent)
+	// The only note binds rss_classify to a tier with NO model → must not
+	// capture; the config.toml fallback applies.
+	incomplete := createNote(t, db, "Incomplete", PluginID, 0)
 	saveCfg(t, db, incomplete, `{"provider":"openrouter","usages":{"rss_classify":{"tier":"big"}}}`)
 
-	// Root-level complete binding takes over.
-	root := createNote(t, db, "Root inferencer", PluginID, 0)
-	saveCfg(t, db, root, validPayload)
-
-	client, res := resolveFor(t, db, reader, "rss_classify")
-	if res.InferencerNoteID != root || client.Model != "prov/small" {
-		t.Fatalf("incomplete binding must fall through: %+v", res)
-	}
-}
-
-func TestResolveTopLevelScopeIsLast(t *testing.T) {
-	db := testDB(t)
-	// implicit root (top level)
-	// ├── Reader (rss)             ← top-level anchor
-	// └── Global inferencer         ← top-level binder
-	reader := createNote(t, db, "Reader", "rss", 0)
-	global := createNote(t, db, "Global inferencer", PluginID, 0)
-	saveCfg(t, db, global, validPayload)
-
-	client, res := resolveFor(t, db, reader, "rss_classify")
-	if res.Source != SourceNote || res.InferencerNoteID != global {
-		t.Fatalf("top-level binder must bind a top-level anchor: %+v", res)
-	}
-	if client.Model != "prov/small" {
-		t.Errorf("model: %+v", res)
-	}
-
-	// A closer child beats the top-level binder.
-	child := createNote(t, db, "Own inferencer", PluginID, reader)
-	saveCfg(t, db, child, `{"provider":"openrouter","usages":{"rss_classify":{"model":"prov/own"}}}`)
-	_, res = resolveFor(t, db, reader, "rss_classify")
-	if res.InferencerNoteID != child {
-		t.Fatalf("subtree must beat top level: %+v", res)
+	client, res := resolveFor(t, db, "rss_classify")
+	if res.Source != SourceConfig || client.Model != llm.FeatureModel("rss_classify") {
+		t.Fatalf("incomplete binding must fall through to config: %+v", res)
 	}
 }
 
 func TestResolvePerTierBaseURLOverride(t *testing.T) {
 	db := testDB(t)
-	parent := createNote(t, db, "News", "standard", 0)
-	reader := createNote(t, db, "Reader", "rss", parent)
 
-	sibling := createNote(t, db, "Inferencer", PluginID, parent)
+	sibling := createNote(t, db, "Inferencer", PluginID, 0)
 	saveCfg(t, db, sibling, `{
 		"provider": "openrouter",
 		"default_tier": "big",
@@ -479,7 +425,7 @@ func TestResolvePerTierBaseURLOverride(t *testing.T) {
 		}
 	}`)
 
-	client, res := resolveFor(t, db, reader, "rss_classify")
+	client, res := resolveFor(t, db, "rss_classify")
 	if client.BaseURL != "http://127.0.0.1:1999/api" {
 		t.Fatalf("per-tier base URL override ignored: %+v", client)
 	}
@@ -488,9 +434,43 @@ func TestResolvePerTierBaseURLOverride(t *testing.T) {
 	}
 }
 
+func TestResolveExplicitLocalPinBeatsDefaultTier(t *testing.T) {
+	db := testDB(t)
+
+	inferencer := createNote(t, db, "Inferencer", PluginID, 0)
+	saveCfg(t, db, inferencer, `{
+		"provider": "openrouter",
+		"api_key": "sk-test-123",
+		"default_tier": "middle",
+		"tiers": {"middle": {"model": "prov/mid"}},
+		"usages": {"rss_classify": {"local": true}}
+	}`)
+
+	// The pinned usage resolves to config.toml, NOT the note's tier models.
+	client, res := resolveFor(t, db, "rss_classify")
+	if res.Source != SourceLocal {
+		t.Fatalf("source = %q, want local", res.Source)
+	}
+	if res.InferencerNoteID != inferencer {
+		t.Errorf("pinning note id: %+v", res)
+	}
+	if client.Model != llm.FeatureModel("rss_classify") || client.BaseURL != llm.FeatureBaseURL("rss_classify") {
+		t.Errorf("local pin must use the config.toml client: %+v", client)
+	}
+	if client.APIKey != "" {
+		t.Error("local pin must not carry the provider API key")
+	}
+
+	// Unpinned usages still bind to the remote provider's default tier.
+	client, res = resolveFor(t, db, "title")
+	if res.Source != SourceNote || client.Model != "prov/mid" || client.APIKey != "sk-test-123" {
+		t.Fatalf("default tier must bind unmapped usages: %+v", res)
+	}
+}
+
 func TestResolveUnknownUsageErrors(t *testing.T) {
 	db := testDB(t)
-	if _, _, err := ResolveChat(db, 0, "no-such-usage"); err == nil {
+	if _, _, err := ResolveChat(db, "no-such-usage"); err == nil {
 		t.Fatal("unknown usage must error")
 	}
 }
@@ -502,7 +482,7 @@ func TestResolveUnwiredUsageStillResolves(t *testing.T) {
 	root := createNote(t, db, "Root inferencer", PluginID, 0)
 	saveCfg(t, db, root, `{"provider":"openrouter","usages":{"title":{"model":"prov/title"}}}`)
 
-	client, res := resolveFor(t, db, root, "title")
+	client, res := resolveFor(t, db, "title")
 	if res.Source != SourceNote || client.Model != "prov/title" {
 		t.Fatalf("unwired usage resolution: %+v", res)
 	}
@@ -704,8 +684,16 @@ func TestBuildView(t *testing.T) {
 		t.Fatalf("default view: %+v", view)
 	}
 	for _, u := range view.Usages {
-		if u.Binding != nil {
+		if u.Binding != nil || u.Local {
 			t.Error("no binding expected on an unsaved note")
+		}
+		// Every usage carries the config.toml system default.
+		sd := u.SystemDefault
+		if sd.Model == "" || sd.Tier == "" {
+			t.Errorf("usage %q: system default missing: %+v", u.ID, sd)
+		}
+		if sd.Model != llm.FeatureModel(u.ID) || sd.Tier != llm.FeatureTier(u.ID) {
+			t.Errorf("usage %q: system default mismatch: %+v", u.ID, sd)
 		}
 	}
 
@@ -740,6 +728,27 @@ func TestBuildView(t *testing.T) {
 		t.Error("title must report unwired in the view")
 	}
 
+	// A {local: true} pin: flagged local, no remote binding, system
+	// default describes what it resolves to.
+	saveCfg(t, db, noteID, `{"provider":"openrouter","usages":{"title":{"local":true}}}`)
+	viewAny, err = p.BuildView(context.Background(), db, 0, noteID)
+	if err != nil {
+		t.Fatalf("BuildView (local pin): %v", err)
+	}
+	view = viewAny.(View)
+	title := UsageView{}
+	for _, u := range view.Usages {
+		if u.ID == "title" {
+			title = u
+		}
+	}
+	if !title.Local || title.Binding != nil || title.Incomplete {
+		t.Fatalf("local pin view: %+v", title)
+	}
+	if title.SystemDefault.Model == "" {
+		t.Error("local pin without system default")
+	}
+
 	// Incomplete binding surfaces a warning + incomplete flag.
 	saveCfg(t, db, noteID, `{"provider":"openrouter","usages":{"rss_classify":{"tier":"big"}}}`)
 	viewAny, err = p.BuildView(context.Background(), db, 0, noteID)
@@ -758,6 +767,25 @@ func TestBuildView(t *testing.T) {
 	}
 	if len(view.Warnings) == 0 {
 		t.Error("incomplete binding must produce a warning")
+	}
+
+	// More than one inferencer note (legacy pre-uniqueness DB) is
+	// surfaced as a warning on the view.
+	second := createNote(t, db, "Legacy second", PluginID, 0)
+	saveCfg(t, db, second, `{"provider":"openrouter","default_tier":"tiny","tiers":{"tiny":{"model":"prov/tiny"}}}`)
+	viewAny, err = p.BuildView(context.Background(), db, 0, noteID)
+	if err != nil {
+		t.Fatalf("BuildView (multi-note): %v", err)
+	}
+	view = viewAny.(View)
+	warned := false
+	for _, w := range view.Warnings {
+		if strings.Contains(w, "limited to one per app") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a singleton warning, got %v", view.Warnings)
 	}
 
 	// JSON-serializable.

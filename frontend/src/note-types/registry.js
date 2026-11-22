@@ -512,7 +512,9 @@ const registry = [
             if (raw?.usages && typeof raw.usages === "object") {
                 for (const [id, b] of Object.entries(raw.usages)) {
                     if (!b || typeof b !== "object") continue;
-                    if (typeof b.tier === "string" && b.tier) {
+                    if (b.local === true) {
+                        usages[id] = { local: true };
+                    } else if (typeof b.tier === "string" && b.tier) {
                         usages[id] = { tier: b.tier };
                     } else if (typeof b.model === "string" && b.model) {
                         usages[id] = { model: b.model };
@@ -567,6 +569,7 @@ export async function fetchAndMergeManifests(token) {
                 entry.hasConfig = m.has_config || false;
                 entry.hasView = m.has_view || false;
                 entry.hasActions = m.has_actions || false;
+                entry.singleton = !!m.singleton;
                 // Use server-provided default_config if available
                 if (m.default_config != null) {
                     entry.emptyCustomData = () =>
@@ -621,6 +624,17 @@ export function getTypeOptions() {
 export function getDefaultChildType(parentTypeId) {
     const entry = getNoteType(parentTypeId);
     return (entry && entry.defaultChildType) || "standard";
+}
+
+/**
+ * Returns true if the note type is a singleton — at most ONE note of the
+ * type may exist in the whole app (e.g. the llm_inferencer LLM provider
+ * note). NotesView hides such types from the type pickers once an
+ * instance exists; the server rejects a second one with a 400.
+ */
+export function isSingletonType(typeId) {
+    const entry = getNoteType(typeId);
+    return !!(entry && entry.singleton);
 }
 
 /**

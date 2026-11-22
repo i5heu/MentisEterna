@@ -21,11 +21,15 @@ const (
 )
 
 // UsageBinding maps one app usage (internal/llm usage catalog, e.g.
-// "rss_classify") to a tier of this inferencer, or directly to a model.
-// Exactly one of Tier / Model must be set.
+// "rss_classify") to a tier of this inferencer, directly to a model, or
+// explicitly to the LOCAL LLM ({local: true} — the config.toml feature/tier
+// system). Exactly one of Tier / Model / Local must be set. A {local: true}
+// pin beats the note's default_tier: the usage keeps using the local LLM
+// even when this note maps everything else to the remote provider.
 type UsageBinding struct {
 	Tier  string `json:"tier,omitempty"`  // big|middle|small|tiny
 	Model string `json:"model,omitempty"` // direct model override
+	Local bool   `json:"local,omitempty"` // explicit pin to config.toml (local LLM)
 }
 
 // TierBinding is the model (and optional endpoint override) for one tier.
@@ -154,8 +158,12 @@ func validateConfig(cfg Config) error {
 			return fmt.Errorf("llm_inferencer: unknown usage %q (not in the app usage catalog)", usage)
 		}
 		switch {
+		case ub.Local && (ub.Tier != "" || ub.Model != ""):
+			return fmt.Errorf("llm_inferencer: usage %q: bind a tier, a model, or local — not several", usage)
 		case ub.Tier != "" && ub.Model != "":
 			return fmt.Errorf("llm_inferencer: usage %q: bind either a tier or a model, not both", usage)
+		case ub.Local:
+			// explicit pin to the config.toml local LLM — nothing else to check
 		case ub.Tier != "":
 			if !validTier(ub.Tier) {
 				return fmt.Errorf("llm_inferencer: usage %q: unknown tier %q", usage, ub.Tier)
@@ -165,7 +173,7 @@ func validateConfig(cfg Config) error {
 				return fmt.Errorf("llm_inferencer: usage %q: model is too long (max %d)", usage, maxModelLength)
 			}
 		default:
-			return fmt.Errorf("llm_inferencer: usage %q: binding must set tier or model", usage)
+			return fmt.Errorf("llm_inferencer: usage %q: binding must set tier, model, or local", usage)
 		}
 	}
 	return nil
@@ -194,6 +202,13 @@ func (cfg *Config) normalize() {
 		nb := UsageBinding{
 			Tier:  strings.TrimSpace(ub.Tier),
 			Model: strings.TrimSpace(ub.Model),
+			Local: ub.Local,
+		}
+		// A binding that trims to nothing (no tier, no model, no local pin)
+		// is dead — drop it instead of persisting an empty object.
+		if nb.Tier == "" && nb.Model == "" && !nb.Local {
+			delete(cfg.Usages, usage)
+			continue
 		}
 		cfg.Usages[usage] = nb
 	}

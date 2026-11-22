@@ -95,6 +95,13 @@ type Manifest struct {
 	HasConfig     bool            `json:"has_config"`
 	HasView       bool            `json:"has_view"`
 	HasActions    bool            `json:"has_actions"`
+
+	// Singleton marks a note type of which at most ONE note may exist in
+	// the whole app (e.g. llm_inferencer — one global LLM provider
+	// configuration). The server rejects creating or switching to a second
+	// note of the type with a 400, and the frontend type pickers hide the
+	// type once an instance exists.
+	Singleton bool `json:"singleton,omitempty"`
 }
 
 // ConfigValidator validates configuration payload before saving.

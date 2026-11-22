@@ -12,13 +12,15 @@
 //     key, and the clear_api_key action removes it),
 //   - models for the four capability tiers: big / middle / small / tiny,
 //   - a usage map binding app LLM usages (see internal/llm usage catalog,
-//     e.g. rss_classify) to a tier, or directly to a model,
+//     e.g. rss_classify) to a tier, directly to a model, or explicitly to
+//     the LOCAL LLM (the config.toml feature/tier system),
 //   - an optional default tier used for usages without an explicit binding.
 //
-// Usages resolve through the note hierarchy exactly like rss_prompt notes
-// (own subtree first, then ancestors' children; nearest wins): call sites ask
-// ResolveChat with their anchor note, and fall back to the config.toml
-// feature/tier system when no inferencer note binds the usage.
+// The note type is a SINGLETON: at most one llm_inferencer note may exist in
+// the whole app (enforced on create and on type changes by the server). That
+// one note applies globally — usages resolve through it from anywhere in
+// the note tree and fall back to the config.toml feature/tier system for
+// usages it does not bind (or pins to local).
 //
 // See docs/LLMInferencer.md for the full design.
 package llminferencer
@@ -100,7 +102,7 @@ func (p *Plugin) Manifest() notetype.Manifest {
 	return notetype.Manifest{
 		ID:          PluginID,
 		Label:       "LLM Inferencer",
-		Description: "Remote LLM inference provider (OpenRouter, Mistral, or any OpenAI-compatible endpoint) with models per tier (big/middle/small/tiny); app usages like RSS classification resolve their model through the nearest inferencer note in the hierarchy. The API key is write-only and never shown again",
+		Description: "The app's remote LLM inference provider (OpenRouter, Mistral, or any OpenAI-compatible endpoint) with models per tier (big/middle/small/tiny); app usages like RSS classification resolve their model through this note or fall back to the config.toml local LLM. The API key is write-only and never shown again. Only ONE LLM Inferencer note can exist",
 		Category:    "Tools",
 		SortOrder:   520,
 		DefaultConfig: json.RawMessage(`{
@@ -161,6 +163,7 @@ func (p *Plugin) Manifest() notetype.Manifest {
 		HasConfig:  true,
 		HasView:    true,
 		HasActions: true,
+		Singleton:  true,
 	}
 }
 

@@ -15,14 +15,35 @@ type BindingView struct {
 	Model string `json:"model"`
 }
 
-// UsageView is the view's per-usage entry: the catalog entry plus this
-// note's effective binding for it (nil binding = not mapped here).
+// SystemDefaultView is what the app's system configuration (config.toml
+// feature/tier system — the LOCAL LLM) serves for a usage when no
+// llm_inferencer binding overrides it.
+type SystemDefaultView struct {
+	Tier    string `json:"tier,omitempty"` // smart/medium/small/tiny (config.toml tier)
+	Model   string `json:"model"`
+	BaseURL string `json:"base_url,omitempty"`
+}
+
+// UsageView is the view's per-usage entry: the catalog entry, the system
+// config default for the usage, and this note's effective binding for it
+// (nil binding + Local=false = not mapped here → system default applies).
 type UsageView struct {
 	ID          string       `json:"id"`
 	Label       string       `json:"label"`
 	Description string       `json:"description"`
 	Wired       bool         `json:"wired"` // routed through inferencer notes yet?
 	Binding     *BindingView `json:"binding,omitempty"`
+	// Local: this note explicitly pins the usage to the local LLM
+	// (config.toml) with a {local: true} binding — it overrides the note's
+	// default_tier; SystemDefault shows what it resolves to.
+	Local bool `json:"local,omitempty"`
+	// ViaDefault: no explicit binding, but the note's default_tier serves
+	// the usage (Binding then shows that tier/model).
+	ViaDefault bool `json:"via_default,omitempty"`
+	// SystemDefault is what config.toml serves for this usage — the
+	// built-in default shown next to every mapping (and the fallback for
+	// every unmapped usage).
+	SystemDefault SystemDefaultView `json:"system_default"`
 	// Incomplete reports an explicit binding that yields no concrete model
 	// (e.g. bound to a tier with no model configured).
 	Incomplete bool `json:"incomplete,omitempty"`
@@ -75,6 +96,15 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 	}
 
 	var warnings []string
+
+	// The note type is a singleton; more than one can only come from a
+	// database created before the uniqueness rule. Surface it loudly —
+	// resolution uses the lowest note id.
+	if n, err := countInferencerNotes(db); err == nil && n > 1 {
+		warnings = append(warnings, fmt.Sprintf(
+			"%d llm_inferencer notes exist — the note type is limited to one per app; the lowest note id currently governs, delete the extras", n))
+	}
+
 	if row.DefaultTier != "" && !validTier(row.DefaultTier) {
 		warnings = append(warnings, fmt.Sprintf("default_tier %q is not one of big/middle/small/tiny", row.DefaultTier))
 	}
@@ -120,7 +150,8 @@ func (p *Plugin) BuildView(ctx context.Context, db *sql.DB, userID int, noteID i
 
 // usageViews builds the per-usage view entries from the usage catalog plus
 // this note's raw binding maps, collecting incomplete-binding warnings into
-// the warnings slice.
+// the warnings slice. Every entry carries the config.toml system default
+// for the usage (the fallback and the {local: true} target).
 func usageViews(usages map[string]UsageBinding, tiers map[string]TierBinding, warnings *[]string) []UsageView {
 	var checks *inferencerRow
 	if usages != nil || tiers != nil {
@@ -131,31 +162,54 @@ func usageViews(usages map[string]UsageBinding, tiers map[string]TierBinding, wa
 	out := make([]UsageView, 0, len(specs))
 	for _, spec := range specs {
 		uv := UsageView{ID: spec.ID, Label: spec.Label, Description: spec.Description, Wired: spec.Wired}
+		if sd, ok := llm.UsageSystemDefault(spec.ID); ok {
+			uv.SystemDefault = SystemDefaultView{Tier: sd.Tier, Model: sd.Model, BaseURL: sd.BaseURL}
+		}
 		ub, has := usages[spec.ID]
 		if has {
-			var b *binding
-			if checks != nil {
-				b = checks.bindsUsage(spec.ID)
-			}
-			if b != nil && b.Model != "" {
-				uv.Binding = &BindingView{Tier: b.Tier, Model: b.Model}
+			if ub.Local {
+				// Explicit pin to the local LLM (config.toml).
+				uv.Local = true
 			} else {
-				// Explicit binding that yields no concrete model.
-				uv.Incomplete = true
-				model := strings.TrimSpace(ub.Model)
-				if b != nil && b.Model != "" {
-					model = b.Model
+				var b *binding
+				if checks != nil {
+					b = checks.bindsUsage(spec.ID)
 				}
-				if ub.Tier != "" || model != "" {
-					uv.Binding = &BindingView{Tier: ub.Tier, Model: model}
+				if b != nil && !b.Local && b.Model != "" {
+					uv.Binding = &BindingView{Tier: b.Tier, Model: b.Model}
+				} else {
+					// Explicit binding that yields no concrete model.
+					uv.Incomplete = true
+					model := strings.TrimSpace(ub.Model)
+					if b != nil && b.Model != "" {
+						model = b.Model
+					}
+					if ub.Tier != "" || model != "" {
+						uv.Binding = &BindingView{Tier: ub.Tier, Model: model}
+					}
+					if warnings != nil {
+						*warnings = append(*warnings, fmt.Sprintf(
+							"usage %q is bound but yields no model (tier without a configured model?)", spec.ID))
+					}
 				}
-				if warnings != nil {
-					*warnings = append(*warnings, fmt.Sprintf(
-						"usage %q is bound but yields no model (tier without a configured model?)", spec.ID))
-				}
+			}
+		} else if checks != nil {
+			// No explicit binding: the note's default_tier may still serve
+			// the usage — surface it as the effective binding.
+			if b := checks.bindsUsage(spec.ID); b != nil && !b.Local {
+				uv.Binding = &BindingView{Tier: b.Tier, Model: b.Model}
+				uv.ViaDefault = true
 			}
 		}
 		out = append(out, uv)
 	}
 	return out
+}
+
+// countInferencerNotes returns how many llm_inferencer notes exist (used to
+// warn about pre-uniqueness databases; the type is a singleton).
+func countInferencerNotes(db *sql.DB) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM notes WHERE type = 'llm_inferencer'`).Scan(&n)
+	return n, err
 }
