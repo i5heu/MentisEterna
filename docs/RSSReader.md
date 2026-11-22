@@ -11,10 +11,11 @@ hierarchy. Articles are fetched into fast plugin tables; an explicit
 
 | Decision | Choice |
 |---|---|
-| Shape | **One note = the whole reader.** Feeds + settings in its config, ban words / penalty points in its **own body** (user-written lines, parsed by the plugin — the plugin reads bodies like `recipe`/`print` do, never writes to them), articles in plugin tables under the note. |
-| Prompt | The only exception: classification prompt lives in a separate **`rss_prompt` note** whose body (latest `updates` row) is the system prompt. Resolved from the hierarchy: nearest `rss_prompt` in the note's subtree, then siblings, then up the ancestor chain (nearest wins). None found ⇒ built-in default prompt. |
-| LLM classification | Output is **structured JSON** `{category, summary, quality, tags[]}`; we add contract framing + validation + one retry. |
-| Ban words / penalties | Matching article → rejected bucket, hidden behind a "show rejected" toggle; never silently destroyed. Penalty points accumulate; ≥ threshold ⇒ rejected. Threshold: `threshold:` line in body > config `reject_threshold` (default 5, 0 = disabled). |
+| Shape | **One note = the whole reader.** Feeds + settings in its config, rules (ban words / penalties / point weights) in its **own body** (user-written lines, parsed by the plugin — the plugin reads bodies like `recipe`/`print` do, never writes to them), articles in plugin tables under the note. |
+| Prompt | The only exception: evaluation prompt lives in a separate **`rss_prompt` note** whose body (latest `updates` row) is the system prompt. Resolved from the hierarchy: nearest `rss_prompt` in the note's subtree, then siblings, then up the ancestor chain (nearest wins). None found ⇒ built-in default prompt (the significance-evaluation prompt). |
+| LLM evaluation | Output is **structured JSON**: `evaluationReflectionParagraph`, significance (0.0–1.0), negativity (0.0/0.5/1.0), personalRelevance (0.0–1.0), four humans-affected counts (millions), tags; we add contract framing + validation + one retry. |
+| Points | Each evaluated article gets **points 0–10**: `10 × (wSig·significance + wRel·relevance + wPos·(1−negativity) + wHum·humansTerm) − rule penalties`. Weights and the `min_points` reject floor are body rules; the timeline is ranked by points. |
+| Ban words / penalties | Matching article → rejected bucket, hidden behind a "show rejected" toggle; never silently destroyed. Penalty points accumulate and subtract from points; ≥ threshold ⇒ rejected (threshold 0 = disabled). Evaluated items below `min_points` (default 2.0; 0 = off) ⇒ rejected — only applies to items whose classification actually carried evaluation data. |
 | Article storage | Plugin tables, not auto-notes. "Save as Note" creates a real child note (with embeddings) under the RSS note — ingest-pipeline pattern. |
 
 Out of scope for v1 in the last section.
@@ -30,14 +31,14 @@ Two note types, one Go package `pkg/notetype/rss`:
 │   config: feeds[], interval, thresholds, caps…
 │   body:   ban words / penalty lines (user-typed, parsed read-only)
 │   view:   merged timeline + per-feed status
-├── 🧠 Prompt (type: rss_prompt)  ← body = classification prompt (the exception)
+├── 🧠 Prompt (type: rss_prompt)  ← body = evaluation prompt (the exception)
 └── 📄 saved article (type: standard, created by "Save as Note")
 ```
 
 - `rss` — the reader. `HasConfig` (feeds + numeric settings), `HasView`
   (merged timeline), `HasActions`. Note title = reader name.
 - `rss_prompt` — marker type. No config/view/actions; renders through the
-  standard body textarea. Body = classification prompt.
+  standard body textarea. Body = evaluation prompt.
 
 **Prompt resolution** (`scope.go`) — for an `rss` note:
 
@@ -89,7 +90,7 @@ cron @every 15m ──▶ refresh_feeds(db)
                      ▼
             insert items (state=new, classify pending)
                      ▼
-            classify batch (≤25/run, prompt from scope) ─▶ llm.NewRSSClassifierClient
+            evaluate batch (≤25/batch, drains queue, prompt from scope) ─▶ llm.NewRSSClassifierClient
                      └─▶ job result summary (JobQueue + ws broadcast)
 ```
 
@@ -135,10 +136,20 @@ CREATE TABLE IF NOT EXISTS ct_rss_items (
     feed_content    TEXT    NOT NULL DEFAULT '',  -- raw RSS-provided content/description
     full_content    TEXT    NOT NULL DEFAULT '',  -- extracted page text
     full_status     TEXT    NOT NULL DEFAULT 'none', -- none|fetched|failed|too_big
-    category        TEXT    NOT NULL DEFAULT '',
-    summary         TEXT    NOT NULL DEFAULT '',
+    category        TEXT    NOT NULL DEFAULT '',  -- legacy (pre-evaluation prompts only)
+    summary         TEXT    NOT NULL DEFAULT '',  -- reflection paragraph fallback
     tags_json       TEXT    NOT NULL DEFAULT '[]',
-    quality         INTEGER NOT NULL DEFAULT 0,  -- 0–10 from LLM
+    quality         INTEGER NOT NULL DEFAULT 0,   -- legacy (pre-evaluation prompts only)
+    significance    REAL    NOT NULL DEFAULT 0,   -- LLM evaluation 0..1
+    negativity      REAL    NOT NULL DEFAULT 0,   -- 0 positive .. 1 negative
+    personal_relevance REAL NOT NULL DEFAULT 0,  -- 0..1
+    affected_now_direct   REAL NOT NULL DEFAULT 0, -- millions
+    affected_now_indirect REAL NOT NULL DEFAULT 0,
+    affected_future_direct REAL NOT NULL DEFAULT 0,
+    affected_future_indirect REAL NOT NULL DEFAULT 0,
+    reflection      TEXT    NOT NULL DEFAULT '',  -- evaluationReflectionParagraph
+    points          REAL    NOT NULL DEFAULT 0,   -- computed 0..10
+    evaluated       INTEGER NOT NULL DEFAULT 0,   -- classification carried evaluation data
     classify_status TEXT    NOT NULL DEFAULT 'pending', -- pending|done|error|disabled
     classify_error  TEXT    NOT NULL DEFAULT '',
     penalty_score   REAL    NOT NULL DEFAULT 0,
@@ -157,7 +168,12 @@ No tables for prompt notes — bodies read live from `updates`. Item content is
 truncated to 200 KB. `prompt_note_id` snapshots which prompt classified the
 item (audit + "summary came from prompt X" in the UI).
 
-**Rejected** is computed: `banned=1 OR penalty_score >= threshold OR state='rejected'`.
+The ten evaluation columns are additive; databases created before them are
+upgraded on plugin startup by `ensureItemColumns` (PRAGMA table_info +
+`ALTER TABLE ADD COLUMN` per missing column).
+
+**Rejected** is computed: `banned=1 OR penalty_score >= threshold (0=off) OR
+state='rejected' OR (evaluated=1 AND min_points > 0 AND points < min_points)`.
 
 ## 4. Config contract (round-trips Validate/Save/Load)
 
@@ -185,33 +201,59 @@ Validation (`config.go`):
 
 `rss_prompt` has `HasConfig=false` — nothing to persist.
 
-## 5. Prompt convention (classification)
+## 5. Prompt convention (LLM evaluation)
 
-The body of the resolved `rss_prompt` note is the classification instruction,
-sent as the system message. The classifier appends a fixed contract suffix:
+The body of the resolved `rss_prompt` note is the evaluation instruction,
+sent as the system message. The classifier appends a fixed binding output
+contract (analysis text may precede the JSON — the default prompt opens
+with a reasoning checklist — but the reply must END with exactly one JSON
+object in this shape):
 
 ```
-Return ONLY a JSON object, no extra text, exactly this shape:
-{"category": "<short label>", "summary": "<1–2 sentences, plain text>",
- "quality": <0–10 integer>, "tags": ["<label>", ...]}
+{"evaluationReflectionParagraph": "<string; minimum one sentence explanation>",
+ "potentialFutureDirectlyAffectedHumansInMillions": <float; 0.0 if unknown>,
+ "potentialFutureIndirectlyAffectedHumansInMillions": <float; 0.0 if unknown>,
+ "alreadyDirectlyAffectedHumansInMillions": <float; 0.0 if unknown>,
+ "alreadyIndirectlyAffectedHumansInMillions": <float; 0.0 if unknown>,
+ "significance": <float; between 0.0 and 1.0>,
+ "negativity": <float; 0.0 = positive, 0.5 = neutral, 1.0 = negative>,
+ "personalRelevance": <float; between 0.0 and 1.0, per personal context>,
+ "tags": [up to 10 string tags]}
 ```
 
-- No prompt note in scope ⇒ built-in default prompt (general categories,
-  summary, signal-to-noise rating) — works out of the box; view reports
-  `prompt: "default"` so the UI can nudge.
+- **Built-in default prompt** = the significance-evaluation prompt: a neutral
+  system assessing an article's impact on humanity on a fixed 0.0–1.0 scale
+  (per-level definitions and examples embedded), event negativity
+  (0.0 positive / 0.5 neutral / 1.0 negative), personal relevance for
+  Germany/EU + cloud/distributed-systems interests, four humans-affected
+  estimates (already/potential-future × direct/indirect, in millions), a
+  reflection paragraph, and up to 10 tags. Replaces the old
+  category/summary/quality contract (the request-shape keys survive for
+  custom prompts: `category`, `summary`, `quality` are still parsed when a
+  prompt emits them; missing legacy fields default to empty).
+- No prompt note in scope ⇒ the built-in default applies — works out of the
+  box; view reports `prompt: "default"` so the UI can nudge.
+- The prompt's optional `"error"` field (fields that could not be identified)
+  is stored in `classify_error` while the status stays `done`.
+- `evaluationReflectionParagraph` falls back into `summary` when no summary
+  is present — cards and saved notes keep a review line for every article.
 - User message = article title + feed name + URL + content (full_content
   preferred, feed_content fallback), capped at ~10k chars.
-- Client: `llm.NewRSSClassifierClient()` bound to new feature `rss_classify`
-  (default tier `medium`, overridable via `[llm.features.rss_classify]`).
-- Parse: reuse the lenient JSON extraction used by tags/subtasks; strict
-  struct validation; one retry with the parse error appended; failure ⇒
-  `classify_status='error'` (item stays listed; next refresh re-picks up
+- Client: `llm.NewRSSClassifierClient()` bound to feature `rss_classify`
+  (usage `rss_classify` in the llm_inferencer catalog; default tier `medium`,
+  overridable via `[llm.features.rss_classify]` or an inferencer note usage
+  mapping).
+- Parse: lenient JSON extraction (prose/fences tolerated); strict clipping +
+  clamping into the schema; one retry with the parse error appended; failure
+  ⇒ `classify_status='error'` (item stays listed; next refresh re-picks up
   pending items).
-- Backend lease (`llm.BeginBackendUse`) held across the batch so the model is
-  not idle-stopped mid-run.
-- Editing the prompt note body takes effect on next refresh / reclassify.
+- Backend lease (`llm.BeginBackendUse`) held across the run. Pending items
+  drain in ≤25-item batches until the queue is empty or an 8-minute budget
+  is spent — a `reclassify_all` reset is cleared within one refresh job.
+- Editing the prompt note body takes effect on next refresh /
+  re-evaluation.
 
-## 6. Rules convention (ban words / penalty points — in the rss note's body)
+## 6. Rules convention (ban words / penalties / point weights — in the rss note's body)
 
 The reader note's own body is user space: prose is ignored; only rule-shaped
 lines are parsed. Matching is case-insensitive against
@@ -225,15 +267,33 @@ ban: sponsored post
 press release: 6                 ← +6 penalty points per occurrence
 webinar: 2
 wonderful deep dive: -3          ← negative = bonus
-threshold: 8                     ← overrides config reject_threshold
+threshold: 8                     ← overrides config reject_threshold (0 = off)
+min_points: 2                   ← points floor for evaluated items (0 = off)
+weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10
 ```
 
 - `ban: <phrase>` — hard reject.
 - `<phrase>: <points>` — points per occurrence (negative allowed);
-  per-phrase occurrence cap 10 (bounds pathological repetition).
+  per-phrase occurrence cap 10 (bounds pathological repetition). Penalty
+  points subtract from the evaluation points.
 - `threshold: <n>` — per-note override of `reject_threshold`.
+- `min_points: <n>` — rejects LLM-evaluated articles whose computed points
+  fall below the floor (default 2.0, 0 = disabled). Items classified by
+  legacy prompts without evaluation data never fall below the floor.
+- `weights: <key>=<value>…` — overrides the points-formula component
+  weights (aliases sig/rel/pos/hum; unspecified components keep defaults;
+  values clamped to 0–1; unknown keys/malformed values warn).
 - Rule-*shaped* but malformed lines (e.g. `foo: abc`, empty `ban:`) collect
   into `rules_warning` shown in the view; ordinary prose is never warned.
+
+Points formula (`score.go`):
+
+```
+humansTerm = log10(1 + Σ affected millions) / log10(8001)      # 0..1, world pop ≈ 1.0
+points     = clamp[0,10]( 10 × (wSig·significance + wRel·personalRelevance
+                             + wPos·(1−negativity) + wHum·humansTerm)
+                         − penalty_score )
+```
 
 Rules are re-read (from the latest `updates` row) on every refresh and on
 `reapply_rules`. Body edits follow the normal note save path — the plugin
@@ -283,7 +343,8 @@ oldest-beyond-cap.
     that one reader.
   Iteration skips feeds fetched `< interval_minutes` ago or `enabled=0`.
 - Feed fetches parallel (errgroup, max 4); classification strictly sequential
-  in ≤25-item batches; whole task wrapped in `context.WithTimeout(10 min)`.
+  in ≤25-item batches until the queue drains (8-min classify budget,
+  bounded by the task's 10-minute timeout).
 - Result summary: `"3 feeds ok, 1 error, +12 new, 12 classified, 2 rejected"` —
   visible in JobQueue + broadcast via ws job events.
 - **Ad-hoc job** `refresh_feeds_now` payload `{"note_id":N,"force":true}` —
@@ -297,12 +358,13 @@ oldest-beyond-cap.
 
 | ID | Params | Behavior |
 |---|---|---|
-| `refresh` | `{}` | Enqueue `rss/refresh_feeds_now` `{note_id}`; returns `{run_id}` |
-| `save_as_note` | `{item_id}` | Create child note (type `standard`) under the reader note: INSERT `notes` (title, type, parent) + `updates` (markdown: link/author/date, summary, content); enqueue `_system/vss_index` `{note_id}`; set `saved_note_id`, state→`read`; returns `{note_id}` for navigation |
+| `refresh` | `{}` | Enqueue `rss/refresh_feeds` `{note_id, force}`; returns `{run_id}` |
+| `save_as_note` | `{item_id}` | Create child note (type `standard`) under the reader note: INSERT `notes` (title, type, parent) + `updates` (markdown: link/author/date, summary/reflection, evaluation line, content); enqueue `_system/vss_index` `{note_id}`; set `saved_note_id`, state→`read`; returns `{note_id}` for navigation |
 | `set_item_state` | `{item_id, state}` | `read` / `new` / `starred` / `rejected` (manual reject) |
-| `get_item` | `{item_id}` | Return one article with its stored content for inline reading — `full_content` preferred (`content_source:"extracted"`), `feed_content` fallback (`"feed"`), empty when neither stored — plus the full metadata the view omits. Content is kept out of the view payload (size) and loaded on demand by the reader modal; `RefreshStrategy: none` (pure read, no ws notify); rejected items stay viewable |
-| `reclassify` | `{item_id}` | Re-run classification synchronously (60 s bound) with the currently-scoped prompt |
-| `reapply_rules` | `{}` | Re-read body rules, recompute penalty/banned for all items (no LLM); returns counts |
+| `get_item` | `{item_id}` | Return one article with its stored content for inline reading — `full_content` preferred (`content_source:"extracted"`), `feed_content` fallback (`"feed"`), empty when neither stored — plus the full metadata the view omits, including the evaluation (significance, negativity, relevance, humans ×4, reflection, points, evaluated). Content is kept out of the view payload (size) and loaded on demand by the reader modal; `RefreshStrategy: none` (pure read, no ws notify); rejected items stay viewable |
+| `reclassify` | `{item_id}` | Re-run the LLM evaluation synchronously (60 s bound) with the currently-scoped prompt; recomputes points; returns `{points, significance, negativity, personal_relevance, summary, reflection, tags}` |
+| `reclassify_all` | `{}` | Queue every article of the reader for a fresh evaluation (`classify_status` → `pending`, errors cleared) and schedule a force refresh whose classify stage drains the queue; returns `{reset, run_id}` |
+| `reapply_rules` | `{}` | Re-read body rules, recompute penalty/banned AND points for all items (no LLM); returns counts incl. `min_points` |
 
 ## 10. View + frontend
 
@@ -314,8 +376,10 @@ oldest-beyond-cap.
   "feeds":     [ {"id","name","url","enabled","last_fetch_at","last_status","last_error","new_count"} ],
   "prompt":    { "note_id": 12, "title": "My prompt", "default": false } | { "default": true },
   "rules_warning": "line 4 ignored: 'foo: abc'",
-  "items":     [ /* ≤200, not rejected: id, feed_id, feed_name, title, url, author,
-                     published_at, summary, category, tags, quality, classify_status,
+  "items":     [ /* ≤200, not rejected: id, feed_id, feed_name, title, url, author, published_at,
+                     summary, category, tags, quality, significance, negativity, personal_relevance,
+                     affected_now_direct, affected_now_indirect, affected_future_direct,
+                     affected_future_indirect, points, evaluated, classify_status,
                      penalty_score, penalty, banned, state, saved_note_id, full_status */ ],
   "rejected":  [ /* ≤50 computed-rejected, same shape */ ],
   "counts":    { "total", "new", "read", "starred", "rejected", "pending_classify" }
@@ -323,7 +387,9 @@ oldest-beyond-cap.
 ```
 
 Views resolve scopes live (cheap queries) — hierarchy edits reflect on the
-next view load.
+next view load. The view payload carries the evaluation columns (small
+floats); the reflection paragraph rides only in `get_item` (size; the item
+`summary` already carries its clip).
 
 Frontend (`frontend/src/note-types/rss/`):
 
@@ -334,20 +400,28 @@ Frontend (`frontend/src/note-types/rss/`):
     as `standard`), no custom data
 - **Viewer**: feed status line + Refresh button ("refreshing" until the
   `rss` job done event on the ws bus — same source JobQueue.vue uses;
-  fallback: 10 s view polling while the note is open), filter chips (feed /
-  state / category), item cards: quality + penalty badges (tooltip from
-  `penalty_json`), summary, actions: open original (external), Save as Note
-  (→ navigate), Star / Read / Reject / Reclassify; collapsed "Rejected"
-  toggle; "Reapply rules" button after body edits. Prompt status chip: shows
+  fallback: 10 s view polling while the note is open), **Re-evaluate all**
+  button (queues every article for a fresh LLM evaluation), **Reapply
+  rules**, sort picker (★ points desc default / newest / oldest), filter
+  chips (feed / state), item cards: ★ points badge (green/amber/red tint by
+  negativity; tooltip = significance/negativity/relevance/humans/penalty
+  breakdown), legacy category + Q badges, penalty badges (tooltip from
+  `penalty_json`), summary (= reflection paragraph), actions: open original
+  (external), Save as Note (→ navigate), Star / Read / Reject /
+  Re-evaluate; collapsed "Rejected" toggle; item content stays out of the
+  view — the modal loads it through `get_item`. Prompt status chip: shows
   which prompt is in scope or nudges "add an RSS Prompt note" (add-child
   flow with the type picker).
 - **Article viewer**: clicking a card's title (or its "Read" button) opens
   a reading modal that loads the article's stored content on demand through
   the `get_item` action — the extracted full text, else the feed snippet
   (labelled as such), else a link to the original. The modal carries the
-  item's meta chips (feed, author, date, classification) and the same
-  actions as the card (Star / Read / Save as Note / Reclassify); Esc or
-  Close dismisses. Rejected (dimmed) cards are readable the same way.
+  item's meta chips (feed, author, date), the full evaluation (★ points,
+  significance, negativity, relevance chips, humans-affected line,
+  evaluation notes from the model's `error` field) and the reflection
+  paragraph as a quote; plus the same actions as the card (Star / Read /
+  Save as Note / Re-evaluate); Esc or Close dismisses. Rejected (dimmed)
+  cards are readable the same way.
 - **Editor**: feeds add/remove/edit (url, name, enabled), interval,
   threshold, full-content, retention/cap inputs, classify toggle
   (`usePluginAction` / `useNoteTypeDraft` composables; hydrate-on-`note.id`
@@ -386,16 +460,25 @@ textarea like `standard`).
   content:encoded, date variants, guid fallback, charset handling.
 - `extract_test.go`: golden HTML pages (article/main found, readability
   fallback, script stripping, oversize).
-- `rules_test.go`: body parsing (prose ignored, malformed warned), ban
-  matching, points, occurrence cap, threshold override.
+- `rules_test.go` / `score_test.go`: body parsing (prose ignored,
+  malformed warned), ban matching, penalty points, occurrence cap, threshold
+  override; `min_points`/`weights` rules, the points formula
+  (significance/relevance/positivity/humans/penalty; clamps and floor).
 - `classify_test.go`: stub classifier via the `newClassifier` seam; contract
-  framing; invalid-JSON retry then error status; default prompt; item
+  framing; evaluation parse (clamps/clips, reflection→summary fallback,
+  legacy-shape tolerance), invalid-JSON retry then error status, batch
+  drain, weights+penalty flowing into the stored points; item
   `prompt_note_id` snapshot.
-- `refresh`/`actions`/view tests with `httptest` (SSRF seam flipped on):
+- `view_eval_test.go`: computed rejection — evaluated items below
+  `min_points` rejected (default floor), `min_points: 0` disables, floor
+  raised via body rule; evaluation columns round-trip into the view.
+- `refresh`/`actions` tests with `httptest` (SSRF seam flipped on):
   dedup by item_key, 304 skip + etag persistence, retention trim, cascade
   delete (delete reader note → feeds + items gone), `save_as_note` inserts
   `notes`+`updates` + enqueues `_system/vss_index` (recorded via injected
-  enqueue stub).
+  enqueue stub), `reclassify_all` resets statuses + schedules the drain
+  refresh, `reapply_rules` recomputes points, `get_item` round-trips the
+  evaluation.
 - Frontend: smoke test if component-test conventions exist; otherwise
   manual QA checklist (create reader → add feed → items appear → body rules
   → rejected toggle → save as note).

@@ -131,7 +131,7 @@ The **usage catalog** also lives in `internal/llm` (`usage.go`):
 
 | usage id | label | wired | config.toml tier |
 |---|---|---|---|
-| `rss_classify` | RSS Classification | ✅ | medium |
+| `rss_classify` | RSS Evaluation | ✅ | medium |
 | `title` | Note Title Generation | — (pending) | tiny |
 | `tags` | Auto Tags | — (pending) | medium |
 | `subtasks` | Subtask Generation | — (pending) | smart |

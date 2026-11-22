@@ -13,6 +13,14 @@
                     </button>
                     <button
                         class="btn-ghost btn-sm"
+                        :disabled="busy || refreshing"
+                        @click="reclassifyAll"
+                        title="Re-run the LLM significance evaluation for every article of this reader"
+                    >
+                        Re-evaluate all
+                    </button>
+                    <button
+                        class="btn-ghost btn-sm"
                         :disabled="busy"
                         @click="reapplyRules"
                     >
@@ -20,6 +28,11 @@
                     </button>
                 </div>
                 <div v-if="view" class="rss-toolbar-group rss-filters">
+                    <select v-model="sortMode" class="rss-select" title="Timeline ordering">
+                        <option value="score">★ Best points</option>
+                        <option value="new">Newest first</option>
+                        <option value="old">Oldest first</option>
+                    </select>
                     <select v-model="stateFilter" class="rss-select">
                         <option value="all">All states</option>
                         <option value="new">Unread</option>
@@ -75,8 +88,8 @@
                     class="rss-chip"
                     :title="
                         view.prompt.default
-                            ? 'No RSS Prompt note in scope — add a child note of type RSS Prompt to customize classification. Using the built-in default prompt.'
-                            : 'The classification prompt is defined by the RSS Prompt note in scope.'
+                            ? 'No RSS Prompt note in scope — add a child note of type RSS Prompt to customize the evaluation. Using the built-in default significance-evaluation prompt.'
+                            : 'The evaluation prompt is defined by the RSS Prompt note in scope.'
                     "
                 >
                     {{
@@ -94,7 +107,7 @@
                     :title="`${view.counts.total} fetched · ${view.counts.pending_classify} awaiting classification`"
                 >
                     {{ view.counts.total }} articles ·
-                    {{ view.counts.pending_classify }} classifying
+                    {{ view.counts.pending_classify }} evaluating
                 </span>
             </div>
 
@@ -122,7 +135,7 @@
 
             <div v-else class="rss-items">
                 <RssItemCard
-                    v-for="item in filteredItems"
+                    v-for="item in displayItems"
                     :key="item.id"
                     :item="item"
                     :busy="busy"
@@ -136,7 +149,7 @@
             <details v-if="showRejected && view && view.rejected.length" class="rss-rejected">
                 <summary>
                     Rejected articles ({{ view.counts?.rejected ?? 0 }}) —
-                    hidden by ban words / penalty threshold
+                    ban words / penalty threshold / below min_points
                 </summary>
                 <div class="rss-items">
                     <RssItemCard
@@ -190,10 +203,32 @@
                         <span v-if="modalMeta.author" class="rss-chip">{{
                             modalMeta.author
                         }}</span>
+                        <span v-if="publishedLabel" class="rss-chip">{{
+                            publishedLabel
+                        }}</span>
                         <span
-                            v-if="publishedLabel"
+                            v-if="modalMeta.evaluated"
+                            class="rss-chip rss-chip-quality"
+                            title="LLM evaluation points: 10 × (weights × significance, personal relevance, positivity, humans-affected) − rule penalties"
+                            >★ {{ evalPoints }}/10</span
+                        >
+                        <span
+                            v-if="modalMeta.evaluated"
                             class="rss-chip"
-                            >{{ publishedLabel }}</span
+                            title="Global significance of the event (0.0–1.0)"
+                            >significance {{ evalNum("significance") }}</span
+                        >
+                        <span
+                            v-if="modalMeta.evaluated"
+                            class="rss-chip"
+                            title="0.0 = positive · 0.5 = neutral · 1.0 = negative for humanity"
+                            >negativity {{ evalNum("negativity") }}</span
+                        >
+                        <span
+                            v-if="modalMeta.evaluated"
+                            class="rss-chip"
+                            title="How relevant the article is for you (Germany/EU + personal context in the prompt)"
+                            >relevance {{ evalNum("personal_relevance") }}</span
                         >
                         <span
                             v-if="modalMeta.category"
@@ -201,7 +236,8 @@
                             >{{ modalMeta.category }}</span
                         >
                         <span
-                            class="rss-chip rss-chip-quality"
+                            v-if="modalMeta.quality"
+                            class="rss-chip"
                             :title="`LLM quality rating: ${modalMeta.quality}/10`"
                             >Q{{ modalMeta.quality }}</span
                         >
@@ -217,12 +253,30 @@
                         >
                     </div>
 
-                    <p
-                        v-if="article && article.summary"
-                        class="rss-modal-summary"
-                    >
-                        {{ article.summary }}
+                    <p v-if="evaluatedHumans" class="rss-modal-meta-detail">
+                        {{ evaluatedHumans }}
                     </p>
+                    <p
+                        v-if="article && article.classify_error && article.classify_status === 'done'"
+                        class="rss-modal-meta-detail rss-hint"
+                    >
+                        ⚠ evaluation notes: {{ article.classify_error }}
+                    </p>
+
+                    <template v-if="article && (article.summary || article.reflection)">
+                        <p
+                            v-if="article.summary && !article.reflection"
+                            class="rss-modal-summary"
+                        >
+                            {{ article.summary }}
+                        </p>
+                        <blockquote
+                            v-if="article.reflection"
+                            class="rss-modal-reflection"
+                        >
+                            {{ article.reflection }}
+                        </blockquote>
+                    </template>
 
                     <div class="rss-modal-body">
                         <p v-if="articleLoading" class="rss-modal-hint">
@@ -304,8 +358,9 @@
                             class="btn-ghost btn-sm"
                             :disabled="busy"
                             @click="reclassify(activeItem)"
+                            title="Re-run the LLM significance evaluation"
                         >
-                            Reclassify
+                            Re-evaluate
                         </button>
                     </div>
                 </div>
@@ -356,17 +411,30 @@
                 </div>
 
                 <div class="rss-editor-section">
-                    <h4>Rules (ban words &amp; penalties)</h4>
+                    <h4>Rules (ban words, penalties &amp; points)</h4>
                     <p class="rss-hint">
                         Typed directly in this note's body — after saving the
                         body, press “Reapply rules” to re-score old articles
-                        (new articles pick them up automatically). Format:
+                        (new articles pick them up automatically). Penalty
+                        points subtract from the LLM evaluation points
+                        (★ shown on each card). Format:
                     </p>
                     <pre class="rss-hint rss-hint-code">ban: crypto giveaway
 press release: 6
 webinar: 2
 wonderful deep dive: -3
-threshold: 8</pre>
+threshold: 8
+min_points: 2
+weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10</pre>
+                    <p class="rss-hint">
+                        <strong>threshold</strong> rejects articles whose rule
+                        penalties reach it (0 = off) ·
+                        <strong>min_points</strong> rejects LLM-evaluated
+                        articles scoring below it (0 = off) ·
+                        <strong>weights</strong> shape how significance,
+                        personal relevance, positivity, and humans-affected
+                        combine into the 0–10 points.
+                    </p>
                 </div>
 
                 <div class="rss-editor-section">
@@ -417,7 +485,7 @@ threshold: 8</pre>
                                 v-model="localConfig.auto_classify"
                                 type="checkbox"
                             />
-                            Classify new articles with the LLM
+                            Evaluate new articles with the LLM
                         </label>
                         <label class="rss-check">
                             <input
@@ -428,7 +496,7 @@ threshold: 8</pre>
                         </label>
                     </div>
                     <p class="rss-hint">
-                        Classification prompt: place a note of type
+                        Evaluation prompt: place a note of type
                         <strong>RSS Prompt</strong> inside (or above) this
                         reader — its body is the prompt.
                     </p>
@@ -460,6 +528,7 @@ const actionError = ref("");
 const actionInfo = ref("");
 const stateFilter = ref("all");
 const feedFilter = ref(0);
+const sortMode = ref("score"); // score | new | old
 const showRejected = ref(false);
 const view = ref(null);
 
@@ -486,6 +555,24 @@ const filteredItems = computed(() => {
         }
         return true;
     });
+});
+
+// The backend orders by date; the points ranking is applied here so the
+// sort mode is instantly switchable without a re-fetch.
+const displayItems = computed(() => {
+    const items = filteredItems.value.slice();
+    if (sortMode.value === "score") {
+        items.sort(
+            (a, b) =>
+                (Number(b.points) || 0) - (Number(a.points) || 0) ||
+                String(b.published_at || "").localeCompare(
+                    String(a.published_at || ""),
+                ),
+        );
+    } else if (sortMode.value === "old") {
+        items.reverse();
+    }
+    return items;
 });
 
 // --- Article viewer: extracted content, fetched on demand via get_item ---
@@ -521,6 +608,32 @@ const publishedLabel = computed(() => {
         month: "short",
         day: "numeric",
     });
+});
+
+// --- Evaluation display helpers (modal) ---
+
+const evalPoints = computed(() =>
+    Number(modalMeta.value?.points ?? 0).toFixed(1),
+);
+
+const evalNum = (field) =>
+    Number(modalMeta.value?.[field] ?? 0).toFixed(2);
+
+const fmtMillions = (millions) => {
+    const n = Number(millions) || 0;
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}B`;
+    return `${n}M`;
+};
+
+const evaluatedHumans = computed(() => {
+    const m = modalMeta.value;
+    if (!m || !m.evaluated) return "";
+    const nowD = Number(m.affected_now_direct ?? 0);
+    const nowI = Number(m.affected_now_indirect ?? 0);
+    const futD = Number(m.affected_future_direct ?? 0);
+    const futI = Number(m.affected_future_indirect ?? 0);
+    if (!nowD && !nowI && !futD && !futI) return "";
+    return `Humans affected: now ${fmtMillions(nowD)} direct / ${fmtMillions(nowI)} indirect · future ${fmtMillions(futD)} direct / ${fmtMillions(futI)} indirect`;
 });
 
 // If the item leaves the view lists (e.g. purged by retention after a
@@ -672,8 +785,31 @@ async function refreshNow() {
 async function reapplyRules() {
     const res = await runAction("reapply_rules", {});
     if (!res) return;
-    actionInfo.value = `Rules reapplied: ${res.applied ?? 0} scored, ${res.rejected ?? 0} rejected (threshold ${res.threshold ?? "?"})`;
+    actionInfo.value = `Rules reapplied: ${res.applied ?? 0} scored, ${res.rejected ?? 0} rejected (penalty threshold ${res.threshold ?? "?"} · min_points ${res.min_points ?? "?"})`;
     await refreshView();
+}
+
+// Queue every article for a fresh LLM evaluation, then poll until the
+// scheduled refresh job has drained the queue.
+async function reclassifyAll() {
+    const res = await runAction("reclassify_all", {}, {
+        info: "Queuing re-evaluation…",
+    });
+    if (!res) return;
+    refreshing.value = true;
+    actionInfo.value = `Re-evaluating ${res.reset ?? 0} articles…`;
+    let tries = 0;
+    const timer = setInterval(async () => {
+        tries++;
+        await refreshView();
+        const pending = view.value?.counts?.pending_classify ?? 0;
+        if ((pending === 0 && tries >= 2) || tries >= 24) {
+            clearInterval(timer);
+            refreshing.value = false;
+            actionInfo.value =
+                pending === 0 ? "Re-evaluation finished" : "";
+        }
+    }, 2500);
 }
 
 async function set_item_state(item, state) {
@@ -687,10 +823,10 @@ async function set_item_state(item, state) {
 }
 
 async function reclassify(item) {
-    actionInfo.value = "Reclassifying…";
+    actionInfo.value = "Re-evaluating…";
     const res = await runAction("reclassify", { item_id: item.id });
     if (!res) return;
-    actionInfo.value = `Reclassified as ${res.category ?? "?"} (quality ${res.quality ?? "?"})`;
+    actionInfo.value = `Evaluated: ${Number(res.points ?? 0).toFixed(1)}/10 points (significance ${Number(res.significance ?? 0).toFixed(2)})`;
     await refreshView();
 }
 
@@ -945,6 +1081,21 @@ function feedChipTitle(f) {
     font-style: italic;
     color: var(--font-color-secondary);
     font-size: 0.92rem;
+}
+
+.rss-modal-reflection {
+    margin: 0.7rem 1rem 0;
+    padding: 0.4rem 0.8rem;
+    border-left: 3px solid var(--accent-teal, #6d9484);
+    font-style: italic;
+    color: var(--font-color-secondary);
+    font-size: 0.92rem;
+}
+
+.rss-modal-meta-detail {
+    margin: 0.35rem 1rem 0;
+    font-size: 0.85rem;
+    color: var(--font-color-secondary);
 }
 
 .rss-modal-body {

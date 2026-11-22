@@ -35,10 +35,24 @@
             </button>
         </div>
         <div class="rss-item-badges">
+            <span
+                v-if="item.evaluated"
+                class="rss-badge rss-badge-points"
+                :class="pointsTone"
+                :title="pointsTooltip"
+                >★ {{ pointsLabel }}/10</span
+            >
+            <span
+                v-else-if="item.classify_status === 'pending'"
+                class="rss-badge"
+                title="Waiting for the LLM significance evaluation"
+                >⏳ evaluating…</span
+            >
             <span v-if="item.category" class="rss-badge">{{
                 item.category
             }}</span>
             <span
+                v-if="item.quality"
                 class="rss-badge rss-badge-quality"
                 :title="`LLM quality rating: ${item.quality}/10`"
                 >Q{{ item.quality }}</span
@@ -62,7 +76,7 @@
                 v-if="item.classify_status === 'error'"
                 class="rss-badge rss-badge-banned"
                 :title="item.classify_error || ''"
-                >⚠ classify failed</span
+                >⚠ evaluate failed</span
             >
             <span v-if="item.saved_note_id" class="rss-badge">∼ saved</span>
         </div>
@@ -91,9 +105,9 @@
                 class="btn-ghost btn-sm"
                 :disabled="busy"
                 @click="$emit('reclassify')"
-                title="Re-run the LLM classification"
+                title="Re-run the LLM significance evaluation"
             >
-                Reclassify
+                Re-evaluate
             </button>
             <button
                 class="btn-ghost btn-sm"
@@ -124,6 +138,46 @@ const props = defineProps({
 });
 
 defineEmits(["open", "mark", "reclassify", "save"]);
+
+// --- Evaluation points ---
+
+const pointsLabel = computed(() =>
+    Number(props.item.points ?? 0).toFixed(1),
+);
+
+const pointsTone = computed(() => {
+    const neg = Number(props.item.negativity ?? 0);
+    if (neg > 0.75) return "rss-badge-neg";
+    if (neg > 0.25) return "rss-badge-neutral";
+    return "rss-badge-pos";
+});
+
+const fmtM = (millions) => {
+    const n = Number(millions) || 0;
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}B`;
+    return `${n}M`;
+};
+
+const pointsTooltip = computed(() => {
+    const it = props.item;
+    const lines = [
+        `Points ${pointsLabel.value}/10 (10 × weights × evaluation − rule penalties)`,
+        `significance ${Number(it.significance ?? 0).toFixed(2)} · relevance ${Number(it.personal_relevance ?? 0).toFixed(2)} · negativity ${Number(it.negativity ?? 0).toFixed(2)}`,
+    ];
+    const nowD = Number(it.affected_now_direct ?? 0);
+    const nowI = Number(it.affected_now_indirect ?? 0);
+    const futD = Number(it.affected_future_direct ?? 0);
+    const futI = Number(it.affected_future_indirect ?? 0);
+    if (nowD || nowI || futD || futI) {
+        lines.push(
+            `humans affected: now ${fmtM(nowD)} direct / ${fmtM(nowI)} indirect · future ${fmtM(futD)} direct / ${fmtM(futI)} indirect`,
+        );
+    }
+    if (Number(it.penalty_score ?? 0) > 0) {
+        lines.push(`rule penalty −${it.penalty_score}`);
+    }
+    return lines.join("\n");
+});
 
 const penaltyTooltip = computed(() => {
     const entries = Array.isArray(props.item.penalty)
@@ -210,6 +264,23 @@ const publishedLabel = computed(() => {
 
 .rss-badge-quality {
     background: rgba(92, 184, 92, 0.18);
+}
+
+.rss-badge-points {
+    font-weight: 600;
+    white-space: pre-line;
+}
+
+.rss-badge-pos {
+    background: rgba(92, 184, 92, 0.22);
+}
+
+.rss-badge-neutral {
+    background: rgba(240, 173, 78, 0.22);
+}
+
+.rss-badge-neg {
+    background: rgba(217, 83, 79, 0.28);
 }
 
 .rss-badge-penalty {

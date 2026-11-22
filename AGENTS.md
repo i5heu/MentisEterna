@@ -213,7 +213,7 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
 | `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
 | `pkg/notetype/llminferencer/` | `llm_inferencer` | The app's single LLM inference provider note (singleton: OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings (`{tier}`/`{model}`/`{local: true}` pin to config.toml); write-only API key; `ResolveChat(db, usage)` resolves globally, falling back to config.toml (the per-usage system defaults are shown in the view); also owns the app-wide **LLM call statistics ledger** (`ct_llm_inferencer_stats`: per-call tokens/routing/model/latency/errors — 90-day retention cron, `clear_stats` action, aggregates + local↔remote split in the view) — see [docs/LLMInferencer.md](docs/LLMInferencer.md) §6 | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, CallStatsRecorder, CronJobs |
-| `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM classification (prompt resolved from the nearest `rss_prompt` note in the hierarchy) + ban words / penalty points typed in the reader note's body | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
+| `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM significance evaluation (significance / negativity / personal relevance / humans affected → **0–10 ranking points**; ban words / penalty points / `min_points` / `weights` rules typed in the reader note's body; points-ranked timeline, rejected bucket, `reclassify_all`) — see [docs/RSSReader.md](docs/RSSReader.md) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
 
 ## RSS Reader
 
@@ -226,11 +226,24 @@ The `rss` note type puts the whole subsystem in one note (see
   user content (`ban: <phrase>`, `<phrase>: <points>`, `threshold: <n>`);
   the plugin only ever *reads* the body. Malformed rule lines surface as
   warnings in the view; plain prose is ignored.
-- **Classification prompt** is the only external piece: the body of the
-  nearest `rss_prompt` note in the hierarchy (descendants → siblings →
-  uncles, nearest wins) — none found ⇒ built-in default prompt. Output is
-  structured JSON `{category, summary, quality, tags}` bound to the
-  `[llm.features] rss_classify` feature (medium tier by default).
+- **Classification prompt** is the only external piece: the body of
+  the nearest `rss_prompt` note in the hierarchy (descendants → siblings →
+  uncles, nearest wins) — none found ⇒ built-in default prompt, which is a
+  **significance-evaluation prompt** (global significance 0.0–1.0 on an
+  embedded scale, negativity, personal relevance for Germany/EU +
+  cloud/distributed-systems interests, 4× humans-affected estimates in
+  millions, reflection paragraph, tags; the `category`/`summary`/`quality`
+  keys survive only for custom legacy prompts). Output is structured JSON
+  bound to the `[llm.features] rss_classify` feature (medium tier by
+  default).
+- **Points**: each evaluated article gets **0–10 ranking points** =
+  `10 × (wSig·significance + wRel·relevance + wPos·(1−negativity) +
+  wHum·humansTerm) − rule penalties` (weights + `min_points:` floor are body
+  rules; defaults sig=0.5 / rel=0.25 / pos=0.15 / hum=0.10, min_points=2.0,
+  0=off). The reader timeline is ranked by points; evaluated items below
+  `min_points` land in the rejected bucket (legacy-classified items are
+  exempt — `evaluated` flag). `reclassify_all` re-queues every article for
+  a fresh evaluation (the refresh job's classify stage drains the queue).
 - **Stored article text is viewable inline**: item content is kept out of
   the view payload (size); the `get_item` action returns one article's
   stored content on demand (extracted `full_content` preferred, else the

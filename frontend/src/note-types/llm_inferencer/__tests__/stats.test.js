@@ -91,7 +91,7 @@ describe("llm_inferencer stats helpers", () => {
         const rows = [
             {
                 usage: "rss_classify",
-                label: "RSS Classification",
+                label: "RSS Evaluation",
                 source: "note",
                 provider: "openrouter",
                 model: "prov/small",
@@ -105,7 +105,7 @@ describe("llm_inferencer stats helpers", () => {
             },
             {
                 usage: "rss_classify",
-                label: "RSS Classification",
+                label: "RSS Evaluation",
                 source: "config",
                 model: "gemma-4-e2b",
                 calls: 4,
@@ -151,7 +151,7 @@ describe("llm_inferencer stats helpers", () => {
             // fine for SQL but the card wants usage-first grouping.
             const out = analyticsRows(rows);
             expect(out[0].label).toBe("Connection Test");
-            expect(out[1].label).toBe("RSS Classification");
+            expect(out[1].label).toBe("RSS Evaluation");
             expect(out[1].routing).toBe("remote");
             expect(out[2].routing).toBe("local");
         });

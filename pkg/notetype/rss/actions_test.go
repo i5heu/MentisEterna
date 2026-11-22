@@ -337,11 +337,109 @@ func TestHandleActionReapplyRulesDispatch(t *testing.T) {
 	if th, _ := m["threshold"].(float64); th != 8 {
 		t.Errorf("threshold = %v, want 8", m["threshold"])
 	}
-	var score float64
-	if err := d.QueryRow(`SELECT penalty_score FROM ct_rss_items WHERE id = ?`, itemID).Scan(&score); err != nil {
+	if mp, _ := m["min_points"].(float64); mp != defaultMinPoints {
+		t.Errorf("min_points = %v, want default %v", m["min_points"], defaultMinPoints)
+	}
+	var score, points float64
+	if err := d.QueryRow(`SELECT penalty_score, points FROM ct_rss_items WHERE id = ?`, itemID).Scan(&score, &points); err != nil {
 		t.Fatalf("load item: %v", err)
 	}
 	if score != 12 { // "webinar" × 2 occurrences × 6 points
 		t.Errorf("penalty_score = %v, want 12", score)
+	}
+	// Zero-metrics + heavy penalty → floored at 0 points.
+	if points != 0 {
+		t.Errorf("points = %v, want 0 (floored)", points)
+	}
+}
+
+func TestReclassifyAllAction(t *testing.T) {
+	p, d, noteID, feedID, itemID := readerFixture(t, "content")
+	rec := installEnqueue(t, p)
+
+	// A second, already-classified item.
+	if _, err := d.Exec(
+		`INSERT INTO ct_rss_items (feed_id, item_key, title, fetched_at, feed_content, classify_status)
+		 VALUES (?, 'k2', 'Second', ?, 'more', 'error')`, feedID, nowStr(),
+	); err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+
+	res, err := p.HandleAction(context.Background(), d.DB, 0, noteID, "reclassify_all",
+		json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("reclassify_all: %v", err)
+	}
+	m, ok := res.(map[string]any)
+	if !ok || m["reset"] != int64(2) {
+		t.Fatalf("reclassify_all result: %#v", res)
+	}
+
+	// Every item is queued as pending with cleared errors.
+	var pending int
+	if err := d.QueryRow(
+		`SELECT COUNT(*) FROM ct_rss_items WHERE classify_status = 'pending' AND classify_error = ''`,
+	).Scan(&pending); err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if pending != 2 {
+		t.Errorf("pending = %d, want 2", pending)
+	}
+
+	// A refresh job is scheduled to drain the queue.
+	if len(rec.calls) != 1 {
+		t.Fatalf("enqueue calls = %d, want 1", len(rec.calls))
+	}
+	c := rec.calls[0]
+	var pl struct {
+		NoteID int64 `json:"note_id"`
+		Force  bool  `json:"force"`
+	}
+	if err := json.Unmarshal(c.payload, &pl); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if c.pluginID != PluginID || c.jobName != JobRefreshFeeds || pl.NoteID != noteID || !pl.Force {
+		t.Errorf("enqueued = %+v (want force refresh of note %d)", c, noteID)
+	}
+
+	// Item states (starred etc.) survive the reset.
+	var state string
+	_ = d.QueryRow(`SELECT state FROM ct_rss_items WHERE id = ?`, itemID).Scan(&state)
+	if state != "new" {
+		t.Errorf("item state changed: %q", state)
+	}
+}
+
+func TestGetItemEvaluationFields(t *testing.T) {
+	p, d, noteID, _, itemID := readerFixture(t, "content")
+
+	if _, err := d.Exec(
+		`UPDATE ct_rss_items SET
+			significance = 0.8, negativity = 0.3, personal_relevance = 0.6,
+			affected_now_direct = 1.5, affected_now_indirect = 20,
+			affected_future_direct = 100, affected_future_indirect = 3000,
+			reflection = 'A transformative change with global reach.',
+			points = 7.2, evaluated = 1, classify_error = 'ambiguous author field'
+		 WHERE id = ?`, itemID,
+	); err != nil {
+		t.Fatalf("seed evaluation: %v", err)
+	}
+
+	it := mustGetItem(t, p, d, noteID, itemID)
+	if it.Significance != 0.8 || it.Negativity != 0.3 || it.PersonalRelevance != 0.6 {
+		t.Errorf("scores wrong: %+v", it)
+	}
+	if it.AffectedNowDirect != 1.5 || it.AffectedNowIndirect != 20 ||
+		it.AffectedFutureDirect != 100 || it.AffectedFutureIndirect != 3000 {
+		t.Errorf("humans wrong: %+v", it)
+	}
+	if it.Reflection != "A transformative change with global reach." {
+		t.Errorf("reflection = %q", it.Reflection)
+	}
+	if it.Points != 7.2 || !it.Evaluated {
+		t.Errorf("points/evaluated wrong: %v %v", it.Points, it.Evaluated)
+	}
+	if it.ClassifyStatus != "done" || it.ClassifyError != "ambiguous author field" {
+		t.Errorf("classify status/error not round-tripped: %q %q", it.ClassifyStatus, it.ClassifyError)
 	}
 }

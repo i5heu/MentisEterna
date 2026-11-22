@@ -14,6 +14,7 @@ package rss
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
@@ -95,6 +96,16 @@ func (p *Plugin) InitSchema(db *sql.DB) error {
 			summary         TEXT    NOT NULL DEFAULT '',
 			tags_json       TEXT    NOT NULL DEFAULT '[]',
 			quality         INTEGER NOT NULL DEFAULT 0,
+			significance    REAL    NOT NULL DEFAULT 0,   -- LLM evaluation 0..1
+			negativity      REAL    NOT NULL DEFAULT 0,   -- 0 positive .. 1 negative
+			personal_relevance REAL NOT NULL DEFAULT 0,  -- 0..1
+			affected_now_direct   REAL NOT NULL DEFAULT 0, -- millions
+			affected_now_indirect  REAL NOT NULL DEFAULT 0,
+			affected_future_direct REAL NOT NULL DEFAULT 0,
+			affected_future_indirect REAL NOT NULL DEFAULT 0,
+			reflection      TEXT    NOT NULL DEFAULT '',  -- evaluationReflectionParagraph
+			points          REAL    NOT NULL DEFAULT 0,   -- computed 0..10
+			evaluated       INTEGER NOT NULL DEFAULT 0,    -- classification carried evaluation data
 			classify_status TEXT    NOT NULL DEFAULT 'pending',
 			classify_error  TEXT    NOT NULL DEFAULT '',
 			penalty_score   REAL    NOT NULL DEFAULT 0,
@@ -111,6 +122,55 @@ func (p *Plugin) InitSchema(db *sql.DB) error {
 	`); err != nil {
 		return err
 	}
+	return ensureItemColumns(db)
+}
+
+// ensureItemColumns upgrades databases whose ct_rss_items table predates the
+// significance-evaluation columns: any missing column is added with its
+// default (ALTER TABLE ADD COLUMN per gap; idempotent).
+func ensureItemColumns(db *sql.DB) error {
+	wanted := [][2]string{
+		{"significance", "significance REAL NOT NULL DEFAULT 0"},
+		{"negativity", "negativity REAL NOT NULL DEFAULT 0"},
+		{"personal_relevance", "personal_relevance REAL NOT NULL DEFAULT 0"},
+		{"affected_now_direct", "affected_now_direct REAL NOT NULL DEFAULT 0"},
+		{"affected_now_indirect", "affected_now_indirect REAL NOT NULL DEFAULT 0"},
+		{"affected_future_direct", "affected_future_direct REAL NOT NULL DEFAULT 0"},
+		{"affected_future_indirect", "affected_future_indirect REAL NOT NULL DEFAULT 0"},
+		{"reflection", "reflection TEXT NOT NULL DEFAULT ''"},
+		{"points", "points REAL NOT NULL DEFAULT 0"},
+		{"evaluated", "evaluated INTEGER NOT NULL DEFAULT 0"},
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(ct_rss_items)`)
+	if err != nil {
+		return fmt.Errorf("rss: schema check: %w", err)
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, w := range wanted {
+		if existing[w[0]] {
+			continue
+		}
+		if _, err := db.Exec(`ALTER TABLE ct_rss_items ADD COLUMN ` + w[1]); err != nil {
+			return fmt.Errorf("rss: add column %s: %w", w[0], err)
+		}
+	}
 	return nil
 }
 
@@ -119,7 +179,7 @@ func (p *Plugin) Manifest() notetype.Manifest {
 	return notetype.Manifest{
 		ID:          PluginID,
 		Label:       "RSS Reader",
-		Description: "Fetches RSS/Atom feeds, resolves full article content, classifies items via an LLM prompt defined in an RSS Prompt note, and applies ban words / penalty points from the note body",
+		Description: "Fetches RSS/Atom feeds, resolves full article content, and evaluates items with an LLM (significance, negativity, personal relevance, humans affected — condensed into ranking points); ban words / penalty points / point-rule weights are typed in the note body",
 		Category:    "Information",
 		SortOrder:   500,
 		DefaultConfig: json.RawMessage(`{
@@ -191,8 +251,8 @@ func (p *Plugin) Manifest() notetype.Manifest {
 			},
 			{
 				ID:          "reclassify",
-				Label:       "Reclassify Item",
-				Description: "Re-run the LLM classification for one article",
+				Label:       "Re-evaluate Item",
+				Description: "Re-run the LLM evaluation for one article",
 				ParamsSchema: json.RawMessage(`{
 					"type": "object",
 					"properties": {"item_id": {"type": "integer"}},
@@ -200,7 +260,20 @@ func (p *Plugin) Manifest() notetype.Manifest {
 				}`),
 				Dangerous:       false,
 				RefreshStrategy: "reload_view",
-				SuccessMessage:  "Article reclassified",
+				SuccessMessage:  "Article re-evaluated",
+			},
+			{
+				ID:          "reclassify_all",
+				Label:       "Re-evaluate All",
+				Description: "Queue every article of this reader for a fresh LLM evaluation and schedule a refresh",
+				ParamsSchema: json.RawMessage(`{
+					"type": "object",
+					"properties": {},
+					"required": []
+				}`),
+				Dangerous:       false,
+				RefreshStrategy: "none",
+				SuccessMessage:  "Re-evaluation scheduled",
 			},
 			{
 				ID:          "reapply_rules",

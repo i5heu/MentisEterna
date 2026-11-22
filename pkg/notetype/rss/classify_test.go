@@ -48,42 +48,73 @@ func stubSeqClassifier(t *testing.T, replies []string, err error) {
 }
 
 func TestParseClassification(t *testing.T) {
-	// Plain JSON.
-	out, err := parseClassification(`{"category":"Tech","summary":"It is a thing.","quality":8,"tags":["go","rss"]}`)
+	// Plain JSON (the evaluation contract).
+	out, err := parseClassification(`{"evaluationReflectionParagraph":"A big deal.","potentialFutureDirectlyAffectedHumansInMillions":10,"potentialFutureIndirectlyAffectedHumansInMillions":0,"alreadyDirectlyAffectedHumansInMillions":1.5,"alreadyIndirectlyAffectedHumansInMillions":2,"significance":0.7,"negativity":0.25,"personalRelevance":0.8,"tags":["go","rss"]}`)
 	if err != nil {
 		t.Fatalf("plain: %v", err)
 	}
-	if out.Category != "Tech" || out.Quality != 8 || len(out.Tags) != 2 {
-		t.Errorf("plain: %+v", out)
+	if out.Significance != 0.7 || out.Negativity != 0.25 || out.PersonalRelevance != 0.8 {
+		t.Errorf("plain scores: %+v", out)
+	}
+	if out.AlreadyDirectlyAffectedHumansInMillions != 1.5 || out.PotentialFutureDirectlyAffectedHumansInMillions != 10 {
+		t.Errorf("plain humans: %+v", out)
+	}
+	if out.EvaluationReflectionParagraph != "A big deal." || len(out.Tags) != 2 {
+		t.Errorf("plain fields: %+v", out)
+	}
+	if !out.hasEvaluation() {
+		t.Error("evaluation reply should be detected as evaluated")
+	}
+	// Reflection falls back into the legacy summary field.
+	if out.Summary != "A big deal." {
+		t.Errorf("summary fallback = %q", out.Summary)
 	}
 
 	// Fenced.
-	out, err = parseClassification("```json\n{\"category\":\"Fenced\",\"summary\":\"S\",\"quality\":3,\"tags\":[]}\n```")
-	if err != nil || out.Category != "Fenced" {
+	out, err = parseClassification("```json\n{\"evaluationReflectionParagraph\":\"Fenced\",\"significance\":1}\n```")
+	if err != nil || out.Significance != 1 {
 		t.Errorf("fenced: %v %+v", err, out)
 	}
 
-	// Prose around the object.
-	out, err = parseClassification("Sure! Here you go: {\"category\":\"P\",\"summary\":\"S\",\"quality\":1,\"tags\":[]} hope that helps")
-	if err != nil || out.Category != "P" {
+	// Prose around the object (checklist-style replies).
+	out, err = parseClassification("- retrieve\n- assess\n{\"evaluationReflectionParagraph\":\"P\",\"significance\":0.5}")
+	if err != nil || out.Significance != 0.5 {
 		t.Errorf("prose: %v %+v", err, out)
 	}
 
 	// Clipping and clamping.
 	long := strings.Repeat("x", 300)
-	out, err = parseClassification(fmt.Sprintf(`{"category":"%s","summary":"%s","quality":15,"tags":[%s]}`,
-		long, long, `"t1","t2","t3","t4","t5","t6","t7","t8","t9","t10","t11","t12"`))
+	out, err = parseClassification(fmt.Sprintf(`{"evaluationReflectionParagraph":"%s","significance":1.7,"negativity":-0.3,"personalRelevance":2,"alreadyDirectlyAffectedHumansInMillions":50000000,"error":"%s","tags":[%s]}`,
+		strings.Repeat("r", 3000), long, `"t1","t2","t3","t4","t5","t6","t7","t8","t9","t10","t11","t12"`))
 	if err != nil {
 		t.Fatalf("clip: %v", err)
 	}
-	if got := len([]rune(out.Category)); got > 100 {
-		t.Errorf("category clip: %d runes", got)
+	if out.Significance != 1 || out.Negativity != 0 || out.PersonalRelevance != 1 {
+		t.Errorf("clamps: %+v", out)
 	}
-	if out.Quality != 10 {
-		t.Errorf("quality clamp: %d", out.Quality)
+	if out.AlreadyDirectlyAffectedHumansInMillions != 1_000_000 {
+		t.Errorf("humans clamp: %v", out.AlreadyDirectlyAffectedHumansInMillions)
+	}
+	if got := len([]rune(out.EvaluationReflectionParagraph)); got > 2000 {
+		t.Errorf("reflection clip: %d runes", got)
+	}
+	if got := len([]rune(out.Error)); got > 500 {
+		t.Errorf("error clip: %d runes", got)
 	}
 	if len(out.Tags) != 10 {
 		t.Errorf("tags clip: %d", len(out.Tags))
+	}
+
+	// Legacy reply (pre-evaluation prompt): still parses, not evaluated.
+	out, err = parseClassification(`{"category":"Tech","summary":"It is a thing.","quality":8,"tags":["go","rss"]}`)
+	if err != nil {
+		t.Fatalf("legacy: %v", err)
+	}
+	if out.Category != "Tech" || out.Quality != 8 || len(out.Tags) != 2 {
+		t.Errorf("legacy: %+v", out)
+	}
+	if out.hasEvaluation() {
+		t.Error("legacy reply must not count as evaluated")
 	}
 	// Negative quality clamps to zero.
 	out, _ = parseClassification(`{"quality":-5}`)
@@ -164,16 +195,23 @@ func TestClassifyPendingItemsStoresResults(t *testing.T) {
 		t.Fatalf("classified = %d, want 2", done)
 	}
 	for _, id := range ids {
-		var status, category string
-		var quality int
+		var status string
+		var sig, rel, points float64
+		var evaluated int
 		var tags string
 		if err := d.QueryRow(
-			`SELECT classify_status, category, quality, tags_json FROM ct_rss_items WHERE id = ?`, id,
-		).Scan(&status, &category, &quality, &tags); err != nil {
+			`SELECT classify_status, significance, personal_relevance, points, evaluated, tags_json FROM ct_rss_items WHERE id = ?`, id,
+		).Scan(&status, &sig, &rel, &points, &evaluated, &tags); err != nil {
 			t.Fatalf("load item %d: %v", id, err)
 		}
-		if status != "done" || category != "Technology" || quality != 7 || tags != `["one","two"]` {
-			t.Errorf("item %d: status=%q category=%q quality=%d tags=%q", id, status, category, quality, tags)
+		if status != "done" || sig != 0.7 || rel != 0.6 || evaluated != 1 {
+			t.Errorf("item %d: status=%q sig=%v rel=%v evaluated=%d", id, status, sig, rel, evaluated)
+		}
+		if points < 7.0 || points > 7.6 {
+			t.Errorf("item %d: points=%v, want ≈7.35", id, points)
+		}
+		if tags != `["world","policy"]` {
+			t.Errorf("item %d: tags=%q", id, tags)
 		}
 	}
 
@@ -197,6 +235,69 @@ func TestClassifyPendingItemsStoresResults(t *testing.T) {
 	_ = d.QueryRow(`SELECT classify_status FROM ct_rss_items WHERE item_key = 'i-c'`).Scan(&status)
 	if status != "pending" {
 		t.Errorf("item i-c tampered: %q", status)
+	}
+}
+
+// TestClassifyPendingItemsDrainsBatches verifies the drain loop: more
+// pending items than one batch are all classified in a single run.
+func TestClassifyPendingItemsDrainsBatches(t *testing.T) {
+	stubClassifier(t, stubClassifyJSON)
+	_, d, noteID, _ := classifyFixture(t)
+
+	var feedID int64
+	if err := d.QueryRow(`SELECT id FROM ct_rss_feeds WHERE note_id = ?`, noteID).Scan(&feedID); err != nil {
+		t.Fatalf("load feed: %v", err)
+	}
+	const extra = 3 * classifyBatchSize
+	for i := 0; i < extra; i++ {
+		if _, err := d.Exec(
+			`INSERT INTO ct_rss_items (feed_id, item_key, title, fetched_at, feed_content, classify_status)
+			 VALUES (?, ?, ?, ?, ?, 'pending')`,
+			feedID, fmt.Sprintf("bulk-%03d", i), fmt.Sprintf("Bulk %d", i), nowStr(), "Bulk content.",
+		); err != nil {
+			t.Fatalf("insert bulk %d: %v", i, err)
+		}
+	}
+
+	done := classifyPendingItems(d.DB, noteID, Config{AutoClassify: true})
+	if want := extra + 2; done != want {
+		t.Errorf("classified = %d, want %d (all batches drained)", done, want)
+	}
+	var pending int
+	_ = d.QueryRow(`SELECT COUNT(*) FROM ct_rss_items WHERE classify_status = 'pending'`).Scan(&pending)
+	if pending != 0 {
+		t.Errorf("pending after drain = %d, want 0", pending)
+	}
+}
+
+// TestClassifyStoresPointsWithWeightsAndPenalty verifies weights from body
+// rules and the item's stored penalty flow into the points column.
+func TestClassifyStoresPointsWithWeightsAndPenalty(t *testing.T) {
+	stubClassifier(t, stubClassifyJSON)
+	_, d, noteID, ids := classifyFixture(t)
+
+	// Custom weights: significance-only scoring; the stub yields 0.7.
+	setNoteBody(t, d, noteID, "weights: sig=1, rel=0, pos=0, hum=0\n")
+	if _, err := d.Exec(`UPDATE ct_rss_items SET penalty_score = 3 WHERE id = ?`, ids[0]); err != nil {
+		t.Fatalf("set penalty: %v", err)
+	}
+
+	if done := classifyPendingItems(d.DB, noteID, Config{AutoClassify: true}); done != 2 {
+		t.Fatalf("classified = %d, want 2", done)
+	}
+	var points0, points1 float64
+	if err := d.QueryRow(`SELECT points FROM ct_rss_items WHERE id = ?`, ids[0]).Scan(&points0); err != nil {
+		t.Fatalf("load points 0: %v", err)
+	}
+	if err := d.QueryRow(`SELECT points FROM ct_rss_items WHERE id = ?`, ids[1]).Scan(&points1); err != nil {
+		t.Fatalf("load points 1: %v", err)
+	}
+	// 10 × (1 × 0.7) − 3 = 4 — weights rule honored, penalty subtracted.
+	if points0 != 4 {
+		t.Errorf("points with penalty = %v, want 4", points0)
+	}
+	if points1 != 7 {
+		t.Errorf("points without penalty = %v, want 7", points1)
 	}
 }
 
@@ -251,8 +352,17 @@ func TestReclassifyAction(t *testing.T) {
 		t.Fatalf("HandleAction reclassify: %v", err)
 	}
 	m, ok := res.(map[string]any)
-	if !ok || m["category"] != "Technology" {
+	if !ok {
 		t.Fatalf("reclassify result: %#v", res)
+	}
+	if sig, _ := m["significance"].(float64); sig != 0.7 {
+		t.Errorf("reclassify significance = %v", m["significance"])
+	}
+	if pts, _ := m["points"].(float64); pts < 7.0 || pts > 7.6 {
+		t.Errorf("reclassify points = %v, want ≈7.35", m["points"])
+	}
+	if m["reflection"] != "A significant global development with broad impact." {
+		t.Errorf("reclassify reflection = %v", m["reflection"])
 	}
 	var status string
 	if err := d.QueryRow(`SELECT classify_status FROM ct_rss_items WHERE id = ?`, ids[0]).Scan(&status); err != nil {

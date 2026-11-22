@@ -46,7 +46,10 @@ func (s stubClassifyClient) Classify(system, user string) (string, error) {
 
 func (s stubClassifyClient) BeginUse() func() { return func() {} }
 
-const stubClassifyJSON = `{"category":"Technology","summary":"A stub summary.","quality":7,"tags":["one","two"]}`
+// stubClassifyJSON is a canned evaluation reply matching the output
+// contract: significance 0.7 positive, personally relevant, ~2.16 billion
+// humans affected, plus a reflection paragraph (which doubles as summary).
+const stubClassifyJSON = `{"evaluationReflectionParagraph":"A significant global development with broad impact.","potentialFutureDirectlyAffectedHumansInMillions":120.5,"potentialFutureIndirectlyAffectedHumansInMillions":2000.0,"alreadyDirectlyAffectedHumansInMillions":3.2,"alreadyIndirectlyAffectedHumansInMillions":40.0,"significance":0.7,"negativity":0.0,"personalRelevance":0.6,"tags":["world","policy"]}`
 
 // feedServer serves a two-item feed (one rich item, one snippet that needs
 // full-content fetch) with ETag/304 handling, plus an article page.
@@ -129,12 +132,28 @@ func TestRefreshNoteEndToEnd(t *testing.T) {
 		t.Errorf("summary missing classification: %q", summary)
 	}
 	// Items were classified with the stub's canned result.
-	var cs, cat string
-	if err := d.QueryRow(`SELECT classify_status, COALESCE(category,'') FROM ct_rss_items WHERE item_key = 'rich-1'`).Scan(&cs, &cat); err != nil {
+	var cs string
+	var sig float64
+	var eval int
+	if err := d.QueryRow(`SELECT classify_status, significance, evaluated FROM ct_rss_items WHERE item_key = 'rich-1'`).Scan(&cs, &sig, &eval); err != nil {
 		t.Fatalf("load classified item: %v", err)
 	}
-	if cs != "done" || cat != "Technology" {
-		t.Errorf("classification not stored: status=%q category=%q", cs, cat)
+	if cs != "done" || sig != 0.7 || eval != 1 {
+		t.Errorf("evaluation not stored: status=%q significance=%v evaluated=%d", cs, sig, eval)
+	}
+	var points, rel float64
+	var itemSummary string
+	if err := d.QueryRow(`SELECT points, personal_relevance, summary FROM ct_rss_items WHERE item_key = 'rich-1'`).Scan(&points, &rel, &itemSummary); err != nil {
+		t.Fatalf("load evaluated item: %v", err)
+	}
+	if points < 7.0 || points > 7.6 {
+		t.Errorf("points = %v, want ≈7.35", points)
+	}
+	if rel != 0.6 {
+		t.Errorf("personal_relevance = %v, want 0.6", rel)
+	}
+	if itemSummary != "A significant global development with broad impact." {
+		t.Errorf("summary fallback = %q", itemSummary)
 	}
 
 	// Items stored with expected content.

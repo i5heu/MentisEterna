@@ -30,8 +30,8 @@ var usageSpecs = []UsageSpec{
 	{
 		ID:          "rss_classify",
 		Feature:     "rss_classify",
-		Label:       "RSS Classification",
-		Description: "Classifies fetched RSS articles (category, summary, quality, tags) for rss reader notes",
+		Label:       "RSS Evaluation",
+		Description: "Evaluates fetched RSS articles (significance, negativity, personal relevance, humans affected, tags → ranking points) for rss reader notes",
 		Wired:       true,
 	},
 	{

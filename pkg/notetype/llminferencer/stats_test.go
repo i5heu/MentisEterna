@@ -104,10 +104,10 @@ func TestRecordCallAndLoadStatsView(t *testing.T) {
 	}
 
 	wantRows := []StatsRow{
-		{Usage: "rss_classify", Label: "RSS Classification", Source: llm.ChatSourceNote,
+		{Usage: "rss_classify", Label: "RSS Evaluation", Source: llm.ChatSourceNote,
 			Provider: "openrouter", Model: "prov/small", Calls: 1, Errors: 0,
 			PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, AvgDurationMS: 120, LastUsedAt: ""},
-		{Usage: "rss_classify", Label: "RSS Classification", Source: llm.ChatSourceConfig,
+		{Usage: "rss_classify", Label: "RSS Evaluation", Source: llm.ChatSourceConfig,
 			Model: "gemma-4-e2b", Calls: 1, Errors: 0,
 			PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, AvgDurationMS: 80},
 		{Usage: "test", Label: "Connection Test", Source: llm.ChatSourceNote,
@@ -368,7 +368,7 @@ func TestStatsUsageLabel(t *testing.T) {
 		want string
 	}{
 		// Catalog usage ids get their label.
-		"rss_classify": {id: "rss_classify", want: "RSS Classification"},
+		"rss_classify": {id: "rss_classify", want: "RSS Evaluation"},
 		"title":        {id: "title", want: "Note Title Generation"},
 		"tags":         {id: "tags", want: "Auto Tags"},
 		"subtasks":     {id: "subtasks", want: "Subtask Generation"},
