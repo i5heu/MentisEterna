@@ -65,9 +65,11 @@ func TestParseClassification(t *testing.T) {
 	if !out.hasEvaluation() {
 		t.Error("evaluation reply should be detected as evaluated")
 	}
-	// Reflection falls back into the legacy summary field.
-	if out.Summary != "A big deal." {
-		t.Errorf("summary fallback = %q", out.Summary)
+	// The old summary is discarded: even when a reflection paragraph is
+	// present, the evaluation reply never produces a Summary (that is
+	// the summarizer pass's job — summary_json).
+	if out.Summary != "" {
+		t.Errorf("summary leaked from evaluation = %q, want empty", out.Summary)
 	}
 
 	// Fenced.
@@ -184,6 +186,56 @@ func classifyFixture(t *testing.T) (*Plugin, *db.DB, int64, []int64) {
 		ids = append(ids, id)
 	}
 	return p, d, noteID, ids
+}
+
+// TestStoreClassificationDiscardsOldSummary pins the discard contract: the
+// evaluation pipeline must never write a summary, and re-evaluating a
+// legacy row clears its stale old-summary value — summary_json (the
+// telegraph digest) is the one and only summary.
+func TestStoreClassificationDiscardsOldSummary(t *testing.T) {
+	p := notetype.Registry[PluginID].(*Plugin)
+	d := plugintest.DB(t, p)
+	noteID := plugintest.CreateNote(t, d, "Reader", p)
+
+	tx, _ := d.Begin()
+	if err := p.SaveConfig(context.Background(), tx, 0, noteID,
+		jsonRaw(`{"feeds":[{"url":"https://a.example/rss","name":"A","enabled":true}]}`)); err != nil {
+		tx.Rollback()
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	tx.Commit()
+
+	var feedID int64
+	if err := d.QueryRow(`SELECT id FROM ct_rss_feeds WHERE note_id = ?`, noteID).Scan(&feedID); err != nil {
+		t.Fatalf("load feed: %v", err)
+	}
+	res, err := d.Exec(`
+		INSERT INTO ct_rss_items (feed_id, item_key, title, fetched_at, feed_content, summary, classify_status)
+		VALUES (?, 'legacy-sum', 'Old', ?, 'old body', 'stale legacy summary text', 'done')`,
+		feedID, nowStr(),
+	)
+	if err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	itemID, _ := res.LastInsertId()
+
+	err = storeClassification(d.DB, itemID, 0, Classification{
+		EvaluationReflectionParagraph: "A fresh evaluation reflection.",
+		Significance:                  0.5,
+		Summary:                       "a legacy prompt's summary key — must be dropped",
+		Tags:                          []string{"x"},
+	}, defaultScoreWeights(), 0)
+	if err != nil {
+		t.Fatalf("storeClassification: %v", err)
+	}
+
+	var summary string
+	if err := d.QueryRow(`SELECT summary FROM ct_rss_items WHERE id = ?`, itemID).Scan(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary != "" {
+		t.Errorf("old summary survived re-evaluation = %q, want cleared", summary)
+	}
 }
 
 func TestClassifyPendingItemsStoresResults(t *testing.T) {

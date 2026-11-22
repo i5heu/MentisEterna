@@ -234,7 +234,9 @@ The `rss` note type puts the whole subsystem in one note (see
   embedded scale, negativity, personal relevance for Germany/EU +
   cloud/distributed-systems interests, 4× humans-affected estimates in
   millions, reflection paragraph, tags; the `category`/`summary`/`quality`
-  keys survive only for custom legacy prompts). Output is structured JSON
+  keys are parsed from custom legacy prompts but the old summary is
+  **discarded** — never stored or rendered; the telegraph digest is the one
+  and only summary). Output is structured JSON
   bound to the `[llm.features] rss_classify` feature (medium tier by
   default).
 - **Summarizer** is a second LLM pass: telegraph-style `F:`/`O:`/`Q:` lines

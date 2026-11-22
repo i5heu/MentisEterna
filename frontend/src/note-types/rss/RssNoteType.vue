@@ -277,8 +277,8 @@
                         ⚠ evaluation notes: {{ article.classify_error }}
                     </p>
 
-                    <!-- Telegraph F/O/Q summary; falls back to the legacy
-                         reflection/summary line when none is stored yet. -->
+                    <!-- Telegraph F/O/Q summary — the one and only summary.
+                         No digest yet: queue/error states explain what to do. -->
                     <div
                         v-if="article && article.structured_summary"
                         class="rss-modal-digest"
@@ -298,26 +298,18 @@
                             </p>
                         </div>
                     </div>
-                    <template v-else-if="article && (article.summary || article.reflection)">
-                        <p
-                            v-if="article.summary && !article.reflection"
-                            class="rss-modal-summary"
-                        >
-                            {{ article.summary }}
-                        </p>
-                        <blockquote
-                            v-if="article.reflection"
-                            class="rss-modal-reflection"
-                        >
-                            {{ article.reflection }}
-                        </blockquote>
-                    </template>
                     <p
-                        v-if="article && article.summary_status === 'pending' && !article.structured_summary"
+                        v-else-if="article && article.summary_status === 'pending'"
                         class="rss-modal-hint"
                     >
                         ⏳ Summary queued — it appears here when the
                         summarization job finishes.
+                    </p>
+                    <p
+                        v-else-if="article"
+                        class="rss-modal-hint"
+                    >
+                        No summary yet — “Summarize” generates one.
                     </p>
                     <p
                         v-if="article && article.summary_status === 'error'"
@@ -1466,22 +1458,6 @@ function feedChipTitle(f) {
 
 .rss-chip-penalty {
     background: rgba(240, 173, 78, 0.22);
-}
-
-.rss-modal-summary {
-    margin: 0.7rem 1rem 0;
-    font-style: italic;
-    color: var(--font-color-secondary);
-    font-size: 0.92rem;
-}
-
-.rss-modal-reflection {
-    margin: 0.7rem 1rem 0;
-    padding: 0.4rem 0.8rem;
-    border-left: 3px solid var(--accent-teal, #6d9484);
-    font-style: italic;
-    color: var(--font-color-secondary);
-    font-size: 0.92rem;
 }
 
 /* --- Telegraph F/O/Q digest in the article modal --- */

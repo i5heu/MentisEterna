@@ -28,7 +28,9 @@ type FeedStatus struct {
 	NewCount    int    `json:"new_count"`
 }
 
-// ItemView is one article in the view.
+// ItemView is one article in the view. The old summary column is
+// deliberately absent — the telegraph digest from the summarizer pass
+// (StructuredSummary) is the one and only summary the cards render.
 type ItemView struct {
 	ID                     int64              `json:"id"`
 	FeedID                 int64              `json:"feed_id"`
@@ -37,7 +39,6 @@ type ItemView struct {
 	URL                    string             `json:"url"`
 	Author                 string             `json:"author"`
 	PublishedAt            string             `json:"published_at"`
-	Summary                string             `json:"summary"`
 	Category               string             `json:"category"`
 	Tags                   []string           `json:"tags"`
 	Quality                int                `json:"quality"`
@@ -186,7 +187,7 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 
 	rows, err := db.Query(`
 		SELECT i.id, i.feed_id, i.title, i.url, i.author, i.published_at,
-		       i.category, i.summary, i.tags_json, i.quality, i.classify_status,
+		       i.category, i.tags_json, i.quality, i.classify_status,
 		       i.significance, i.negativity, i.personal_relevance,
 		       i.affected_now_direct, i.affected_now_indirect,
 		       i.affected_future_direct, i.affected_future_indirect,
@@ -208,7 +209,7 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 		var tagsJSON, penaltyJSON, summaryJSON string
 		var banned, evaluated int
 		if err := rows.Scan(&it.ID, &it.FeedID, &it.Title, &it.URL, &it.Author, &it.PublishedAt,
-			&it.Category, &it.Summary, &tagsJSON, &it.Quality, &it.ClassifyStatus,
+			&it.Category, &tagsJSON, &it.Quality, &it.ClassifyStatus,
 			&it.Significance, &it.Negativity, &it.PersonalRelevance,
 			&it.AffectedNowDirect, &it.AffectedNowIndirect,
 			&it.AffectedFutureDirect, &it.AffectedFutureIndirect,

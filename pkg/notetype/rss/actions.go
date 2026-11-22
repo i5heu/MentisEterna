@@ -70,7 +70,6 @@ func (p *Plugin) actionReclassify(ctx context.Context, db *sql.DB, noteID int64,
 	points := computePoints(classification.metrics(), weights, it.Penalty)
 	return map[string]any{
 		"item_id":            it.ID,
-		"summary":            classification.Summary,
 		"reflection":         classification.EvaluationReflectionParagraph,
 		"significance":       classification.Significance,
 		"negativity":         classification.Negativity,
@@ -405,7 +404,9 @@ func actionSetItemState(db *sql.DB, noteID int64, params json.RawMessage) (any, 
 	return map[string]any{"item_id": p.ItemID, "state": p.State}, nil
 }
 
-// itemForSave is the data needed to render an article as a note body.
+// itemForSave is the data needed to render an article as a note body. The
+// old summary column is deliberately absent: saved notes carry the telegraph
+// digest only (summary_json).
 type itemForSave struct {
 	ID          int64
 	FeedID      int64
@@ -414,7 +415,6 @@ type itemForSave struct {
 	URL         string
 	Author      string
 	PublishedAt string
-	Summary     string
 	Category    string
 	Quality     int
 	Tags        string
@@ -499,13 +499,8 @@ func saveAsNoteBody(it *itemForSave) string {
 		b.WriteString(strings.Join(meta, " · "))
 		b.WriteString("\n\n")
 	}
-	// The telegraph summary replaces the legacy reflection blockquote when
-	// present; both would be redundant.
-	if it.SummaryJSON != "" {
-		b.WriteString(summarySection(it.SummaryJSON))
-	} else if it.Summary != "" {
-		fmt.Fprintf(&b, "> %s\n\n", it.Summary)
-	}
+	// The telegraph digest is the only summary the saved note carries.
+	b.WriteString(summarySection(it.SummaryJSON))
 	if content != "" {
 		b.WriteString(content)
 		b.WriteString("\n")
@@ -532,7 +527,7 @@ func (p *Plugin) actionSaveAsNote(db *sql.DB, noteID int64, params json.RawMessa
 	var evaluated int
 	err := db.QueryRow(`
 		SELECT i.id, i.feed_id, COALESCE(NULLIF(f.name,''), f.url), i.title, i.url, i.author,
-		       i.published_at, i.summary, i.category, i.quality, i.tags_json,
+		       i.published_at, i.category, i.quality, i.tags_json,
 		       i.significance, i.negativity, i.personal_relevance, i.evaluated,
 		       i.summary_json,
 		       i.full_content, i.feed_content, i.full_status, i.saved_note_id
@@ -541,7 +536,7 @@ func (p *Plugin) actionSaveAsNote(db *sql.DB, noteID int64, params json.RawMessa
 		WHERE i.id = ? AND f.note_id = ?
 	`, pr.ItemID, noteID).Scan(
 		&it.ID, &it.FeedID, &it.FeedName, &it.Title, &it.URL, &it.Author,
-		&it.PublishedAt, &it.Summary, &it.Category, &it.Quality, &tagsJSON,
+		&it.PublishedAt, &it.Category, &it.Quality, &tagsJSON,
 		&it.Significance, &it.Negativity, &it.PersonalRelevance, &evaluated,
 		&it.SummaryJSON,
 		&it.FullContent, &it.FeedContent, &it.FullStatus, &it.SavedNoteID,

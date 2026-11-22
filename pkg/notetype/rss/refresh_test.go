@@ -48,7 +48,9 @@ func (s stubClassifyClient) BeginUse() func() { return func() {} }
 
 // stubClassifyJSON is a canned evaluation reply matching the output
 // contract: significance 0.7 positive, personally relevant, ~2.16 billion
-// humans affected, plus a reflection paragraph (which doubles as summary).
+// humans affected, plus a reflection paragraph (stored in the reflection
+// column — the evaluation never writes a summary; the summarizer pass owns
+// summary_json).
 const stubClassifyJSON = `{"evaluationReflectionParagraph":"A significant global development with broad impact.","potentialFutureDirectlyAffectedHumansInMillions":120.5,"potentialFutureIndirectlyAffectedHumansInMillions":2000.0,"alreadyDirectlyAffectedHumansInMillions":3.2,"alreadyIndirectlyAffectedHumansInMillions":40.0,"significance":0.7,"negativity":0.0,"personalRelevance":0.6,"tags":["world","policy"]}`
 
 // feedServer serves a two-item feed (one rich item, one snippet that needs
@@ -153,8 +155,10 @@ func TestRefreshNoteEndToEnd(t *testing.T) {
 	if rel != 0.6 {
 		t.Errorf("personal_relevance = %v, want 0.6", rel)
 	}
-	if itemSummary != "A significant global development with broad impact." {
-		t.Errorf("summary fallback = %q", itemSummary)
+	// The evaluation must NOT write a summary anymore: the old column stays
+	// empty (the telegraph digest is the only summary — see the assert below).
+	if itemSummary != "" {
+		t.Errorf("old summary leaked from the evaluation pipeline = %q, want empty", itemSummary)
 	}
 	if !strings.Contains(summary, "2 summarized") {
 		t.Errorf("summary missing summarization: %q", summary)

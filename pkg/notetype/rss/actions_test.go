@@ -104,10 +104,15 @@ func TestSaveAsNoteAction(t *testing.T) {
 	).Scan(&body); err != nil {
 		t.Fatalf("load body: %v", err)
 	}
-	for _, want := range []string{"The Article Title", "Feed A", "A fine summary.", "The full article body text.", "Open original"} {
+	for _, want := range []string{"The Article Title", "Feed A", "The full article body text.", "Open original"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q: %q", want, body)
 		}
+	}
+	// The old summary column is discarded from the pipeline: it must NOT
+	// render into the saved note anymore (the fixture row carries one).
+	if strings.Contains(body, "A fine summary.") {
+		t.Errorf("body contains the discarded old summary: %q", body)
 	}
 
 	// Item updated: saved_note_id, state read.

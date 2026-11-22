@@ -41,7 +41,8 @@ type Classification struct {
 	Error string `json:"error"`
 
 	// Legacy fields (pre-evaluation prompts): parsed when present, empty
-	// with the default prompt. Summary doubles as the reflection fallback.
+	// with the default prompt, and NEVER persisted by the pipeline — the
+	// telegraph digest (summary_json) is the one and only summary.
 	Category string `json:"category"`
 	Summary  string `json:"summary"`
 	Quality  int    `json:"quality"`
@@ -318,9 +319,10 @@ func classifyUserMessage(title, feedName, url, content string) string {
 
 // parseClassification decodes the LLM reply, clipping fields into sane
 // bounds so bad prompts cannot poison the schema. Missing evaluation
-// dimensions default to their zero values; the reflection paragraph falls
-// back into Summary (legacy field) so the UI keeps a summary for every
-// classified article.
+// dimensions default to their zero values. The legacy `summary` key is
+// still parsed (custom pre-evaluation prompts may emit it) but discarded:
+// the evaluation never produces a summary — that is the summarizer pass's
+// job.
 func parseClassification(raw string) (Classification, error) {
 	var out Classification
 	if err := llm.UnmarshalLooseJSONObject(raw, &out); err != nil {
@@ -353,14 +355,6 @@ func parseClassification(raw string) (Classification, error) {
 	out.Summary = strings.TrimSpace(out.Summary)
 	if utf8.RuneCountInString(out.Summary) > 1200 {
 		out.Summary = string([]rune(out.Summary)[:1200])
-	}
-	if out.Summary == "" && out.EvaluationReflectionParagraph != "" {
-		// The reflection paragraph is the summary in the evaluation
-		// contract; clip it for the summary column.
-		out.Summary = out.EvaluationReflectionParagraph
-		if utf8.RuneCountInString(out.Summary) > 1200 {
-			out.Summary = string([]rune(out.Summary)[:1200])
-		}
 	}
 	if out.Quality < 0 {
 		out.Quality = 0
@@ -444,9 +438,12 @@ func loadPendingItems(db *sql.DB, noteID int64) ([]itemForClassify, error) {
 }
 
 // storeClassification persists a successful classification: the evaluation
-// columns, the derived points (weights from the note's body rules, minus the
-// item's rule penalties), and the legacy fields. The prompt's optional
-// "error" diagnostics land in classify_error while the status stays done.
+// columns and the derived points (weights from the note's body rules, minus
+// the item's rule penalties). The old summary column is CLEARED (discarded
+// from the pipeline: summary_json from the summarizer pass is the only
+// summary), so re-evaluating a legacy row drops its stale summary too. The
+// prompt's optional "error" diagnostics land in classify_error while the
+// status stays done.
 func storeClassification(db *sql.DB, itemID, promptNoteID int64, c Classification, w ScoreWeights, penalty float64) error {
 	tagsJSON, err := json.Marshal(c.Tags)
 	if err != nil || len(tagsJSON) == 0 {
@@ -455,14 +452,14 @@ func storeClassification(db *sql.DB, itemID, promptNoteID int64, c Classificatio
 	points := computePoints(c.metrics(), w, penalty)
 	_, err = db.Exec(
 		`UPDATE ct_rss_items
-		 SET category = ?, summary = ?, tags_json = ?, quality = ?,
+		 SET category = ?, summary = '', tags_json = ?, quality = ?,
 		     significance = ?, negativity = ?, personal_relevance = ?,
 		     affected_now_direct = ?, affected_now_indirect = ?,
 		     affected_future_direct = ?, affected_future_indirect = ?,
 		     reflection = ?, points = ?, evaluated = ?,
 		     classify_status = 'done', classify_error = ?, prompt_note_id = ?
 		 WHERE id = ?`,
-		c.Category, c.Summary, string(tagsJSON), c.Quality,
+		c.Category, string(tagsJSON), c.Quality,
 		c.Significance, c.Negativity, c.PersonalRelevance,
 		c.AlreadyDirectlyAffectedHumansInMillions, c.AlreadyIndirectlyAffectedHumansInMillions,
 		c.PotentialFutureDirectlyAffectedHumansInMillions, c.PotentialFutureIndirectlyAffectedHumansInMillions,

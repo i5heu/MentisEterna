@@ -99,7 +99,6 @@
                 </p>
             </div>
         </div>
-        <p v-else-if="item.summary" class="rss-item-summary">{{ item.summary }}</p>
         <p
             v-else-if="item.summary_status === 'pending'"
             class="rss-item-summary rss-summary-pending"

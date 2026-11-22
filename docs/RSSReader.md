@@ -140,7 +140,8 @@ CREATE TABLE IF NOT EXISTS ct_rss_items (
     full_content    TEXT    NOT NULL DEFAULT '',  -- extracted page text
     full_status     TEXT    NOT NULL DEFAULT 'none', -- none|fetched|failed|too_big
     category        TEXT    NOT NULL DEFAULT '',  -- legacy (pre-evaluation prompts only)
-    summary         TEXT    NOT NULL DEFAULT '',  -- reflection paragraph fallback
+    summary         TEXT    NOT NULL DEFAULT '',  -- legacy column; DISCARDED by the
+                                                   -- pipeline (summary_json is the only summary)
     tags_json       TEXT    NOT NULL DEFAULT '[]',
     quality         INTEGER NOT NULL DEFAULT 0,   -- legacy (pre-evaluation prompts only)
     significance    REAL    NOT NULL DEFAULT 0,   -- LLM evaluation 0..1
@@ -244,8 +245,11 @@ object in this shape):
   box; view reports `prompt: "default"` so the UI can nudge.
 - The prompt's optional `"error"` field (fields that could not be identified)
   is stored in `classify_error` while the status stays `done`.
-- `evaluationReflectionParagraph` falls back into `summary` when no summary
-  is present — cards and saved notes keep a review line for every article.
+- **The old summary is discarded from the pipeline**: the evaluation never
+  writes the `summary` column (a re-evaluation even clears a stale legacy
+  value), and no surface renders it anymore — the reflection paragraph
+  stays in its own `reflection` column (API-visible via `get_item`), and
+  the **only summary is the telegraph digest** (`summary_json`, §5a).
 
 ## 5a. Summarizer prompt (telegraph F/O/Q digest)
 
@@ -414,10 +418,10 @@ oldest-beyond-cap.
 | ID | Params | Behavior |
 |---|---|---|
 | `refresh` | `{}` | Enqueue `rss/refresh_feeds` `{note_id, force}`; returns `{run_id}` |
-| `save_as_note` | `{item_id}` | Create child note (type `standard`) under the reader note: INSERT `notes` (title, type, parent) + `updates` (markdown: link/author/date, **Summary section** from `summary_json` when present else the summary/reflection line, evaluation line, content); enqueue `_system/vss_index` `{note_id}`; set `saved_note_id`, state→`read`; returns `{note_id}` for navigation |
+| `save_as_note` | `{item_id}` | Create child note (type `standard`) under the reader note: INSERT `notes` (title, type, parent) + `updates` (markdown: link/author/date, **Summary section** from `summary_json` only — the discarded old summary never renders, evaluation line, content); enqueue `_system/vss_index` `{note_id}`; set `saved_note_id`, state→`read`; returns `{note_id}` for navigation |
 | `set_item_state` | `{item_id, state}` | `read` / `new` / `starred` / `rejected` (manual reject) |
 | `get_item` | `{item_id}` | Return one article with its stored content for inline reading — `full_content` preferred (`content_source:"extracted"`), `feed_content` fallback (`"feed"`), empty when neither stored — plus the full metadata the view omits, including the evaluation (significance, negativity, relevance, humans ×4, reflection, points, evaluated) and the summary fields (`structured_summary` parsed, `summary_status`, `summary_error`). Content is kept out of the view payload (size) and loaded on demand by the reader modal; `RefreshStrategy: none` (pure read, no ws notify); rejected items stay viewable |
-| `reclassify` | `{item_id}` | Re-run the LLM evaluation synchronously (60 s bound) with the currently-scoped prompt; recomputes points; returns `{points, significance, negativity, personal_relevance, summary, reflection, tags}` |
+| `reclassify` | `{item_id}` | Re-run the LLM evaluation synchronously (60 s bound) with the currently-scoped prompt; recomputes points; returns `{points, significance, negativity, personal_relevance, reflection, tags}` (no summary — the digest is the summarizer's) |
 | `reclassify_all` | `{}` | Queue **every** article for a fresh evaluation (`classify_status` → `pending`, errors cleared — existing scores are overwritten by the drain) and schedule a force refresh whose classify stage drains the queue; returns `{reset, run_id}`. Exposed in the reader's **Settings → LLM evaluation** behind a warning confirmation (one LLM call per article) |
 | `evaluate_missing` | `{}` | Queue **only articles with no evaluation** (`evaluated = 0`: legacy keyword-classified rows, errored runs, still-pending ones; already-evaluated scores are kept) and schedule the same drain refresh; returns `{reset, run_id}`. Settings button carries the live unevaluated count |
 | `summarize_item` | `{item_id}` | Run the built-in summarizer on one article synchronously and store the F/O/Q digest; returns `{item_id, structured_summary}`. Article-modal "Summarize" button (also refreshes an existing digest); errors (no stored content, LLM failure) are recorded on the item |
@@ -435,7 +439,7 @@ oldest-beyond-cap.
   "prompt":    { "note_id": 12, "title": "My prompt", "default": false } | { "default": true },
   "rules_warning": "line 4 ignored: 'foo: abc'",
   "items":     [ /* ≤200, not rejected: id, feed_id, feed_name, title, url, author, published_at,
-                     summary, structured_summary, summary_status, category, tags, quality, significance,
+                     structured_summary, summary_status, category, tags, quality, significance,
                      negativity, personal_relevance,
                      affected_now_direct, affected_now_indirect, affected_future_direct,
                      affected_future_indirect, points, evaluated, classify_status,
@@ -449,9 +453,10 @@ oldest-beyond-cap.
 Views resolve scopes live (cheap queries) — hierarchy edits reflect on the
 next view load. The view payload carries the evaluation columns (small
 floats) **and the parsed F/O/Q digest** (`structured_summary`; the card
-renders it directly so articles are skimmable from the list); the reflection
-paragraph rides only in `get_item` (size; the item `summary` already carries
-its clip).
+renders it directly so articles are skimmable from the list). The old
+`summary` column ships nowhere: it is not in the view payload and the UI
+never renders it. The reflection paragraph rides only in `get_item` (the
+evaluation's own rationale, not a summary).
 
 Frontend (`frontend/src/note-types/rss/`):
 
@@ -479,8 +484,9 @@ Frontend (`frontend/src/note-types/rss/`):
   negativity; tooltip = significance/negativity/relevance/humans/penalty
   breakdown), legacy category + Q badges, penalty badges (tooltip from
   `penalty_json`), the **telegraph digest** (F/O/Q lines under
-  "What changed / Why / New implications" headers; falls back to the
-  reflection `summary` line; "⏳ summarizing…" while queued), actions: open
+  "What changed / Why / New implications" headers — the only summary the
+  card shows; "⏳ summarizing…" while queued, nothing before the first
+  digest), actions: open
   original (external), Save as Note (→ navigate), Star / Read / Reject /
   Re-evaluate; collapsed "Rejected" toggle; item content stays out of the
   view — the modal loads it through `get_item`. Prompt status chip: shows
@@ -493,13 +499,13 @@ Frontend (`frontend/src/note-types/rss/`):
   item's meta chips (feed, author, date), the full evaluation (★ points,
   significance, negativity, relevance chips, humans-affected line,
   evaluation notes from the model's `error` field), the **F/O/Q digest**
-  rendered under the three question headers (replacing the reflection
-  quote when present — the reflection stays reachable via the card-line
-  fallback), summarize-state hints ("⏳ Summary queued…" / ⚠ failed, retry
-  via the button), and a **Summarize** button that runs the per-item
-  summarizer synchronously and refreshes the open modal; plus the same
-  actions as the card (Star / Read / Save as Note / Re-evaluate); Esc or
-  Close dismisses. Rejected (dimmed) cards are readable the same way.
+  rendered under the three question headers (the only summary shown — the
+  discarded old summary column and the reflection paragraph never render
+  anymore), digest-gating hints ("⏳ Summary queued…" / "No summary yet" /
+  ⚠ failed, retry via the button), and a **Summarize** button that runs the
+  per-item summarizer synchronously and refreshes the open modal; plus the
+  same actions as the card (Star / Read / Save as Note / Re-evaluate); Esc
+  or Close dismisses. Rejected (dimmed) cards are readable the same way.
 - **Editor**: feeds add/remove/edit (url, name, enabled), interval,
   threshold, full-content, retention/cap inputs, classify toggle
   (`usePluginAction` / `useNoteTypeDraft` composables; hydrate-on-`note.id`
@@ -555,8 +561,9 @@ textarea like `standard`).
   override; `min_points`/`weights` rules, the points formula
   (significance/relevance/positivity/humans/penalty; clamps and floor).
 - `classify_test.go`: stub classifier via the `newClassifier` seam; contract
-  framing; evaluation parse (clamps/clips, reflection→summary fallback,
-  legacy-shape tolerance), invalid-JSON retry then error status, batch
+  framing; evaluation parse (clamps/clips, old-summary discard — the
+  reflection never leaks into a summary, legacy-shape tolerance),
+  invalid-JSON retry then error status, batch
   drain, weights+penalty flowing into the stored points; item
   `prompt_note_id` snapshot.
 - `classify_test.go` also covers the progress stream: per-item events
