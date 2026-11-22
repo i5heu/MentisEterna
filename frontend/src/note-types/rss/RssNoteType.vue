@@ -76,6 +76,15 @@
                 {{ actionInfo }}
             </p>
 
+            <div
+                v-if="evalProgress"
+                class="rss-progressbar"
+                :title="`LLM evaluation running: ${evalProgress.done} of ${evalProgress.total} articles evaluated`"
+            >
+                <div class="rss-progressfill" :style="{ width: progressPct + '%' }"></div>
+                <span class="rss-progresstext">⚡ Evaluating {{ evalProgress.done }}/{{ evalProgress.total }}</span>
+            </div>
+
             <div v-if="view" class="rss-meta">
                 <span
                     v-if="view.rules_warning"
@@ -774,14 +783,21 @@ async function refreshView() {
     }
 }
 
-// --- Job-driven UI renewal ---
+// --- Job/progress-driven UI renewal ---
 //
 // Evaluation runs inside the rss/refresh_feeds job (cron or enqueued by the
 // Refresh / Re-evaluate-all actions). The server broadcasts every run
-// lifecycle event over the ws ("jobs.changed" live messages), so the view
-// renews exactly when the job finishes — the work spinner never lingers
-// past the real job. A bounded poll acts as the fallback when the ws is
-// down.
+// lifecycle event over the ws ("jobs.changed"), so the view renews exactly
+// when the job finishes. While the evaluation drain is running, the plugin
+// additionally streams per-item progress ("plugin.progress" live messages,
+// {note_id, done, total, finished}) — rendered as the progress bar below.
+
+const evalProgress = ref(null); // { done, total } while the drain runs
+const progressPct = computed(() => {
+    const p = evalProgress.value;
+    if (!p || !p.total) return 0;
+    return Math.min(100, Math.round((p.done / p.total) * 100));
+});
 
 let pollTimer = null;
 let pollTries = 0;
@@ -817,22 +833,29 @@ function settleIfDone(capped = false) {
     if (pending === 0 && pollTries >= 2) {
         clearPollTimer();
         refreshing.value = false;
+        evalProgress.value = null;
         actionInfo.value = capped
             ? "Still evaluating — check back after the next refresh"
             : "";
     } else if (capped) {
         clearPollTimer();
         refreshing.value = false;
+        evalProgress.value = null;
         actionInfo.value =
             "Evaluation still running in the background — Re-evaluate all keeps its results";
     }
 }
 
-// The live-message listener for this reader's jobs (mounted only while the
-// component lives — no dangling listeners on note switches).
+// The live-message listener for this reader's jobs and evaluation progress
+// (mounted only while the component lives — no dangling listeners).
 function onLiveMessage(event) {
     const msg = event?.detail;
-    if (msg?.type !== "jobs.changed") return;
+    if (!msg) return;
+    if (msg.type === "plugin.progress") {
+        onProgressMessage(msg.plugin_progress);
+        return;
+    }
+    if (msg.type !== "jobs.changed") return;
     const job = msg.job;
     if (!job || job.plugin_id !== "rss" || job.job_name !== "refresh_feeds") {
         return;
@@ -845,6 +868,7 @@ function onLiveMessage(event) {
             if (pending === 0) {
                 clearPollTimer();
                 refreshing.value = false;
+                evalProgress.value = null;
                 actionInfo.value = "";
             } else {
                 pollTries = 0; // evaluation resumed for a next batch — keep polling (bounded)
@@ -853,10 +877,41 @@ function onLiveMessage(event) {
     } else if (job.status === "errored" || job.status === "cancelled") {
         clearPollTimer();
         refreshing.value = false;
+        evalProgress.value = null;
         actionError.value = job.error || `refresh job ${job.status}`;
         refreshView();
     } else if (job.status === "running" || job.status === "planned") {
         refreshing.value = true;
+        refreshView();
+    }
+}
+
+// Per-item progress stream from the evaluation drain (rss plugin.progress
+// messages): the drain reports {note_id, done, total, finished} after every
+// article, so the bar advances in real time without any polling.
+function onProgressMessage(progress) {
+    if (!progress || progress.plugin_id !== "rss") return;
+    let data = progress.data;
+    if (typeof data === "string") {
+        try {
+            data = JSON.parse(data);
+        } catch {
+            return;
+        }
+    }
+    if (!data || Number(data.note_id) !== Number(props.note?.id)) return;
+    if (!data.finished && Number(data.total) > 0) {
+        refreshing.value = true;
+        evalProgress.value = {
+            done: Number(data.done) || 0,
+            total: Number(data.total),
+        };
+        return;
+    }
+    // Drain finished for this reader: fold the bar away and fetch the
+    // freshly scored items immediately.
+    if (evalProgress.value || refreshing.value) {
+        evalProgress.value = null;
         refreshView();
     }
 }
@@ -970,6 +1025,35 @@ function feedChipTitle(f) {
     color: var(--font-color-secondary);
     font-size: 0.85rem;
     margin: 0;
+}
+
+/* --- Evaluation progress bar (streamed per item via plugin.progress ws
+   messages) --- */
+.rss-progressbar {
+    position: relative;
+    height: 1.15rem;
+    border: 1px solid var(--border-color, #7e7567);
+    border-radius: 99px;
+    background: rgba(109, 148, 132, 0.12);
+    overflow: hidden;
+}
+
+.rss-progressfill {
+    height: 100%;
+    background: var(--accent-teal, #6d9484);
+    transition: width 0.4s ease;
+}
+
+.rss-progresstext {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    color: var(--font-color, #e0e8e4);
+    mix-blend-mode: difference;
 }
 
 .rss-meta,

@@ -47,6 +47,7 @@ Plugins may also implement these optional interfaces as needed:
 - `ViewBuilder` — `BuildView(ctx, db, userID, noteID) (any, error)` — build computed/derived view data
 - `ActionHandler` — `HandleAction(ctx, db, userID, noteID, actionID, params) (any, error)` — execute actions
 - `JobEnqueuer` — `SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []byte) (int64, error))` — lets a plugin's actions enqueue background jobs; the server injects the job manager's `Enqueue`
+- `ProgressReporter` — `SetProgressFunc(fn func(payload json.RawMessage))` — lets a plugin stream live progress for long-running background work; the server injects a broadcast that relays the payload to all ws connections as a `plugin.progress` live message (`{plugin_id, data}`). Implemented by `rss` (evaluation drain: `{note_id, done, total, finished}` per article)
 - `CallStatsRecorder` — `SetCallStatsDB(db *sql.DB)` + `RecordCall(stats llm.CallStats)` — the app's LLM call ledger: the server injects the db at startup and installs `RecordCall` as the global sink every chat completion reports through (tokens, routing, latency). `RecordCall` must be concurrency-safe, non-blocking, error-swallowing, and never panic. Implemented by `llminferencer`
 
 **Capability declaration is mandatory**: if a plugin's `Manifest` declares `HasConfig=true`, the plugin MUST implement `ConfigValidator`, `ConfigSaver`, and `ConfigLoader`. Similarly for `HasView` (→ `ViewBuilder`) and `HasActions` (→ `ActionHandler`). The server validates this at startup and will `log.Fatal` on mismatch.
@@ -251,7 +252,10 @@ The `rss` note type puts the whole subsystem in one note (see
   showing it.
 - One cron job (`rss/refresh_feeds`, `@every 15m`): nil payload refreshes
   due feeds of all readers; payload `{"note_id":N,"force":true}` (from the
-  refresh action) force-refreshes one reader. Feed fetches are parallel
+  refresh action) force-refreshes one reader. While the evaluation drain
+  runs, per-item progress (`{note_id, done, total, finished}`) is streamed
+  to the UI over the ws through the injected `ProgressReporter` emitter —
+  the reader shows a live "⚡ Evaluating x/y" progress bar. Feed fetches are parallel
   (bounded), classification sequential in ≤25-item batches, retention +
   per-feed trim each run.
 - Outbound fetches go through an SSRF dial guard (private/loopback/

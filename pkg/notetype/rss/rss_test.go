@@ -20,6 +20,24 @@ func TestRSSPromptPlugin(t *testing.T) {
 	plugintest.Run(t, notetype.Registry[PromptPluginID], plugintest.TestData{})
 }
 
+// TestRSSPluginImplementsProgressReporter pins the live-progress capability
+// the server type-asserts at startup: without it, the evaluation drain would
+// silently lose its per-item ws stream.
+func TestRSSPluginImplementsProgressReporter(t *testing.T) {
+	p := notetype.Registry[PluginID]
+	pr, ok := p.(notetype.ProgressReporter)
+	if !ok {
+		t.Fatalf("rss plugin does not implement notetype.ProgressReporter")
+	}
+	// Injection round-trip: SetProgressFunc installs the package emitter.
+	prev := progressFunc
+	pr.SetProgressFunc(func(json.RawMessage) {})
+	if progressFunc == nil {
+		t.Fatal("SetProgressFunc did not install the emitter")
+	}
+	pr.SetProgressFunc(prev)
+}
+
 // --- Config validation ---
 
 func TestValidateConfig(t *testing.T) {

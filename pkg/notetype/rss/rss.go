@@ -313,6 +313,20 @@ func (p *Plugin) SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []b
 	p.enqueue = fn
 }
 
+// progressFunc is the injected live-progress broadcast (the server wires it
+// via notetype.ProgressReporter at startup). Package-level because the
+// classify drain runs as a plain function off the job task, not off the
+// plugin instance. Broadcasts are fire-and-forget: nil-guarded in the
+// emitter, never block the drain.
+var progressFunc func(payload json.RawMessage)
+
+// SetProgressFunc implements notetype.ProgressReporter: the evaluation
+// drain streams per-item progress {note_id, done, total, finished} which
+// the server broadcasts as plugin.progress live messages.
+func (p *Plugin) SetProgressFunc(fn func(payload json.RawMessage)) {
+	progressFunc = fn
+}
+
 // --- RSS Prompt marker plugin ---
 
 // PromptPlugin is the "rss_prompt" marker note type. It has no config, view,

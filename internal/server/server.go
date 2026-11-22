@@ -398,6 +398,17 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
+	// Inject the live progress broadcast into plugins that stream progress
+	// for long-running background work (notetype.ProgressReporter).
+	for _, plugin := range notetype.Registry {
+		if pr, ok := plugin.(notetype.ProgressReporter); ok {
+			pluginID := plugin.ID()
+			pr.SetProgressFunc(func(payload json.RawMessage) {
+				s.broadcastPluginProgress(pluginID, payload)
+			})
+		}
+	}
+
 	// Start workers after all task registrations are complete.
 	if err := s.jobManager.Start(); err != nil {
 		log.Fatalf("Failed to start job manager: %v", err)

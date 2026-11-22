@@ -919,3 +919,70 @@ func TestNotifyNotesChangedDeduplicatesIDs(t *testing.T) {
 		t.Errorf("note IDs mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestBroadcastPluginProgress(t *testing.T) {
+	t.Parallel()
+
+	// Guard cases: nil receiver, nil hub, empty payload — no panic, no send.
+	t.Run("nil guards", func(t *testing.T) {
+		t.Parallel()
+		var nilServer *Server
+		nilServer.broadcastPluginProgress("rss", json.RawMessage(`{"done":1}`))
+		(&Server{}).broadcastPluginProgress("rss", json.RawMessage(`{}`))
+		var s *Server = &Server{liveHub: nil}
+		s.broadcastPluginProgress("rss", json.RawMessage(`{"done":1}`))
+	})
+
+	t.Run("broadcast reaches registered client with payload intact", func(t *testing.T) {
+		t.Parallel()
+		hub := newLiveHub()
+		client := &liveClient{hub: hub, send: make(chan liveMessage, 1)}
+		hub.register(client)
+		s := &Server{liveHub: hub}
+
+		payload := json.RawMessage(`{"note_id":31,"done":3,"total":70,"finished":false}`)
+		s.broadcastPluginProgress("rss", payload)
+
+		select {
+		case msg := <-client.send:
+			if msg.Type != liveTypePluginProgress {
+				t.Fatalf("type = %q, want %q", msg.Type, liveTypePluginProgress)
+			}
+			if msg.PluginProgress == nil || msg.PluginProgress.PluginID != "rss" {
+				t.Fatalf("plugin_progress = %+v", msg.PluginProgress)
+			}
+			if string(msg.PluginProgress.Data) != string(payload) {
+				t.Fatalf("payload mutated: %s", msg.PluginProgress.Data)
+			}
+			// Wire format the frontend reads must round-trip.
+			raw, err := json.Marshal(msg)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var back liveMessage
+			if err := json.Unmarshal(raw, &back); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if back.PluginProgress == nil || back.PluginProgress.PluginID != "rss" ||
+				string(back.PluginProgress.Data) != string(payload) {
+				t.Fatalf("wire round-trip lost the payload: %s", raw)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("plugin progress message never reached the client")
+		}
+	})
+
+	t.Run("empty payload is not broadcast", func(t *testing.T) {
+		t.Parallel()
+		hub := newLiveHub()
+		client := &liveClient{hub: hub, send: make(chan liveMessage, 1)}
+		hub.register(client)
+		s := &Server{liveHub: hub}
+		s.broadcastPluginProgress("rss", json.RawMessage{})
+		select {
+		case msg := <-client.send:
+			t.Fatalf("unexpected broadcast: %+v", msg)
+		default:
+		}
+	})
+}

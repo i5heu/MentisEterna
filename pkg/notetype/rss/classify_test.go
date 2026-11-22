@@ -301,6 +301,82 @@ func TestClassifyStoresPointsWithWeightsAndPenalty(t *testing.T) {
 	}
 }
 
+// TestClassifyPendingItemsStreamsProgress verifies the per-item progress
+// events the drain broadcasts through the injected emitter (what the UI
+// renders as the evaluating progress bar).
+func TestClassifyPendingItemsStreamsProgress(t *testing.T) {
+	stubClassifier(t, stubClassifyJSON)
+	_, d, noteID, _ := classifyFixture(t)
+
+	type progressEvt struct {
+		NoteID   int64
+		Done     int
+		Total    int
+		Finished bool
+	}
+	var events []progressEvt
+	prev := progressFunc
+	progressFunc = func(payload json.RawMessage) {
+		var e struct {
+			NoteID   int64 `json:"note_id"`
+			Done     int   `json:"done"`
+			Total    int   `json:"total"`
+			Finished bool  `json:"finished"`
+		}
+		if err := json.Unmarshal(payload, &e); err != nil {
+			t.Errorf("bad progress payload %s: %v", payload, err)
+			return
+		}
+		events = append(events, progressEvt{e.NoteID, e.Done, e.Total, e.Finished})
+	}
+	t.Cleanup(func() { progressFunc = prev })
+
+	done := classifyPendingItems(d.DB, noteID, Config{AutoClassify: true})
+	if done != 2 {
+		t.Fatalf("classified = %d, want 2", done)
+	}
+	if len(events) != 4 { // start(0/2) + item1 + item2 + finished
+		t.Fatalf("progress events = %d, want 4: %+v", len(events), events)
+	}
+	want := []progressEvt{
+		{NoteID: noteID, Done: 0, Total: 2},
+		{NoteID: noteID, Done: 1, Total: 2},
+		{NoteID: noteID, Done: 2, Total: 2},
+		{NoteID: noteID, Done: 2, Total: 2, Finished: true},
+	}
+	for i, w := range want {
+		if events[i] != w {
+			t.Errorf("event[%d] = %+v, want %+v", i, events[i], w)
+		}
+	}
+
+	// No pending work → no events at all (quiet cron runs).
+	events = nil
+	if done := classifyPendingItems(d.DB, noteID, Config{AutoClassify: true}); done != 0 {
+		t.Fatalf("second run classified %d, want 0", done)
+	}
+	if len(events) != 0 {
+		t.Errorf("empty drain should not emit progress, got %+v", events)
+	}
+
+	// Errored classifications still advance the progress bar.
+	stubSeqClassifier(t, nil, errors.New("llm unreachable"))
+	_, d2, noteID2, _ := classifyFixture(t)
+	events = nil
+	if done := classifyPendingItems(d2.DB, noteID2, Config{AutoClassify: true}); done != 2 {
+		t.Fatalf("error-run classified = %d, want 2", done)
+	}
+	if len(events) != 4 || events[3].Done != 2 || !events[3].Finished {
+		t.Errorf("error-run progress wrong: %+v", events)
+	}
+
+	// Without an injected emitter the drain is silent and safe.
+	progressFunc = nil
+	if done := classifyPendingItems(d.DB, noteID, Config{AutoClassify: true}); done != 0 {
+		t.Fatalf("nil-emitter run classified %d, want 0 (nothing pending)", done)
+	}
+}
+
 func TestClassifyPendingItemsRecordsErrors(t *testing.T) {
 	stubSeqClassifier(t, nil, errors.New("llm unreachable"))
 	_, d, noteID, _ := classifyFixture(t)

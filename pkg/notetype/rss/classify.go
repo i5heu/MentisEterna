@@ -484,10 +484,44 @@ func classificationWeights(db *sql.DB, noteID int64) ScoreWeights {
 	return parseRules(body).effectiveWeights()
 }
 
+// classifyProgressCount returns how many items are pending evaluation for a
+// reader (the progress total at drain start).
+func classifyProgressCount(db *sql.DB, noteID int64) int {
+	var n int
+	_ = db.QueryRow(`
+		SELECT COUNT(*) FROM ct_rss_items i
+		JOIN ct_rss_feeds f ON f.id = i.feed_id
+		WHERE f.note_id = ? AND i.classify_status = 'pending'`, noteID,
+	).Scan(&n)
+	return n
+}
+
+// reportEvaluationProgress streams per-item drain progress to the UI (see
+// notetype.ProgressReporter / the plugin.progress live messages). Fire and
+// forget: no injected emitter (tests, tools) or a marshal error just skips
+// the update.
+func reportEvaluationProgress(noteID int64, done, total int, finished bool) {
+	if progressFunc == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"note_id":  noteID,
+		"done":     done,
+		"total":    total,
+		"finished": finished,
+	})
+	if err != nil {
+		return
+	}
+	progressFunc(payload)
+}
+
 // classifyPendingItems processes pending items for a reader note and returns
 // the number classified (done or errored). Batches drain until the queue is
 // empty or the time budget is spent, so a full re-evaluation after a prompt
 // change completes in one refresh run (the cron path repeats otherwise).
+// Per-item progress is streamed to the UI when the progress emitter is
+// injected.
 func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 	if !cfg.AutoClassify {
 		return 0
@@ -503,12 +537,20 @@ func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 	defer release()
 
 	system := prompt + classifyContract
+	total := classifyProgressCount(db, noteID)
+	if total == 0 {
+		return 0
+	}
+	reportEvaluationProgress(noteID, 0, total, false)
+
 	processed := 0
+	drained := false
 	deadline := time.Now().Add(classifyTimeBudget)
 	for {
 		items, err := loadPendingItems(db, noteID)
 		if err != nil || len(items) == 0 {
-			return processed
+			drained = err == nil
+			break
 		}
 		for _, it := range items {
 			user := classifyUserMessage(it.Title, "", it.URL, it.Content)
@@ -524,22 +566,23 @@ func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 					`UPDATE ct_rss_items SET classify_status = 'error', classify_error = ? WHERE id = ?`,
 					msg, it.ID,
 				)
-				processed++
-				continue
-			}
-			if err := storeClassification(db, it.ID, promptRef.NoteID, classification, weights, it.Penalty); err != nil {
+			} else if err := storeClassification(db, it.ID, promptRef.NoteID, classification, weights, it.Penalty); err != nil {
 				_, _ = db.Exec(
 					`UPDATE ct_rss_items SET classify_status = 'error', classify_error = ? WHERE id = ?`,
 					err.Error(), it.ID,
 				)
 			}
 			processed++
+			reportEvaluationProgress(noteID, processed, total, false)
 		}
 		if len(items) < classifyBatchSize {
-			return processed
+			drained = true
+			break
 		}
 		if !time.Now().Before(deadline) {
-			return processed
+			break
 		}
 	}
+	reportEvaluationProgress(noteID, processed, total, drained)
+	return processed
 }

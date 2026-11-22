@@ -91,6 +91,7 @@ cron @every 15m ──▶ refresh_feeds(db)
             insert items (state=new, classify pending)
                      ▼
             evaluate batch (≤25/batch, drains queue, prompt from scope) ─▶ llm.NewRSSClassifierClient
+                     ├─▶ per-item plugin.progress ws events (ProgressReporter) ─▶ reader progress bar
                      └─▶ job result summary (JobQueue + ws broadcast)
 ```
 
@@ -345,6 +346,11 @@ oldest-beyond-cap.
 - Feed fetches parallel (errgroup, max 4); classification strictly sequential
   in ≤25-item batches until the queue drains (8-min classify budget,
   bounded by the task's 10-minute timeout).
+- **Live progress**: the drain streams `{note_id, done, total, finished}`
+  through the injected `notetype.ProgressReporter` emitter after every
+  article; the server broadcasts it as a `plugin.progress` ws message, and
+  the reader renders a "⚡ Evaluating x/y" progress bar (noise-free:
+  nothing emits when nothing is pending).
 - Result summary: `"3 feeds ok, 1 error, +12 new, 12 classified, 2 rejected"` —
   visible in JobQueue + broadcast via ws job events.
 - **Ad-hoc job** `refresh_feeds_now` payload `{"note_id":N,"force":true}` —
@@ -403,9 +409,12 @@ Frontend (`frontend/src/note-types/rss/`):
   refresh runs are broadcast on every lifecycle change — planned/running/
   done/errored — same source JobQueue.vue listens to): the view re-fetches
   when the job finishes, so the spinner and the "N evaluating" chip settle
-  with the real job, never before, never indefinitely. A bounded fallback
-  poll (5 s, ≤12 min, settles as soon as the pending queue drains) covers
-  ws outages. **Re-evaluate all** button (queues every article for a fresh
+  with the real job, never before, never indefinitely. While the drain
+  runs, the plugin's per-item `plugin.progress` ws stream drives a live
+  "⚡ Evaluating x/y" progress bar (framed + colored against the dark
+  tokens). A bounded fallback poll (5 s, ≤12 min, settles as soon as the
+  pending queue drains) covers ws outages — it also folds the bar away.
+  **Re-evaluate all** button (queues every article for a fresh
   LLM evaluation), **Reapply rules**, sort picker (default **unread first ·
   ★ points**; also best-points / newest / oldest), filter
   chips (feed / state), item cards: ★ points badge (green/amber/red tint by
@@ -474,6 +483,16 @@ textarea like `standard`).
   legacy-shape tolerance), invalid-JSON retry then error status, batch
   drain, weights+penalty flowing into the stored points; item
   `prompt_note_id` snapshot.
+- `classify_test.go` also covers the progress stream: per-item events
+  (`{done,total,finished}`), silence on empty drains and without the
+  injected emitter, errored classifications still advance the bar; the
+  server side (`internal/server/live_ws_test.go`) tests the ws broadcast
+  and wire round-trip.
+- `classify_test.go` also covers the progress stream: per-item events
+  (`{done,total,finished}`), silence on empty drains and without the
+  injected emitter, errored classifications still advance the bar; the
+  server side (`internal/server/live_ws_test.go`) tests the ws broadcast
+  and wire round-trip.
 - `view_eval_test.go`: computed rejection — evaluated items below
   `min_points` rejected (default floor), `min_points: 0` disables, floor
   raised via body rule; evaluation columns round-trip into the view.

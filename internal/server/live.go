@@ -17,6 +17,7 @@ const (
 	liveTypeReady                  = "live.ready"
 	liveTypeNotesChange            = "notes.changed"
 	liveTypeJobsChange             = "jobs.changed"
+	liveTypePluginProgress         = "plugin.progress"
 	liveReasonInlineUploadResolved = "inline_upload_resolved"
 	liveTypeEditSync               = "edit.sync"
 	liveTypeEditBody               = "edit.body"
@@ -25,9 +26,9 @@ const (
 	liveTypeDeviceOnline           = "device.online"
 	liveTypeDeviceOffline          = "device.offline"
 
-	wsWriteWait      = 10 * time.Second
-	wsPongWait       = 60 * time.Second
-	wsPingPeriod     = (wsPongWait * 9) / 10
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 60 * time.Second
+	wsPingPeriod = (wsPongWait * 9) / 10
 	// Must accommodate live edit-body payloads (note markdown), which can be
 	// larger than tiny control messages.
 	wsMaxMessageSize = 4 << 20
@@ -40,6 +41,13 @@ type liveUploadResolution struct {
 	File             *NoteFile `json:"file,omitempty"`
 }
 
+// livePluginProgress carries a plugin-streamed progress payload (see
+// notetype.ProgressReporter): the plugin chains its own JSON through Data.
+type livePluginProgress struct {
+	PluginID string          `json:"plugin_id"`
+	Data     json.RawMessage `json:"data"`
+}
+
 type liveMessage struct {
 	Type               string                `json:"type"`
 	Timestamp          string                `json:"timestamp,omitempty"`
@@ -47,6 +55,7 @@ type liveMessage struct {
 	NoteIDs            []int64               `json:"note_ids,omitempty"`
 	UploadResolution   *liveUploadResolution `json:"upload_resolution,omitempty"`
 	Job                *jobs.RunEvent        `json:"job,omitempty"`
+	PluginProgress     *livePluginProgress   `json:"plugin_progress,omitempty"`
 	ClientSentAtMS     *float64              `json:"client_sent_at_ms,omitempty"`
 	ServerReceivedAtUS int64                 `json:"server_received_at_us,omitempty"`
 	ServerSentAtUS     int64                 `json:"server_sent_at_us,omitempty"`
@@ -154,6 +163,23 @@ func (s *Server) notifyJobEvent(evt jobs.RunEvent) {
 		Type:      liveTypeJobsChange,
 		Timestamp: liveTimestamp(),
 		Job:       &copied,
+	})
+}
+
+// broadcastPluginProgress relays a plugin's streamed progress payload (see
+// notetype.ProgressReporter) to all connected clients as a plugin.progress
+// live message. Pure relay: the server never interprets the plugin's JSON.
+func (s *Server) broadcastPluginProgress(pluginID string, payload json.RawMessage) {
+	if s == nil || s.liveHub == nil || len(payload) == 0 {
+		return
+	}
+	s.liveHub.broadcast(liveMessage{
+		Type:      liveTypePluginProgress,
+		Timestamp: liveTimestamp(),
+		PluginProgress: &livePluginProgress{
+			PluginID: pluginID,
+			Data:     payload,
+		},
 	})
 }
 
@@ -340,9 +366,9 @@ func (c *liveClient) readLoop() {
 					continue // malformed: ignore silently
 				}
 				c.hub.broadcastToUser(c.username, c, liveMessage{
-					Type:   liveTypeEditBody,
-					NoteID: m.NoteID,
-					Body:   m.Body,
+					Type:     liveTypeEditBody,
+					NoteID:   m.NoteID,
+					Body:     m.Body,
 					DeviceID: m.DeviceID,
 				})
 			case liveTypeDeviceHello:

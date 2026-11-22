@@ -139,6 +139,18 @@ type JobEnqueuer interface {
 	SetJobEnqueueFunc(fn func(pluginID, jobName string, payload []byte) (int64, error))
 }
 
+// ProgressReporter is implemented by plugins that stream live progress for
+// long-running background work (the rss reader's LLM evaluation drain, for
+// example). The server injects a broadcast function at startup; the plugin
+// may call it from job/task code with an arbitrary JSON payload, which is
+// broadcast to the user's websocket connections as a `plugin.progress` live
+// message carrying the plugin id. The injected function is safe for
+// concurrent use, never blocks, and swallows its own errors — callers
+// should still guard against the nil pre-injection zero value.
+type ProgressReporter interface {
+	SetProgressFunc(fn func(payload json.RawMessage))
+}
+
 // CallStatsRecorder is implemented by plugins that persist the app's LLM
 // chat-call statistics (tokens, routing, latency — llm_inferencer). The
 // server injects the app database at startup via SetCallStatsDB and
