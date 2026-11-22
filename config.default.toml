@@ -44,6 +44,8 @@ webauthn_rp_origins = []
 
 [llm]
 # Base URL of the LLM/embedding backend (e.g. http://localhost:1234).
+# Any common shape works — the API root, an OpenAI-style base ending in
+# /v1, or the full endpoint; the app normalizes to <base>/v1/<endpoint>.
 base_url = "https://100.111.10.89:8188"
 
 # Embedding model used for vector search.

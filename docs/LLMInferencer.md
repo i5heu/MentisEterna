@@ -23,7 +23,7 @@ surfaced in the note's UI ((system default tier → model), with a
 | Decision | Choice |
 |---|---|
 | **Uniqueness** | **One `llm_inferencer` note per app** (manifest `Singleton: true`). `createNoteCore` and `updateNote` count existing notes of the type inside the write transaction and reject a second one with a 400. The frontend type picker hides the type while an instance exists (edit one instead). Legacy databases created before the rule may hold several notes: resolution uses the lowest note id and warns — delete the extras. |
-| Providers | `openrouter` (default base `https://openrouter.ai/api`), `mistral` (`https://api.mistral.ai`), and `compatible` (any OpenAI-compatible endpoint, base URL required). The chat client appends `/v1/chat/completions`; both OpenRouter and Mistral speak the OpenAI chat-completions shape. |
+| Providers | `openrouter` (default base `https://openrouter.ai/api`), `mistral` (`https://api.mistral.ai`), and `compatible` (any OpenAI-compatible endpoint, base URL required). Endpoint URLs are built by `llm.OpenAIEndpoint(base, path)`: **any common base shape works** — the API root, an OpenAI-SDK-style base ending in `/v1` (what provider docs tell users to paste), or even the full endpoint URL — and is normalized to `<base>/v1/chat/completions` (and `/v1/models`), so the version segment is never doubled into a provider 404. Both OpenRouter and Mistral speak the OpenAI chat-completions shape. |
 | API key | **Stored in the note config, write-only.** `LoadConfig` never returns it — note views only see `api_key_set: true/false`. Saving with an empty `api_key` **keeps** the stored key (normal UI round-trips can't wipe it); typing a new one replaces it; the `clear_api_key` action removes it. The key lives only in `ct_llm_inferencer_config.api_key` (and encrypted backups) — it is never serialized into any view, action result, or classifier metadata. |
 | Tiers | Four fixed capability tiers: `big`, `middle`, `small`, `tiny`. Each tier has a model and an optional per-tier `base_url` override. |
 | Usage mapping | A `usages` map: usage id → `{tier}`, `{model}` (direct model override), or `{local: true}` (explicit pin to the config.toml local LLM — beats the note's `default_tier`). XOR: exactly one of the three. Mappings for usages whose call sites aren't migrated yet are accepted and shown as "pending backend wiring" — they activate when the backend starts routing that usage. |
@@ -70,7 +70,9 @@ Config JSON shape (identical across `ValidateConfig` / `SaveConfig` /
   computed `api_key_set` boolean. Save semantics: empty keeps, non-empty
   replaces, `clear_api_key` removes.
 - `base_url` empty = provider default; per-tier `base_url` (most specific)
-  beats the note-level `base_url`, which beats the provider default.
+  beats the note-level `base_url`, which beats the provider default. A
+  trailing `/v1` (or a full endpoint URL) is normalized at request time, so
+  both conventions dial the same endpoint.
 - Unknown usage ids are rejected by validation (typos surface immediately);
   known-but-unwired ids are allowed (shown as pending backend wiring).
 
@@ -115,6 +117,13 @@ API-keyed clients skip the LocalAI idle-stop machinery (`BeginBackendUse`
 is a no-op for them — the `/backend/shutdown` behavior is LocalAI-only and
 must never fire at OpenRouter/Mistral).
 
+All endpoint URLs (chat, embeddings, OCR, STT, model lists — for both the
+`config.toml` clients and inferencer notes) go through
+`llm.OpenAIEndpoint(base, path)`, which accepts every base-URL convention
+(API root, `…/v1`, full endpoint) and strips trailing slashes — the
+OpenAI-SDK bases (`https://openrouter.ai/api/v1`) used to produce
+`…/v1/v1/chat/completions` and provider 404s.
+
 The **usage catalog** also lives in `internal/llm` (`usage.go`):
 
 | usage id | label | wired | config.toml tier |
@@ -135,8 +144,8 @@ binding for a usage — the per-usage "system default"
 
 | action | what it does |
 |---|---|
-| `test` | One tiny chat completion ("Reply with the single word: OK") through the **exact production client** the resolver hands out — same transport, auth header, and retry policy. Params: optional `{tier}` or `{model}` (XOR; both empty = default tier). Returns `{ok, latency_ms, model, base_url, provider, reply, error}`. |
-| `list_models` | `GET <base>/v1/models` (OpenAI-compatible shape; works for OpenRouter and Mistral). Feeds the frontend model datalist; capped at 500. |
+| `test` | One tiny chat completion ("Reply with the single word: OK") through the **exact production client** the resolver hands out — same transport, auth header, and retry policy. Params: optional `{tier}` or `{model}` (XOR; both empty = default tier). Returns `{ok, latency_ms, model, base_url, provider, reply, error}`. Failures carry the full dialed URL (`llm request to <url> returned 404: …`) — the first thing to check on an endpoint 404. |
+| `list_models` | `GET <base>/v1/models` (OpenAI-compatible shape; works for OpenRouter and Mistral). Feeds the frontend model datalist; capped at 500. Same base-URL normalization; errors include the dialed URL. |
 | `clear_api_key` | Deletes the stored key. Refresh strategy `reload_view` so open tabs update. |
 
 ## 5. Wiring a new usage (the deep-paradigm recipe)
@@ -228,8 +237,11 @@ id `llm_inferencer`, manifest `singleton: true`):
   `/note-types` catalog.
 - `go test ./internal/llm/` — keyed-client behavior (Bearer header, no auth
   header when keyless, idle-stop never fires for keyed clients), the usage
-  catalog/feature factory, and `UsageSystemDefault` matching the feature
-  clients.
+  catalog/feature factory, `UsageSystemDefault` matching the feature
+  clients, and the endpoint builder (table cases + rapid properties:
+  convention agreement, idempotence, no doubled `/v1`; plus client-level
+  regressions for `/v1`-style bases on chat and embeddings, and error
+  messages naming the dialed URL).
 - `go test ./pkg/notetype/rss/` — the classifier seam stubs resolve
   through the global inferencer note end-to-end (model/endpoint/key from
   the note, config feature client before/without one).

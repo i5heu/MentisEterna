@@ -175,7 +175,7 @@ func (c *EmbeddingClient) GenerateEmbedding(text string) ([]float64, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.BaseURL + "/v1/embeddings"
+	url := OpenAIEndpoint(c.BaseURL, "embeddings")
 	resp, err := c.http.Post(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("localai request: %w", err)
@@ -230,7 +230,7 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.BaseURL + "/v1/chat/completions"
+	url := OpenAIEndpoint(c.BaseURL, "chat/completions")
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
@@ -247,7 +247,9 @@ func (c *ChatClient) complete(messages []chatMessage) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("llm request returned %d: %s", resp.StatusCode, string(body))
+		// The URL is part of the message: 404s are presque always base-URL
+		// mismatches, and the called endpoint is the first thing to check.
+		return "", fmt.Errorf("llm request to %s returned %d: %s", url, resp.StatusCode, string(body))
 	}
 
 	var cr chatCompletionResponse

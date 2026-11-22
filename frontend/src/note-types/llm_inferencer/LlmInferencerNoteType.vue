@@ -127,7 +127,12 @@
                 />
                 <p class="infx-help">
                     Empty uses the provider default ({{ providerDefaultBaseURL
-                    }}). The client appends <span class="mono">/v1/chat/completions</span>.
+                    }}). Any common shape works — an API root like
+                    <span class="mono">https://openrouter.ai/api</span>, an
+                    OpenAI-style base ending in
+                    <span class="mono">/v1</span>, or the full endpoint; the
+                    app normalizes it to
+                    <span class="mono">&lt;base&gt;/v1/chat/completions</span>.
                     <template v-if="draft.provider === 'compatible'">
                         <strong>Required.</strong>
                     </template>

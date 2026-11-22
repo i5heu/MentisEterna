@@ -102,7 +102,7 @@ func (c *OCRClient) RunOCR(imageData []byte) (string, error) {
 		return "", fmt.Errorf("marshal OCR request: %w", err)
 	}
 
-	url := c.BaseURL + "/v1/chat/completions"
+	url := OpenAIEndpoint(c.BaseURL, "chat/completions")
 	resp, err := c.http.Post(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("localai OCR request: %w", err)

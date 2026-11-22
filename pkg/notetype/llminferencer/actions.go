@@ -173,8 +173,9 @@ func (p *Plugin) actionClearAPIKey(ctx context.Context, db *sql.DB, noteID int64
 // https://api.mistral.ai/v1/models). The result is capped at 500 entries;
 // total reports the uncapped count.
 func fetchProviderModels(baseURL, key string) ([]ModelEntry, int, error) {
+	url := llm.OpenAIEndpoint(baseURL, "models")
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/models", nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -188,7 +189,9 @@ func fetchProviderModels(baseURL, key string) ([]ModelEntry, int, error) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, 0, fmt.Errorf("%d: %s", resp.StatusCode, trimForJSON(string(body), 300))
+		// The URL is part of the error: endpoint 404s are base-URL
+		// mismatches, and the called URL is the first thing to check.
+		return nil, 0, fmt.Errorf("%s: %d: %s", url, resp.StatusCode, trimForJSON(string(body), 300))
 	}
 	var out struct {
 		Data []struct {

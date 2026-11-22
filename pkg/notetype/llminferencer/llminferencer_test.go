@@ -797,3 +797,71 @@ func TestBuildView(t *testing.T) {
 		t.Error("view must never contain the API key")
 	}
 }
+
+// TestActionsNormalizeV1StyleBase is the user-facing regression: a note
+// configured with the OpenAI-SDK-style base (…/v1 — what provider docs tell
+// users to paste) must make both actions dial /v1/<endpoint> instead of
+// doubling the segment into a provider 404.
+func TestActionsNormalizeV1StyleBase(t *testing.T) {
+	paths := make(chan string, 16)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths <- r.URL.Path
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			if r.Header.Get("Authorization") != "Bearer sk-v1" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"prov/tiny"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"Not Found","code":404}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	db := testDB(t)
+	noteID := createNote(t, db, "Inferencer", PluginID, 0)
+	// The misconfigured base: API root …/api/v1 instead of the app's root
+	// convention (the server's provider default would be …/api alone).
+	cfg := fmt.Sprintf(`{
+		"provider": "compatible",
+		"base_url": %q,
+		"api_key": "sk-v1",
+		"default_tier": "tiny",
+		"tiers": {"tiny": {"model": "prov/tiny"}}
+	}`, srv.URL+"/v1")
+	saveCfg(t, db, noteID, cfg)
+
+	p := notetype.Registry[PluginID].(notetype.ActionHandler)
+
+	resAny, err := p.HandleAction(context.Background(), db, 0, noteID, "test", nil)
+	if err != nil {
+		t.Fatalf("test action with /v1 base: %v", err)
+	}
+	res := resAny.(TestResult)
+	if !res.OK || res.Reply != "OK" || res.Model != "prov/tiny" {
+		t.Fatalf("test with normalized /v1 base: %+v", res)
+	}
+
+	resAny, err = p.HandleAction(context.Background(), db, 0, noteID, "list_models", nil)
+	if err != nil {
+		t.Fatalf("list_models with /v1 base: %v", err)
+	}
+	m := resAny.(map[string]any)
+	models := m["models"].([]ModelEntry)
+	if len(models) != 1 || models[0].ID != "prov/tiny" {
+		t.Fatalf("models with normalized /v1 base: %+v", models)
+	}
+
+	close(paths)
+	for p := range paths {
+		// No request may carry the doubled segment — the provider 404 the
+		// user saw. Paths hit only the canonical endpoints.
+		if strings.Contains(p, "/v1/v1") {
+			t.Errorf("dialed doubled path %q", p)
+		}
+	}
+}

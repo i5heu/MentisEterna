@@ -51,8 +51,10 @@ const (
 )
 
 // providerDefaultBaseURL returns the built-in base URL for a provider.
-// The client appends "/v1/chat/completions" (and "/v1/models" for
-// list_models), so these are root URLs:
+// These are API ROOT URLs: llm.OpenAIEndpoint appends /v1/chat/completions
+// (and /v1/models for list_models). User-entered bases may carry a trailing
+// "/v1" (OpenAI-SDK-style, e.g. https://openrouter.ai/api/v1) or even be the
+// full endpoint — both are normalized, so no path is doubled.
 // OpenRouter → https://openrouter.ai/api, Mistral → https://api.mistral.ai.
 var providerDefaultBaseURL = map[string]string{
 	ProviderOpenRouter: "https://openrouter.ai/api",

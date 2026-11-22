@@ -73,7 +73,7 @@ func (c *STTClient) RunSTT(audioData []byte, filename string) (string, error) {
 		return "", fmt.Errorf("close multipart writer: %w", err)
 	}
 
-	url := c.BaseURL + "/v1/audio/transcriptions"
+	url := OpenAIEndpoint(c.BaseURL, "audio/transcriptions")
 	req, err := http.NewRequest(http.MethodPost, url, &buf)
 	if err != nil {
 		return "", fmt.Errorf("create STT request: %w", err)
