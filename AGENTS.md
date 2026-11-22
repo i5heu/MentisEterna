@@ -243,8 +243,11 @@ The `rss` note type puts the whole subsystem in one note (see
   rules; defaults sig=0.5 / rel=0.25 / pos=0.15 / hum=0.10, min_points=2.0,
   0=off). The reader timeline defaults to **unread first, ranked by points**
   (read items sink); evaluated items below `min_points` land in the rejected
-  bucket (legacy-classified items are exempt — `evaluated` flag). `reclassify_all` re-queues every article for
-  a fresh evaluation (the refresh job's classify stage drains the queue).
+  bucket (legacy-classified items are exempt — `evaluated` flag). Two maintenance actions in the reader's
+  settings (both behind confirmation, both drained by the refresh job's
+  classify stage with live ⚡ progress): `reclassify_all` re-queues EVERY
+  article (overwrites scores), `evaluate_missing` only the articles without
+  an evaluation; the view exposes `counts.evaluated`/`counts.unevaluated`.
 - **Stored article text is viewable inline**: item content is kept out of
   the view payload (size); the `get_item` action returns one article's
   stored content on demand (extracted `full_content` preferred, else the

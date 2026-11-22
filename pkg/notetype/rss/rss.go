@@ -265,7 +265,7 @@ func (p *Plugin) Manifest() notetype.Manifest {
 			{
 				ID:          "reclassify_all",
 				Label:       "Re-evaluate All",
-				Description: "Queue every article of this reader for a fresh LLM evaluation and schedule a refresh",
+				Description: "Queue every article of this reader for a fresh LLM evaluation and schedule a refresh (overwrites existing scores)",
 				ParamsSchema: json.RawMessage(`{
 					"type": "object",
 					"properties": {},
@@ -274,6 +274,19 @@ func (p *Plugin) Manifest() notetype.Manifest {
 				Dangerous:       false,
 				RefreshStrategy: "none",
 				SuccessMessage:  "Re-evaluation scheduled",
+			},
+			{
+				ID:          "evaluate_missing",
+				Label:       "Evaluate Missing",
+				Description: "Queue only articles with no LLM evaluation for evaluation and schedule a refresh (already-evaluated scores are kept)",
+				ParamsSchema: json.RawMessage(`{
+					"type": "object",
+					"properties": {},
+					"required": []
+				}`),
+				Dangerous:       false,
+				RefreshStrategy: "none",
+				SuccessMessage:  "Missing evaluations scheduled",
 			},
 			{
 				ID:          "reapply_rules",

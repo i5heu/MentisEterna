@@ -369,7 +369,8 @@ oldest-beyond-cap.
 | `set_item_state` | `{item_id, state}` | `read` / `new` / `starred` / `rejected` (manual reject) |
 | `get_item` | `{item_id}` | Return one article with its stored content for inline reading — `full_content` preferred (`content_source:"extracted"`), `feed_content` fallback (`"feed"`), empty when neither stored — plus the full metadata the view omits, including the evaluation (significance, negativity, relevance, humans ×4, reflection, points, evaluated). Content is kept out of the view payload (size) and loaded on demand by the reader modal; `RefreshStrategy: none` (pure read, no ws notify); rejected items stay viewable |
 | `reclassify` | `{item_id}` | Re-run the LLM evaluation synchronously (60 s bound) with the currently-scoped prompt; recomputes points; returns `{points, significance, negativity, personal_relevance, summary, reflection, tags}` |
-| `reclassify_all` | `{}` | Queue every article of the reader for a fresh evaluation (`classify_status` → `pending`, errors cleared) and schedule a force refresh whose classify stage drains the queue; returns `{reset, run_id}` |
+| `reclassify_all` | `{}` | Queue **every** article for a fresh evaluation (`classify_status` → `pending`, errors cleared — existing scores are overwritten by the drain) and schedule a force refresh whose classify stage drains the queue; returns `{reset, run_id}`. Exposed in the reader's **Settings → LLM evaluation** behind a warning confirmation (one LLM call per article) |
+| `evaluate_missing` | `{}` | Queue **only articles with no evaluation** (`evaluated = 0`: legacy keyword-classified rows, errored runs, still-pending ones; already-evaluated scores are kept) and schedule the same drain refresh; returns `{reset, run_id}`. Settings button carries the live unevaluated count |
 | `reapply_rules` | `{}` | Re-read body rules, recompute penalty/banned AND points for all items (no LLM); returns counts incl. `min_points` |
 
 ## 10. View + frontend
@@ -388,7 +389,8 @@ oldest-beyond-cap.
                      affected_future_indirect, points, evaluated, classify_status,
                      penalty_score, penalty, banned, state, saved_note_id, full_status */ ],
   "rejected":  [ /* ≤50 computed-rejected, same shape */ ],
-  "counts":    { "total", "new", "read", "starred", "rejected", "pending_classify" }
+  "counts":    { "total", "new", "read", "starred", "rejected", "pending_classify",
+                 "evaluated", "unevaluated" }
 }
 ```
 
@@ -414,8 +416,9 @@ Frontend (`frontend/src/note-types/rss/`):
   "⚡ Evaluating x/y" progress bar (framed + colored against the dark
   tokens). A bounded fallback poll (5 s, ≤12 min, settles as soon as the
   pending queue drains) covers ws outages — it also folds the bar away.
-  **Re-evaluate all** button (queues every article for a fresh
-  LLM evaluation), **Reapply rules**, sort picker (default **unread first ·
+  The toolbar keeps **Refresh feeds** / **Reapply rules** and surfaces a
+  hint line when articles have no evaluation yet (pointing at Settings).
+  Sort picker (default **unread first ·
   ★ points**; also best-points / newest / oldest), filter
   chips (feed / state), item cards: ★ points badge (green/amber/red tint by
   negativity; tooltip = significance/negativity/relevance/humans/penalty
@@ -442,6 +445,12 @@ Frontend (`frontend/src/note-types/rss/`):
   guard pattern).
 - Reminder chip in-edit mode: rules (ban words) are typed in the note body,
   not the config panel.
+- **Settings → LLM evaluation** section (feedback lines + ⚡ progress bar
+  render in edit mode too): **Evaluate missing (N)** queues only the
+  articles without an evaluation (count from `counts.unevaluated`);
+  **Re-evaluate ALL…** is guarded by a ⚠️ warning confirmation — it
+  overwrites every existing score and costs one LLM call per article.
+  Both run as the background drain job.
 
 ## 11. Wiring changes outside the plugin (complete list)
 

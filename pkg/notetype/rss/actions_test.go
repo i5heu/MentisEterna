@@ -410,6 +410,78 @@ func TestReclassifyAllAction(t *testing.T) {
 	}
 }
 
+func TestEvaluateMissingAction(t *testing.T) {
+	p, d, noteID, feedID, _ := readerFixture(t, "content")
+	rec := installEnqueue(t, p)
+
+	seed := func(key string, status string, evaluated int, sig float64) {
+		t.Helper()
+		if _, err := d.Exec(
+			`INSERT INTO ct_rss_items (feed_id, item_key, title, fetched_at, feed_content,
+			 classify_status, classify_error, evaluated, significance, points)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			feedID, key, key, nowStr(), "content",
+			status, "", evaluated, sig, sig*10,
+		); err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+	seed("k2", "done", 1, 0.7) // evaluated → must stay untouched
+	seed("k3", "done", 0, 0)   // legacy row → requeue
+	seed("k4", "error", 0, 0)  // errored, no evaluation → requeue
+
+	// Reader fixture item is 'done' but unevaluated (legacy shape) → requeue.
+	res, err := p.HandleAction(context.Background(), d.DB, 0, noteID, "evaluate_missing",
+		json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("evaluate_missing: %v", err)
+	}
+	m, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("result type: %#v", res)
+	}
+	// k1 (legacy fixture), k3, k4 — NOT k2 (already evaluated).
+	if m["reset"] != int64(3) {
+		t.Fatalf("reset = %v, want 3", m["reset"])
+	}
+
+	var pending int
+	if err := d.QueryRow(
+		`SELECT COUNT(*) FROM ct_rss_items WHERE classify_status = 'pending'`,
+	).Scan(&pending); err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if pending != 3 {
+		t.Errorf("pending = %d, want 3", pending)
+	}
+
+	// The evaluated row keeps its scores and its done status.
+	var status string
+	var sig, pts float64
+	var evaluated int
+	if err := d.QueryRow(
+		`SELECT classify_status, significance, points, evaluated FROM ct_rss_items WHERE item_key = 'k2'`,
+	).Scan(&status, &sig, &pts, &evaluated); err != nil {
+		t.Fatalf("load k2: %v", err)
+	}
+	if status != "done" || sig != 0.7 || pts != 7 || evaluated != 1 {
+		t.Errorf("evaluated item must be untouched: status=%q sig=%v pts=%v evaluated=%d", status, sig, pts, evaluated)
+	}
+
+	// A drain refresh was scheduled.
+	if len(rec.calls) != 1 || rec.calls[0].jobName != JobRefreshFeeds {
+		t.Fatalf("enqueue calls = %+v", rec.calls)
+	}
+	var pl struct {
+		NoteID int64 `json:"note_id"`
+		Force  bool  `json:"force"`
+	}
+	_ = json.Unmarshal(rec.calls[0].payload, &pl)
+	if pl.NoteID != noteID || !pl.Force {
+		t.Errorf("payload = %+v (want force refresh of note %d)", pl, noteID)
+	}
+}
+
 func TestGetItemEvaluationFields(t *testing.T) {
 	p, d, noteID, _, itemID := readerFixture(t, "content")
 

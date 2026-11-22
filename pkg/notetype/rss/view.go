@@ -67,6 +67,8 @@ type ViewCounts struct {
 	Starred         int `json:"starred"`
 	Rejected        int `json:"rejected"`
 	PendingClassify int `json:"pending_classify"`
+	Evaluated       int `json:"evaluated"`   // classification carried an evaluation
+	Unevaluated     int `json:"unevaluated"` // done/pending/error rows without evaluation
 }
 
 // View is the BuildView response for an rss note.
@@ -227,6 +229,14 @@ func loadItems(db *sql.DB, noteID int64, threshold, minPoints float64, feeds []F
 		}
 		if it.ClassifyStatus == "pending" {
 			counts.PendingClassify++
+		}
+		if it.Evaluated {
+			counts.Evaluated++
+		} else if it.ClassifyStatus != "disabled" {
+			// Missing evaluation: legacy keyword-classified rows, errored
+			// runs, items still waiting for their first evaluation — the
+			// "Evaluate missing" action targets exactly these.
+			counts.Unevaluated++
 		}
 
 		if rejectedItem(it, threshold, minPoints) {

@@ -1,5 +1,23 @@
 <template>
     <div class="rss-reader">
+        <!-- Feedback lines + evaluation progress bar: shared by the viewer
+             and the editor (settings-triggered runs show in edit mode too). -->
+        <p v-if="actionError" class="rss-error">
+            {{ actionError }}
+        </p>
+        <p v-if="actionInfo" class="rss-info">
+            {{ actionInfo }}
+        </p>
+
+        <div
+            v-if="evalProgress"
+            class="rss-progressbar"
+            :title="`LLM evaluation running: ${evalProgress.done} of ${evalProgress.total} articles evaluated`"
+        >
+            <div class="rss-progressfill" :style="{ width: progressPct + '%' }"></div>
+            <span class="rss-progresstext">⚡ Evaluating {{ evalProgress.done }}/{{ evalProgress.total }}</span>
+        </div>
+
         <!-- ==================== Viewer ==================== -->
         <template v-if="!editing">
             <div class="rss-toolbar">
@@ -10,14 +28,6 @@
                         @click="refreshNow"
                     >
                         {{ refreshing ? "Refreshing…" : "Refresh feeds" }}
-                    </button>
-                    <button
-                        class="btn-ghost btn-sm"
-                        :disabled="busy || refreshing"
-                        @click="reclassifyAll"
-                        title="Re-run the LLM significance evaluation for every article of this reader"
-                    >
-                        Re-evaluate all
                     </button>
                     <button
                         class="btn-ghost btn-sm"
@@ -63,27 +73,9 @@
                 </div>
             </div>
 
-            <p
-                v-if="actionError"
-                class="rss-error"
-            >
-                {{ actionError }}
+            <p v-if="view && view.counts && (view.counts.unevaluated ?? 0) > 0" class="rss-info">
+                {{ view.counts.unevaluated }} article(s) have no evaluation yet — evaluate them from Settings.
             </p>
-            <p
-                v-if="actionInfo"
-                class="rss-info"
-            >
-                {{ actionInfo }}
-            </p>
-
-            <div
-                v-if="evalProgress"
-                class="rss-progressbar"
-                :title="`LLM evaluation running: ${evalProgress.done} of ${evalProgress.total} articles evaluated`"
-            >
-                <div class="rss-progressfill" :style="{ width: progressPct + '%' }"></div>
-                <span class="rss-progresstext">⚡ Evaluating {{ evalProgress.done }}/{{ evalProgress.total }}</span>
-            </div>
 
             <div v-if="view" class="rss-meta">
                 <span
@@ -509,6 +501,42 @@ weights: significance=0.5, relevance=0.25, positivity=0.15, humans=0.10</pre>
                         Evaluation prompt: place a note of type
                         <strong>RSS Prompt</strong> inside (or above) this
                         reader — its body is the prompt.
+                    </p>
+                </div>
+
+                <div class="rss-editor-section">
+                    <h4>LLM evaluation</h4>
+                    <p class="rss-hint">
+                        The reader evaluates every article with the LLM
+                        (significance, negativity, personal relevance,
+                        humans affected → ★ points). Both actions schedule
+                        a background job — progress appears as the ⚡ bar,
+                        results flow in automatically.
+                    </p>
+                    <div class="rss-eval-actions">
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy || refreshing || !unevaluatedCount"
+                            title="Queue only articles that have no evaluation yet; existing scores are kept"
+                            @click="evaluateMissing"
+                        >
+                            Evaluate missing{{ unevaluatedCount ? ` (${unevaluatedCount})` : "" }}
+                        </button>
+                        <button
+                            class="btn-ghost btn-sm"
+                            :disabled="busy || refreshing"
+                            title="Re-run the LLM evaluation on every article (overwrites existing scores)"
+                            @click="reclassifyAll"
+                        >
+                            Re-evaluate ALL…
+                        </button>
+                    </div>
+                    <p class="rss-hint">
+                        ⚠️ Re-evaluate ALL re-runs the LLM on every article
+                        ({{ view?.counts?.total ?? 0 }}), overwriting existing
+                        scores — one LLM call per article. Evaluate missing
+                        only queues the {{ unevaluatedCount }} article(s)
+                        without an evaluation.
                     </p>
                 </div>
             </div>
@@ -937,9 +965,52 @@ async function reapplyRules() {
     await refreshView();
 }
 
-// Queue every article for a fresh LLM evaluation, then track it: the job
-// event renews the view when the drain finishes; polling covers ws outages.
+// Number of articles without an evaluation (done-legacy, pending, errored)
+// — the target of the settings' "Evaluate missing" button.
+const unevaluatedCount = computed(() => view.value?.counts?.unevaluated ?? 0);
+
+// Entering edit mode: make sure the counts are loaded (the settings buttons
+// display and confirm against them).
+watch(
+    () => props.editing,
+    (editing) => {
+        if (editing && !view.value) refreshView();
+    },
+);
+
+// Evaluate missing: fills the gaps — only articles without an evaluation are
+// queued; existing scores are kept. Ask first: every article is one LLM call.
+async function evaluateMissing() {
+    const n = unevaluatedCount.value;
+    if (!n) {
+        actionInfo.value = "Every article already has an evaluation.";
+        return;
+    }
+    if (
+        !window.confirm(
+            `Run the LLM evaluation on the ${n} article(s) that have no evaluation yet? Each article is one LLM call; the evaluation runs as a background job.`,
+        )
+    ) {
+        return;
+    }
+    const res = await runAction("evaluate_missing", {}, {
+        info: "Queuing evaluation…",
+    });
+    if (!res) return;
+    startPolling(`Evaluating ${res.reset ?? 0} article(s)…`);
+}
+
+// Re-evaluate ALL: full re-run over every article — overwrites existing
+// scores and costs one LLM call per article, hence the warning confirm.
 async function reclassifyAll() {
+    const total = view.value?.counts?.total ?? 0;
+    if (
+        !window.confirm(
+            `⚠️ Re-run the LLM evaluation on ALL ${total} articles of this reader?\nThis overwrites every existing score (significance, points, tags, …) and costs one LLM call per article. The evaluation runs as a background job.`,
+        )
+    ) {
+        return;
+    }
     const res = await runAction("reclassify_all", {}, {
         info: "Queuing re-evaluation…",
     });
@@ -1152,6 +1223,13 @@ function feedChipTitle(f) {
     align-items: center;
     font-size: 0.85rem;
     color: var(--font-color-secondary);
+}
+
+.rss-eval-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.2rem;
 }
 
 .rss-hint {

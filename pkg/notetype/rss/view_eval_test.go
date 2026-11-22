@@ -71,6 +71,10 @@ func TestViewMinPointsRejection(t *testing.T) {
 	if v.Counts.Rejected != 1 {
 		t.Errorf("counts.rejected = %d", v.Counts.Rejected)
 	}
+	// Evaluation coverage counts: two evaluated, one legacy unevaluated.
+	if v.Counts.Evaluated != 2 || v.Counts.Unevaluated != 1 {
+		t.Errorf("counts = evaluated %d, unevaluated %d; want 2/1", v.Counts.Evaluated, v.Counts.Unevaluated)
+	}
 	// Evaluation fields round-trip into the view payload.
 	var high *ItemView
 	for i := range v.Items {

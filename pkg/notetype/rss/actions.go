@@ -98,6 +98,8 @@ func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteI
 		return p.actionReclassify(ctx, db, noteID, params)
 	case "reclassify_all":
 		return p.actionReclassifyAll(db, noteID)
+	case "evaluate_missing":
+		return p.actionEvaluateMissing(db, noteID)
 	case "reapply_rules":
 		return actionReapplyRules(db, noteID)
 	default:
@@ -105,9 +107,28 @@ func (p *Plugin) HandleAction(ctx context.Context, db *sql.DB, userID int, noteI
 	}
 }
 
+// queueEvaluationRun schedules the drain refresh for a reader after an
+// evaluation reset (reclassify_all / evaluate_missing), best effort: the
+// job is what actually runs the queue, a failed enqueue must not fail the
+// action (the items stay pending; the next cron tick drains them).
+func (p *Plugin) queueEvaluationRun(noteID int64, out map[string]any) {
+	if p.enqueue == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{"note_id": noteID, "force": true})
+	if err != nil {
+		return
+	}
+	runID, err := p.enqueue(PluginID, JobRefreshFeeds, payload)
+	if err == nil {
+		out["run_id"] = runID
+	}
+}
+
 // actionReclassifyAll queues every article of the reader for a fresh LLM
 // evaluation (classify_status → pending) and schedules a refresh job, whose
 // classify stage drains the queue with the currently scoped prompt.
+// Existing scores are overwritten.
 func (p *Plugin) actionReclassifyAll(db *sql.DB, noteID int64) (any, error) {
 	res, err := db.Exec(`
 		UPDATE ct_rss_items SET classify_status = 'pending', classify_error = ''
@@ -119,16 +140,26 @@ func (p *Plugin) actionReclassifyAll(db *sql.DB, noteID int64) (any, error) {
 	reset, _ := res.RowsAffected()
 
 	out := map[string]any{"reset": reset, "note_id": noteID}
-	if p.enqueue != nil {
-		payload, err := json.Marshal(map[string]any{"note_id": noteID, "force": true})
-		if err != nil {
-			return nil, fmt.Errorf("rss: marshal refresh payload: %w", err)
-		}
-		runID, err := p.enqueue(PluginID, JobRefreshFeeds, payload)
-		if err == nil {
-			out["run_id"] = runID
-		}
+	p.queueEvaluationRun(noteID, out)
+	return out, nil
+}
+
+// actionEvaluateMissing queues ONLY the articles that have no evaluation
+// (evaluated = 0 — e.g. the legacy rows classified before the significance
+// evaluation, plus pending/errored ones) and schedules the drain refresh.
+// Articles that already carry an evaluation keep their scores untouched.
+func (p *Plugin) actionEvaluateMissing(db *sql.DB, noteID int64) (any, error) {
+	res, err := db.Exec(`
+		UPDATE ct_rss_items SET classify_status = 'pending', classify_error = ''
+		WHERE feed_id IN (SELECT id FROM ct_rss_feeds WHERE note_id = ?) AND evaluated = 0`, noteID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("rss: queue missing evaluation: %w", err)
 	}
+	reset, _ := res.RowsAffected()
+
+	out := map[string]any{"reset": reset, "note_id": noteID}
+	p.queueEvaluationRun(noteID, out)
 	return out, nil
 }
 
