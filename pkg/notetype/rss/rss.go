@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
@@ -346,9 +347,12 @@ func (p *Plugin) Manifest() notetype.Manifest {
 func (p *Plugin) CronJobs() []notetype.CronJob {
 	return []notetype.CronJob{
 		{
-			Name:     JobRefreshFeeds,
-			Schedule: "@every 15m",
-			Task:     p.refreshFeedsTask,
+			Name:        JobRefreshFeeds,
+			Schedule:    "@every 15m",
+			MaxParallel: 2,                // different readers may refresh concurrently
+			Timeout:     45 * time.Minute, // large batches > interval must not pile up (scheduler also skips ticks)
+			MaxRetries:  1,
+			Task:        p.refreshFeedsTask,
 		},
 	}
 }

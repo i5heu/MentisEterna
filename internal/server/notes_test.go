@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 )
 
@@ -120,7 +121,7 @@ func helperSyncSearchIndex(t *testing.T, s *Server, noteID int64) {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"note_id": noteID,
 	})
-	if _, err := s.syncEmbeddingTask(s.db.DB, payload); err != nil {
+	if _, err := s.syncEmbeddingTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("syncEmbeddingTask(%d): %v", noteID, err)
 	}
 }
@@ -793,7 +794,7 @@ func TestSearchAfterUpdateUsesNewBody(t *testing.T) {
 		"title":   "Doc",
 		"body":    "updated content about airplanes",
 	})
-	_, err := s.syncEmbeddingTask(s.db.DB, payload2)
+	_, err := s.syncEmbeddingTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload2})
 	if err != nil {
 		t.Fatalf("syncEmbeddingTask: %v", err)
 	}

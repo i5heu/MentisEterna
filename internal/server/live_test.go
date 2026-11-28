@@ -2,7 +2,7 @@ package server
 
 import (
 	"bytes"
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -135,7 +135,7 @@ func TestWebSocketSendsReadyAndJobEvents(t *testing.T) {
 	s := newTestServer(t)
 	if err := s.jobManager.RegisterAdHoc("test", []jobs.CronJob{{
 		Name: "live_job",
-		Task: func(_ *sql.DB, _ []byte) (string, error) {
+		Task: func(context.Context, *jobs.RunContext) (string, error) {
 			return "ok", nil
 		},
 	}}); err != nil {
@@ -396,7 +396,7 @@ func TestGenerateTitleTaskBroadcastsNoteChange(t *testing.T) {
 	requireLiveMessageType(t, conn, liveTypeReady)
 
 	payload, _ := json.Marshal(map[string]any{"note_id": note.ID, "body": "body"})
-	if _, err := s.generateTitleTask(s.db.DB, payload); err != nil {
+	if _, err := s.generateTitleTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("generateTitleTask: %v", err)
 	}
 

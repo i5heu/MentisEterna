@@ -717,6 +717,10 @@ export async function fetchJobs(token) {
     return request("/jobs", { headers: authHeaders(token) });
 }
 
+export async function fetchJobStats(token) {
+    return request("/jobs/stats", { headers: authHeaders(token) });
+}
+
 export async function retryJob(token, runId) {
     return request(`/jobs/${runId}/retry`, {
         method: "POST",

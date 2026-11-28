@@ -74,6 +74,7 @@ func (p *TaskOverviewPlugin) CronJobs() []notetype.CronJob {
 		{
 			Name:     "regenerate_daily_tasks",
 			Schedule: "@daily",
+			Timeout:  15 * time.Minute,
 			Task:     regenerateAllDailyTasks,
 		},
 	}

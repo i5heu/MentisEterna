@@ -93,6 +93,10 @@ type PrinterConfig struct {
 
 type JobsConfig struct {
 	Workers int `toml:"workers"` // was JOB_WORKERS
+	// FastWorkers is the dedicated worker pool that only serves
+	// high-priority (interactive) jobs, so titles/tags/embeddings never
+	// queue behind bulk work. 0 → 3.
+	FastWorkers int `toml:"fast_workers"`
 }
 
 type RecipeConfig struct {
@@ -146,7 +150,7 @@ func DefaultConfig() Config {
 			ImageThreshold:     120.0,
 			ImageDarknessScale: 0.96,
 		},
-		Jobs:   JobsConfig{Workers: 10},
+		Jobs:   JobsConfig{Workers: 10, FastWorkers: 3},
 		Recipe: RecipeConfig{CategoryWorkers: 10},
 		// matches mcptunnel.DefaultMaxConcurrency
 		MCP: MCPConfig{ProxyMaxConcurrency: 8},

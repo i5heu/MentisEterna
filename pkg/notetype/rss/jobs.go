@@ -1,10 +1,13 @@
 package rss
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/i5heu/MentisEterna/internal/jobs"
 )
 
 // refreshFeedsTask is the cron job task (definition "rss/refresh_feeds").
@@ -14,7 +17,8 @@ import (
 //     interval_minutes freshness),
 //   - action-enqueued: payload {"note_id":N,"force":true} → force-refresh all
 //     enabled feeds of that one reader.
-func (p *Plugin) refreshFeedsTask(db *sql.DB, payload []byte) (string, error) {
+func (p *Plugin) refreshFeedsTask(ctx context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	noteID, force := int64(0), false
 	if len(payload) > 0 {
 		var pl struct {
@@ -54,7 +58,11 @@ func (p *Plugin) refreshFeedsTask(db *sql.DB, payload []byte) (string, error) {
 	rows.Close()
 
 	summaries := make([]string, 0, len(noteIDs))
+	done := 0
 	for _, id := range noteIDs {
+		// Coarse live progress for the job queue UI (per-article progress
+		// still streams through the plugin's own ProgressReporter).
+		rt.Progress(done, len(noteIDs), fmt.Sprintf("reader %d/%d", done+1, len(noteIDs)))
 		cfg, err := loadConfigRow(db, id)
 		if err != nil {
 			summaries = append(summaries, fmt.Sprintf("reader %d: %v", id, err))
@@ -68,7 +76,9 @@ func (p *Plugin) refreshFeedsTask(db *sql.DB, payload []byte) (string, error) {
 			return "", err
 		}
 		summaries = append(summaries, fmt.Sprintf("note %d: %s", id, summary))
+		done++
 	}
+	rt.Progress(len(noteIDs), len(noteIDs), "")
 	if len(summaries) == 0 {
 		return "no readers due", nil
 	}

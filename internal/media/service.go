@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/jobs"
 )
 
 // Service orchestrates encrypted file storage, S3 replication, and local caching.
@@ -603,7 +604,8 @@ func (s *Service) SoftDeleteFiles(fileIDs []int64) error {
 // --- Repair and Delete Tasks ---
 
 // RepairReplicaTask retries uploading a failed replica.
-func (s *Service) RepairReplicaTask(d *sql.DB, payload []byte) (string, error) {
+func (s *Service) RepairReplicaTask(ctx context.Context, rt *jobs.RunContext) (string, error) {
+	payload := rt.Payload
 	// payload: {"file_id": <id>, "endpoint_id": "<id>"}
 	var p struct {
 		FileID     int64  `json:"file_id"`
@@ -613,11 +615,12 @@ func (s *Service) RepairReplicaTask(d *sql.DB, payload []byte) (string, error) {
 		return "", err
 	}
 
-	return s.repairReplica(context.Background(), p.FileID, p.EndpointID)
+	return s.repairReplica(ctx, p.FileID, p.EndpointID)
 }
 
 // DeleteReplicaTask deletes a file from all replicas and cache.
-func (s *Service) DeleteReplicaTask(d *sql.DB, payload []byte) (string, error) {
+func (s *Service) DeleteReplicaTask(ctx context.Context, rt *jobs.RunContext) (string, error) {
+	payload := rt.Payload
 	var p struct {
 		FileID int64 `json:"file_id"`
 	}
@@ -625,11 +628,12 @@ func (s *Service) DeleteReplicaTask(d *sql.DB, payload []byte) (string, error) {
 		return "", err
 	}
 
-	return s.deleteReplicas(context.Background(), p.FileID)
+	return s.deleteReplicas(ctx, p.FileID)
 }
 
 // RepairSweepTask finds and repairs all upload_failed replicas due for retry.
-func (s *Service) RepairSweepTask(d *sql.DB, payload []byte) (string, error) {
+func (s *Service) RepairSweepTask(ctx context.Context, rt *jobs.RunContext) (string, error) {
+	d := rt.DB
 	rows, err := d.Query(`
 		SELECT file_id, endpoint_id FROM file_s3
 		WHERE state = 'upload_failed' AND (next_retry_at IS NULL OR next_retry_at <= ?)
@@ -648,7 +652,7 @@ func (s *Service) RepairSweepTask(d *sql.DB, payload []byte) (string, error) {
 		if err := rows.Scan(&fileID, &endpointID); err != nil {
 			return "", err
 		}
-		if _, err := s.repairReplica(context.Background(), fileID, endpointID); err != nil {
+		if _, err := s.repairReplica(ctx, fileID, endpointID); err != nil {
 			log.Printf("media: repair sweep %d/%s: %v", fileID, endpointID, err)
 			continue
 		}
@@ -658,7 +662,8 @@ func (s *Service) RepairSweepTask(d *sql.DB, payload []byte) (string, error) {
 }
 
 // PendingInlineCleanupTask deletes pending-inline files abandoned for >1 hour.
-func (s *Service) PendingInlineCleanupTask(d *sql.DB, payload []byte) (string, error) {
+func (s *Service) PendingInlineCleanupTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	d := rt.DB
 	cutoff := time.Now().UTC().Add(-1 * time.Hour).Format("2006-01-02T15:04:05.000Z")
 	rows, err := d.Query(`
 		SELECT f.id FROM files f

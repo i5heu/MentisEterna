@@ -9,18 +9,38 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 )
 
 // CronJob describes a background task registered by a plugin.
-// Schedule is a standard cron expression (e.g. "@daily", "0 8 * * *").
-// Task receives the *sql.DB and an optional payload (nil for cron-triggered runs).
-// It returns a human-readable result summary and an error.
+// Schedule is a simple interval expression ("@every 15m", "@hourly",
+// "@daily"); empty means the job only runs on demand (ad-hoc).
+//
+// Task receives a context (cancelled when the run is cancelled, times
+// out, or the server shuts down) and a RunContext carrying the DB
+// handle, the run payload, and the live Progress reporter. It returns a
+// human-readable result summary and an error.
 type CronJob struct {
-	Name     string
+	Name string
+	// Schedule: "@every 15m" / "@hourly" / "@daily"; "" = ad-hoc only.
 	Schedule string
-	Task     func(db *sql.DB, payload []byte) (result string, err error)
+	// Priority: jobs.PriorityHigh runs on the dedicated fast worker
+	// lane so interactive work never queues behind bulk jobs.
+	// Default jobs.PriorityNormal.
+	Priority int
+	// MaxParallel caps concurrently running runs of this definition
+	// (<=0 → 1).
+	MaxParallel int
+	// Timeout is a hard wall-clock cap per run; 0 = none.
+	Timeout time.Duration
+	// MaxRetries is the number of automatic retries (with backoff)
+	// after an error; 0 = none.
+	MaxRetries int
+	// Task executes one run.
+	Task jobs.TaskFunc
 }
 
 // Plugin is the required base interface that every note type must implement.

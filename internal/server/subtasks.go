@@ -8,13 +8,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 )
 
 // generateSubTasksTask is the job task handler for LLM-planned task subtasks.
 // Payload: {"note_id": N}. Generated subtasks are APPENDED to any existing
 // ones; nothing existing is deleted.
-func (s *Server) generateSubTasksTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) generateSubTasksTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.subtaskGen == nil {
 		return "", fmt.Errorf("generate_subtasks: no subtask generator configured")
 	}

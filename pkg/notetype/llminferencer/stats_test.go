@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 	"pgregory.net/rapid"
@@ -339,17 +340,17 @@ func TestStatsRetentionSweep(t *testing.T) {
 // human-readable result. Failure mode prevented: a cron entry that
 // panics the scheduler or an unrunnable task.
 func TestStatsCronJob(t *testing.T) {
-	jobs := (&Plugin{}).CronJobs()
-	if len(jobs) != 1 {
-		t.Fatalf("want exactly 1 cron job, got %d", len(jobs))
+	cronJobs := (&Plugin{}).CronJobs()
+	if len(cronJobs) != 1 {
+		t.Fatalf("want exactly 1 cron job, got %d", len(cronJobs))
 	}
-	job := jobs[0]
+	job := cronJobs[0]
 	if job.Name != "stats_retention" || job.Schedule == "" || job.Task == nil {
 		t.Fatalf("cron contract broken: %+v", job)
 	}
 
 	d := testDB(t)
-	res, err := job.Task(d, nil)
+	res, err := job.Task(context.Background(), &jobs.RunContext{DB: d})
 	if err != nil {
 		t.Fatalf("task: %v", err)
 	}

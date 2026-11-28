@@ -137,8 +137,89 @@
                 <h2 class="section-title">Job Queue</h2>
                 <p class="section-desc">
                     View and manage background jobs (embeddings, OCR, STT,
-                    backups).
+                    backups). Running jobs report live progress; wedged
+                    jobs are timed out and re-queued automatically.
                 </p>
+
+                <!-- Job system stats -->
+                <div v-if="jobStats" class="job-stats">
+                    <div class="job-stats-chips">
+                        <span class="stat-chip">
+                            Workers
+                            {{ jobStats.workers.busy }}/{{
+                                jobStats.workers.total
+                            }}
+                            busy
+                        </span>
+                        <span class="stat-chip">
+                            Fast lane
+                            {{ jobStats.workers.fast_busy }}/{{
+                                jobStats.workers.fast_total
+                            }}
+                        </span>
+                        <span class="stat-chip">
+                            Queue {{ jobStats.queue.planned }}
+                        </span>
+                        <span class="stat-chip">
+                            Running {{ jobStats.queue.running }}
+                        </span>
+                        <span class="stat-chip" v-if="jobStats.queue.delayed">
+                            Backoff {{ jobStats.queue.delayed }}
+                        </span>
+                        <span class="stat-chip">
+                            24h ✓{{ jobStats.last_24h.done }} ✗{{
+                                jobStats.last_24h.errored
+                            }}
+                        </span>
+                    </div>
+                    <div v-if="jobStats.definitions.length" class="job-defs-wrap">
+                        <table class="job-defs">
+                            <thead>
+                                <tr>
+                                    <th>Job</th>
+                                    <th>Schedule</th>
+                                    <th>Runs</th>
+                                    <th>Success</th>
+                                    <th>Avg</th>
+                                    <th>Last</th>
+                                    <th class="num">⏵/⏳</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="d in jobStats.definitions"
+                                    :key="d.id"
+                                >
+                                    <td class="job-def-name">
+                                        <span class="job-def-id">{{ d.plugin_id }}</span>
+                                        {{ d.job_name }}
+                                        <span v-if="d.priority > 0" title="High priority">⚡</span>
+                                    </td>
+                                    <td class="job-def-sched">{{
+                                        d.schedule || "on demand"
+                                    }}</td>
+                                    <td class="num">{{ d.runs_total }}</td>
+                                    <td class="num">{{
+                                        fmtSuccess(d)
+                                    }}</td>
+                                    <td class="num">{{
+                                        fmtMs(d.avg_duration_ms)
+                                    }}</td>
+                                    <td
+                                        class="job-def-last"
+                                        :class="'last-' + (d.last_status || '')"
+                                    >
+                                        {{ fmtLast(d) }}
+                                    </td>
+                                    <td class="num">
+                                        {{ d.running }}/{{ d.queued }}
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="job-queue-embed">
                     <JobQueue
                         :token="token"
@@ -1097,7 +1178,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import JobQueue from "../components/JobQueue.vue";
 import ShortcutHint from "../components/ShortcutHint.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
@@ -1117,6 +1198,7 @@ import {
     fetchPrinterStatus,
     fetchAIStatus,
     fetchServerStats,
+    fetchJobStats,
 } from "../api.js";
 import {
     getOrCreateDevice,
@@ -1706,7 +1788,57 @@ async function fetchStats() {
     }
 }
 
+// --- Job system stats ---
+const jobStats = ref(null);
+let jobStatsTimer = null;
+
+function fmtMs(ms) {
+    if (ms == null || ms <= 0) return "—";
+    if (ms < 1000) return `${ms}ms`;
+    const s = ms / 1000;
+    if (s < 60) return `${s.toFixed(1)}s`;
+    const m = Math.floor(s / 60);
+    return `${m}m${String(Math.round(s % 60)).padStart(2, "0")}s`;
+}
+
+function fmtSuccess(d) {
+    const attempted = d.runs_done + d.runs_errored;
+    if (!attempted) return "—";
+    return `${Math.round((d.runs_done / attempted) * 100)}%`;
+}
+
+function fmtLast(d) {
+    if (!d.last_status) return "—";
+    if (d.last_status === "errored" && d.last_error) {
+        return d.last_error;
+    }
+    if (d.last_status === "done" && d.last_result) {
+        return d.last_result;
+    }
+    return d.last_status;
+}
+
+async function loadJobStats() {
+    try {
+        jobStats.value = await fetchJobStats(props.token);
+    } catch {
+        // Job stats are best-effort; the queue still shows below.
+    }
+}
+
+function onJobLiveMessage(event) {
+    const type = event?.detail?.type;
+    if (type !== "jobs.changed" && type !== "live.ready") return;
+    if (jobStatsTimer) return;
+    jobStatsTimer = window.setTimeout(() => {
+        jobStatsTimer = null;
+        loadJobStats();
+    }, 500);
+}
+
 onMounted(async () => {
+    loadJobStats();
+    window.addEventListener("live:message", onJobLiveMessage);
     fetchStats();
     try {
         const me = await getOrCreateDevice();
@@ -1714,6 +1846,14 @@ onMounted(async () => {
         myName.value = getMyName();
     } catch {
         // Device identity unavailable (no WebCrypto); pairing stays disabled.
+    }
+});
+
+onUnmounted(() => {
+    window.removeEventListener("live:message", onJobLiveMessage);
+    if (jobStatsTimer) {
+        window.clearTimeout(jobStatsTimer);
+        jobStatsTimer = null;
     }
 });
 </script>
@@ -1896,6 +2036,104 @@ onMounted(async () => {
 }
 
 /* Job queue embedded in card */
+.job-stats {
+    margin-bottom: 14px;
+}
+
+.job-stats-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.stat-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    background: var(--raised-bg);
+    color: var(--font-color-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.job-defs-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--panel-bg);
+}
+
+.job-defs {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.job-defs th {
+    text-align: left;
+    padding: 6px 10px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--font-color-secondary);
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+}
+
+.job-defs td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--font-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+}
+
+.job-defs tr:last-child td {
+    border-bottom: none;
+}
+
+.job-defs .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--font-color-secondary);
+}
+
+.job-defs th.num {
+    text-align: right;
+}
+
+.job-def-id {
+    color: var(--font-color-secondary);
+    margin-right: 4px;
+}
+
+.job-def-sched {
+    color: var(--font-color-secondary);
+}
+
+.job-def-last {
+    max-width: 280px;
+}
+
+.last-done {
+    color: var(--accent-teal);
+}
+
+.last-errored {
+    color: var(--heading-color);
+}
+
+.last-cancelled {
+    color: var(--font-color-secondary);
+}
+
 .job-queue-embed {
     margin-top: 0.5rem;
 }

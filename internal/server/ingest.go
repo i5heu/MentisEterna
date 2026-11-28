@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/media"
 	internaltags "github.com/i5heu/MentisEterna/internal/tags"
 )
@@ -464,7 +465,8 @@ func (s *Server) finalizeIngestNote(ctx context.Context, db *sql.DB, noteID int6
 // it runs the existing STT pipeline and appends the resulting transcript to the
 // note body. It mirrors sttFileTask semantics (including the no-retry error
 // handling) with the extra note-body append.
-func (s *Server) ingestSTTToNoteTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) ingestSTTToNoteTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.sttClient == nil || s.mediaService == nil {
 		return "", fmt.Errorf("stt_to_note: STT client or media service not configured")
 	}
@@ -505,7 +507,8 @@ func (s *Server) ingestSTTToNoteTask(db *sql.DB, payload []byte) (string, error)
 // handwritten-note image: it runs the existing OCR pipeline and appends the
 // recognized text to the note body. It mirrors ocrFileTask semantics
 // (including the no-retry error handling) with the extra note-body append.
-func (s *Server) ingestOCRToNoteTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) ingestOCRToNoteTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.ocrClient == nil || s.mediaService == nil {
 		return "", fmt.Errorf("ocr_to_note: OCR client or media service not configured")
 	}

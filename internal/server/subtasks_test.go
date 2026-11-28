@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
@@ -82,7 +83,7 @@ func TestGenerateSubTasksTaskAppendsAndBroadcasts(t *testing.T) {
 		{Label: "Ship"},
 	}}
 
-	result, err := s.generateSubTasksTask(d.DB, []byte(fmt.Sprintf(`{"note_id":%d}`, note.ID)))
+	result, err := s.generateSubTasksTask(context.Background(), &jobs.RunContext{DB: d.DB, Payload: []byte(fmt.Sprintf(`{"note_id":%d}`, note.ID))})
 	if err != nil {
 		t.Fatalf("generateSubTasksTask: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestGenerateSubTasksTaskMissingNote(t *testing.T) {
 	gen := &stubSubTaskGenerator{title: "Title"}
 	s := New(d, ":0", nil, gen, nil, gen, nil, nil)
 
-	result, err := s.generateSubTasksTask(d.DB, []byte(`{"note_id":999999}`))
+	result, err := s.generateSubTasksTask(context.Background(), &jobs.RunContext{DB: d.DB, Payload: []byte(`{"note_id":999999}`)})
 	if err != nil {
 		t.Fatalf("generateSubTasksTask: %v", err)
 	}

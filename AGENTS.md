@@ -463,6 +463,38 @@ npm run dev      # dev server with proxy to :8080
 npm run build    # outputs to ../FrontEndDist (what the Go server serves)
 ```
 
+## Job System
+
+All background work (embeddings, OCR/STT, LLM titles/tags/subtasks, RSS
+refreshes, backups, media sweeps, plugin cron jobs) runs on the job system in
+`internal/jobs` — see [docs/Jobs.md](docs/Jobs.md) for the full design:
+
+- **Fast + multithreaded**: two worker lanes — `jobs.workers` normal workers
+  plus a dedicated `jobs.fast_workers` pool that only serves
+  `PriorityHigh` (interactive) jobs so they never queue behind bulk work;
+  priority-ordered, atomically-claimed dequeue (single UPDATE…RETURNING) with
+  per-definition `max_parallel` caps; instant event-driven worker wakeup
+  (Enqueue/scheduler tick → notify channel) instead of the old 1 s poll.
+- **Reliable**: automatic retries with exponential backoff + jitter
+  (`next_run_at`), per-definition timeouts enforced by a watchdog that also
+  clears lost claims, cron ticks that never pile up behind a slow run, context
+  cancellation (user cancel / timeout / shutdown) into every task, exactly-once
+  terminal transitions (guarded status writes in one transaction with the
+  stats bump).
+- **Task contract**: `func(ctx context.Context, rt *jobs.RunContext)
+  (string, error)` — rt carries DB, RunID, Payload, and a throttled
+  `Progress(done, total, message)` reporter; notetype.CronJob (mirrored in
+  jobs.CronJob) declares Priority/MaxParallel/Timeout/MaxRetries per job.
+- **Observable**: `job_runs` store live progress
+  (`progress_done/total/message`, heartbeat `progress_at`), duration, worker,
+  and retry-due time; ws broadcasts `jobs.progress` (merged in-place by the
+  UI) and `jobs.changed` (lifecycle). The `job_definition_stats` ledger
+  (survives the 30 d run janitor, backfilled at migration) feeds
+  `GET /jobs/stats` — worker/queue state, 24 h window, per-job success rate,
+  avg/min/max duration, last result — rendered in Options.
+- **API**: `GET /jobs`, `GET /jobs/stats`, `POST /jobs/:id/retry`,
+  `POST /jobs/:id/cancel` (works on planned AND running runs).
+
 ## Configuration
 
 Non-secret settings are read from a TOML config file (default `config.toml`);
@@ -491,7 +523,7 @@ Key sections (see `config.default.toml` for all fields):
 | `[llm.features.<name>] tier` | `LLM_FEATURE_<NAME>_TIER` | Feature→tier binding |
 | `[media] cache_dir` | `MEDIA_CACHE_DIR` | Local file cache directory |
 | `[media] endpoints` | `MEDIA_S3_ENDPOINTS` | S3 endpoint definitions (id/bucket/region/endpoint/force_path_style) |
-| `[jobs] workers` | `JOB_WORKERS` | Concurrent background job workers |
+| `[jobs] workers` / `fast_workers` | `JOB_WORKERS` | Normal job workers / dedicated fast-lane workers for high-priority (interactive) jobs — see docs/Jobs.md |
 | `[recipe] category_workers` | `RECIPE_CATEGORY_WORKERS` | Recipe-category classification workers |
 | `[printer] device` / `usb_id` / `codepage` / etc. | `THERMAL_PRINTER_*` | Thermal printer settings |
 | `[mcp] disabled` | — | `true` makes the MCP endpoint return 404 |

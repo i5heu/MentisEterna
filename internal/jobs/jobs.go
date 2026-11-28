@@ -1,20 +1,62 @@
-// Package jobs provides a robust, observable job system backed by SQLite.
+// Package jobs provides a robust, observable, multithreaded job system
+// backed by SQLite.
 //
-// Key features:
-//   - Atomic dequeue via UPDATE ... RETURNING (no two workers grab the same job)
-//   - Zombie recovery on startup (reset stuck "running" jobs to "planned")
-//   - Data retention via built-in janitor (deletes runs older than 30 days)
-//   - Job payloads for future user-triggered background work
-//   - SQLite WAL + busy timeout for concurrent write resilience
+// Layout of this package:
+//
+//	jobs.go       public types (CronJob, RunContext, Run, RunEvent), the
+//	              Manager, its lifecycle (Start/Stop) and the observer bus
+//	definitions.go  definition registration, the builtin janitor, zombie
+//	              recovery, and the definition lookup cache
+//	queue.go       enqueue / retry / cancel / list — the run queue API
+//	scheduler.go   per-definition cron tickers (never pile up ticks)
+//	worker.go      worker lanes, the atomic dequeue, and task execution
+//	finalize.go    guarded terminal transitions + stats ledger bumps,
+//	              automatic retries with backoff
+//	progress.go    the throttled per-run progress reporter
+//	watchdog.go    timeouts, lost-claim cleanup, delayed-retry wakeups
+//	stats.go       the /jobs/stats snapshot (worker, queue, per-definition)
+//
+// Architecture (v2):
+//
+//	enqueue ──┐                                  ┌─ normal workers (all priorities)
+//	          ├── job_runs (planned) ── wake ────┤
+//	scheduler ─┘        via notify channel       └─ fast workers   (priority ≥ 1 only —
+//	                                                 interactive jobs never starve
+//	                                                 behind slow bulk work)
+//
+// Key properties:
+//
+//   - Event-driven wakeup: enqueues and scheduler ticks kick a notify
+//     channel; workers start new runs essentially instantly and fall
+//     back to a slow poll (2 s) that picks up delayed retries.
+//   - Priority dequeue: priority DESC, created_at ASC; per-definition
+//     max_parallel caps how many runs of the same job may run at once.
+//   - Automatic retries: failed runs are re-queued with exponential
+//     backoff + jitter (next_run_at), up to the definition's max
+//     retries; cancellation-induced errors are never auto-retried.
+//   - Watchdog: enforces per-definition timeouts and marks runs whose
+//     claim was lost (running rows not tracked by this manager) as
+//     errored — wedged runs never stay "running" forever.
+//   - Progress: tasks report (done, total, message) through
+//     RunContext.Progress; the manager throttles DB writes and observer
+//     events; progress_at doubles as the run's heartbeat.
+//   - Stats: the job_definition_stats ledger aggregates every finish
+//     (success rate, durations, last result) and survives the 30-day
+//     run-retention janitor.
+//   - Exactly-once terminal transition: every terminal status write is a
+//     single guarded UPDATE (WHERE status IN ('running','planned')) in
+//     one transaction with its stats bump — whichever path wins a race
+//     (worker, cancel, timeout, watchdog), the run is finalized and
+//     counted exactly once.
 package jobs
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,37 +69,102 @@ const (
 	StatusCancelled = "cancelled"
 )
 
-// CronJob describes a background task registered by a plugin.
+// Priority lanes. High-priority (interactive) jobs get a dedicated fast
+// worker pool so bulk work can never starve them.
+const (
+	PriorityLow    = -1
+	PriorityNormal = 0
+	PriorityHigh   = 1
+)
+
+// TaskFunc is the signature every job task implements. The context is
+// cancelled when the run is cancelled, times out, or the server shuts
+// down; well-behaved tasks check it between steps. RunContext carries
+// the DB handle, payload, identity, and the Progress reporter.
+type TaskFunc func(ctx context.Context, rt *RunContext) (string, error)
+
+// CronJob describes a background task registered by a plugin or the
+// server.
 type CronJob struct {
-	Name     string
+	// Name is the unique job name within the registering plugin.
+	Name string
+	// Schedule: "@every 15m", "@hourly", "@daily"; empty = ad-hoc only
+	// (triggered exclusively via Enqueue).
 	Schedule string
-	Task     func(db *sql.DB, payload []byte) (string, error)
+	// Priority: PriorityHigh jobs run on the dedicated fast lane so
+	// interactive work (titles, tags, embeddings) never queues behind
+	// bulk jobs. Default PriorityNormal.
+	Priority int
+	// MaxParallel caps concurrently running runs of this definition
+	// (<=0 → 1).
+	MaxParallel int
+	// Timeout is a hard wall-clock cap per run; 0 = none. The watchdog
+	// force-finalizes (and retries, if retries remain) expired runs.
+	Timeout time.Duration
+	// MaxRetries is the number of automatic retries (with backoff)
+	// after an error; 0 = none (manual retry stays available).
+	MaxRetries int
+	// Task is the function executed for each run.
+	Task TaskFunc
+}
+
+// RunContext is handed to every task: identity + inputs + progress. It
+// is safe to keep and use from goroutines the task spawns.
+type RunContext struct {
+	// DB is the app database.
+	DB *sql.DB
+	// RunID is the job_runs row id of this execution.
+	RunID int64
+	// PluginID and JobName identify the definition.
+	PluginID string
+	JobName  string
+	// Payload is the opaque run payload (nil for cron runs).
+	Payload []byte
+	// Progress reports live progress for this run. The manager
+	// throttles writes (~2/s per run plus a 10 s heartbeat); it never
+	// blocks and swallows its own errors.
+	Progress func(done, total int, message string)
 }
 
 // Run represents a single execution of a job definition.
 type Run struct {
-	ID         int64           `json:"id"`
-	PluginID   string          `json:"plugin_id"`
-	JobName    string          `json:"job_name"`
-	Status     string          `json:"status"`
-	RetryCount int             `json:"retry_count"`
-	Payload    json.RawMessage `json:"payload,omitempty"`
-	StartedAt  *time.Time      `json:"started_at,omitempty"`
-	FinishedAt *time.Time      `json:"finished_at,omitempty"`
-	Error      *string         `json:"error,omitempty"`
-	Result     *string         `json:"result,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ID              int64           `json:"id"`
+	PluginID        string          `json:"plugin_id"`
+	JobName         string          `json:"job_name"`
+	Status          string          `json:"status"`
+	Priority        int             `json:"priority"`
+	RetryCount      int             `json:"retry_count"`
+	WorkerID        int             `json:"worker_id,omitempty"`
+	Payload         json.RawMessage `json:"payload,omitempty"`
+	StartedAt       *time.Time      `json:"started_at,omitempty"`
+	FinishedAt      *time.Time      `json:"finished_at,omitempty"`
+	NextRunAt       *time.Time      `json:"next_run_at,omitempty"`
+	DurationMS      *int64          `json:"duration_ms,omitempty"`
+	ProgressDone    *int            `json:"progress_done,omitempty"`
+	ProgressTotal   *int            `json:"progress_total,omitempty"`
+	ProgressMessage *string         `json:"progress_message,omitempty"`
+	Error           *string         `json:"error,omitempty"`
+	Result          *string         `json:"result,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
-// RunEvent is a lightweight lifecycle notification for a job run.
+// RunEvent is a lifecycle notification for a job run, delivered to the
+// observer registered via SetObserver. Type is one of: enqueued,
+// running, progress, done, errored, cancelled, retried.
 type RunEvent struct {
-	Type     string  `json:"type"`
-	RunID    int64   `json:"run_id"`
-	PluginID string  `json:"plugin_id"`
-	JobName  string  `json:"job_name"`
-	Status   string  `json:"status"`
-	Result   *string `json:"result,omitempty"`
-	Error    *string `json:"error,omitempty"`
+	Type            string  `json:"type"`
+	RunID           int64   `json:"run_id"`
+	PluginID        string  `json:"plugin_id"`
+	JobName         string  `json:"job_name"`
+	Status          string  `json:"status"`
+	Attempt         int     `json:"attempt,omitempty"`
+	WorkerID        int     `json:"worker_id,omitempty"`
+	Result          *string `json:"result,omitempty"`
+	Error           *string `json:"error,omitempty"`
+	DurationMS      *int64  `json:"duration_ms,omitempty"`
+	ProgressDone    *int    `json:"progress_done,omitempty"`
+	ProgressTotal   *int    `json:"progress_total,omitempty"`
+	ProgressMessage *string `json:"progress_message,omitempty"`
 }
 
 // ListResponse is the response for GET /jobs.
@@ -66,47 +173,107 @@ type ListResponse struct {
 	PendingCount int   `json:"pending_count"`
 }
 
-type jobDefMeta struct {
-	ID       int64
-	PluginID string
-	Name     string
-	Schedule string
+// activeRun tracks a run claimed by one of this manager's workers: the
+// watchdog uses it to detect lost claims, CancelRun to cancel the task
+// context, and timeouts are measured from started. timedOut is set by
+// the watchdog BEFORE cancelling, so the worker's finalize path knows
+// the watchdog owns the terminal write (and the row is recorded as a
+// timeout, not a bare "context canceled").
+type activeRun struct {
+	runID    int64
+	defID    int64
+	workerID int
+	fast     bool
+	started  time.Time
+	cancel   context.CancelFunc
+	timedOut atomic.Bool
 }
 
-// Manager manages the job system lifecycle.
-type Manager struct {
-	db      *sql.DB
-	workers int
-	stop    chan struct{}
-	done    chan struct{}
+// jobDefMeta caches definition metadata for logging, dequeue, and
+// retry decisions without a DB round-trip.
+type jobDefMeta struct {
+	ID          int64
+	PluginID    string
+	Name        string
+	Schedule    string
+	Priority    int
+	MaxParallel int
+	Timeout     time.Duration
+	MaxRetries  int
+}
 
-	// tasks maps job_definition.id → task function.
-	// defs caches job definition metadata for logging and scheduler startup.
-	tasks   map[int64]func(*sql.DB, []byte) (string, error)
+// Manager owns the job system lifecycle: definitions, schedulers, the
+// watchdog, and the worker lanes. All public methods are safe for
+// concurrent use.
+type Manager struct {
+	db         *sql.DB
+	workers    int
+	fastWorker int
+
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+
+	// notify wakes idle workers immediately after an enqueue or a
+	// scheduler tick (buffered 1, non-blocking kick).
+	notify chan struct{}
+
+	// pollInterval is the fallback poll that also picks up delayed
+	// retries; tests shrink it.
+	pollInterval time.Duration
+
+	// watchdogInterval bounds how quickly timeouts are enforced and
+	// lost claims cleared; tests shrink it.
+	watchdogInterval time.Duration
+
+	// tasks maps job_definition.id → task function; defs caches the
+	// same definitions' metadata.
+	tasks   map[int64]TaskFunc
 	defs    map[int64]jobDefMeta
 	tasksMu sync.RWMutex
 
+	// active tracks runs claimed by this manager's workers.
+	active   map[int64]*activeRun
+	activeMu sync.Mutex
+
 	observerMu sync.RWMutex
 	observer   func(RunEvent)
+
+	// progressMinInterval and progressHeartbeat bound the progress
+	// reporter; tests shrink them.
+	progressMinInterval time.Duration
+	progressHeartbeat   time.Duration
 }
 
-// NewManager creates a new job Manager with the given number of workers.
-// It performs zombie recovery (resetting stuck "running" jobs) immediately.
-func NewManager(db *sql.DB, workers int) *Manager {
+// NewManager creates a new job Manager. workers run at every priority;
+// fastWorkers is a dedicated pool that only serves PriorityHigh runs,
+// so interactive jobs never wait behind slow bulk work. Start performs
+// zombie recovery (resetting stuck "running" jobs).
+func NewManager(db *sql.DB, workers, fastWorkers int) *Manager {
 	if workers < 1 {
 		workers = 1
 	}
+	if fastWorkers < 1 {
+		fastWorkers = 1
+	}
 	return &Manager{
-		db:      db,
-		workers: workers,
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
-		tasks:   make(map[int64]func(*sql.DB, []byte) (string, error)),
-		defs:    make(map[int64]jobDefMeta),
+		db:                  db,
+		workers:             workers,
+		fastWorker:          fastWorkers,
+		stop:                make(chan struct{}),
+		done:                make(chan struct{}),
+		notify:              make(chan struct{}, 1),
+		pollInterval:        2 * time.Second,
+		watchdogInterval:    10 * time.Second,
+		progressMinInterval: 500 * time.Millisecond,
+		progressHeartbeat:   10 * time.Second,
+		tasks:               make(map[int64]TaskFunc),
+		defs:                make(map[int64]jobDefMeta),
+		active:              make(map[int64]*activeRun),
 	}
 }
 
-// WorkerCount returns the configured number of concurrent job workers.
+// WorkerCount returns the configured number of normal job workers.
 func (m *Manager) WorkerCount() int {
 	if m == nil {
 		return 0
@@ -114,7 +281,16 @@ func (m *Manager) WorkerCount() int {
 	return m.workers
 }
 
+// FastWorkerCount returns the size of the dedicated high-priority pool.
+func (m *Manager) FastWorkerCount() int {
+	if m == nil {
+		return 0
+	}
+	return m.fastWorker
+}
+
 // SetObserver registers a callback for job lifecycle notifications.
+// The callback must be safe for concurrent use and must not block.
 func (m *Manager) SetObserver(fn func(RunEvent)) {
 	if m == nil {
 		return
@@ -124,166 +300,26 @@ func (m *Manager) SetObserver(fn func(RunEvent)) {
 	m.observerMu.Unlock()
 }
 
-// UpsertDefinitions upserts job_definitions rows from the provided cron jobs.
-// Returns a map from plugin_id+name to the definition ID.
-func (m *Manager) UpsertDefinitions(pluginID string, jobs []CronJob) error {
-	if err := m.upsertDefs(pluginID, jobs); err != nil {
-		return err
-	}
-	return nil
-}
-
-// RegisterAdHoc registers a job that is only triggered on-demand via Enqueue
-// (not on a cron schedule). The task function is stored in the in-memory map
-// and the definition is persisted so Enqueue can find it.
-func (m *Manager) RegisterAdHoc(pluginID string, jobs []CronJob) error {
-	// Force empty schedule for ad-hoc jobs (no cron ticks).
-	for i := range jobs {
-		jobs[i].Schedule = ""
-	}
-	return m.upsertDefs(pluginID, jobs)
-}
-
-func (m *Manager) upsertDefs(pluginID string, jobs []CronJob) error {
-	for _, job := range jobs {
-		_, err := m.db.Exec(
-			`INSERT INTO job_definitions (plugin_id, name, schedule)
-			 VALUES (?, ?, ?)
-			 ON CONFLICT(plugin_id, name) DO UPDATE SET schedule = excluded.schedule`,
-			pluginID, job.Name, job.Schedule,
-		)
-		if err != nil {
-			return fmt.Errorf("upsert job definition %s/%s: %w", pluginID, job.Name, err)
-		}
-
-		// Always look up the canonical definition ID after the upsert.
-		// LastInsertId is not reliable for SQLite ON CONFLICT DO UPDATE paths,
-		// and using it can register tasks under the wrong in-memory ID.
-		var id int64
-		err = m.db.QueryRow(
-			`SELECT id FROM job_definitions WHERE plugin_id = ? AND name = ?`,
-			pluginID, job.Name,
-		).Scan(&id)
-		if err != nil {
-			return fmt.Errorf("lookup job definition %s/%s: %w", pluginID, job.Name, err)
-		}
-
-		m.tasksMu.Lock()
-		m.tasks[id] = job.Task
-		m.defs[id] = jobDefMeta{ID: id, PluginID: pluginID, Name: job.Name, Schedule: job.Schedule}
-		m.tasksMu.Unlock()
-
-		log.Printf("jobs: registered definition %s schedule=%q", formatJobMeta(jobDefMeta{ID: id, PluginID: pluginID, Name: job.Name}), job.Schedule)
-	}
-	return nil
-}
-
-// zombieRecovery resets any job_runs stuck in "running" status back to "planned".
-// This handles crashes where a worker died mid-execution.
-// Also marks planned runs as errored if their job definition has no registered task
-// (leftover runs from before a code fix, or from a removed plugin).
-func (m *Manager) zombieRecovery() error {
-	// 1. Reset runs stuck in "running" back to "planned".
-	res, err := m.db.Exec(
-		`UPDATE job_runs
-		 SET status = 'planned', started_at = NULL, error = 'Previous server instance crashed'
-		 WHERE status = 'running'`,
-	)
-	if err != nil {
-		return fmt.Errorf("zombie recovery: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		log.Printf("jobs: zombie recovery reset %d stuck job(s)", n)
-	}
-
-	// 2. Collect the IDs of all currently registered tasks.
-	m.tasksMu.RLock()
-	registered := make(map[int64]bool, len(m.tasks))
-	for id := range m.tasks {
-		registered[id] = true
-	}
-	m.tasksMu.RUnlock()
-
-	// 3. Mark planned runs for unregistered definitions as errored.
-	if len(registered) > 0 {
-		rows, err := m.db.Query(
-			`SELECT jr.id, jr.job_id, COALESCE(jd.plugin_id, ''), COALESCE(jd.name, '')
-			 FROM job_runs jr
-			 LEFT JOIN job_definitions jd ON jd.id = jr.job_id
-			 WHERE jr.status = 'planned'`,
-		)
-		if err != nil {
-			return fmt.Errorf("zombie recovery: list planned: %w", err)
-		}
-		var orphaned int
-		for rows.Next() {
-			var runID, jobID int64
-			var pluginID, jobName string
-			if err := rows.Scan(&runID, &jobID, &pluginID, &jobName); err != nil {
-				rows.Close()
-				return fmt.Errorf("zombie recovery: scan planned: %w", err)
-			}
-			if !registered[jobID] {
-				meta := jobDefMeta{ID: jobID, PluginID: pluginID, Name: jobName}
-				log.Printf("jobs: zombie recovery marking stale planned run=%d %s as errored: no registered task", runID, formatJobMeta(meta))
-				m.db.Exec(
-					`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
-					StatusErrored, "No task registered for this job definition", runID,
-				)
-				orphaned++
-			}
-		}
-		rows.Close()
-		if orphaned > 0 {
-			log.Printf("jobs: zombie recovery marked %d unregistered planned run(s) as errored", orphaned)
-		}
-	}
-
-	return nil
-}
-
-// registerBuiltinJobs registers the retention janitor and any other system jobs.
-func (m *Manager) registerBuiltinJobs() error {
-	janitorDef := CronJob{
-		Name:     "janitor",
-		Schedule: "@daily",
-		Task:     janitorTask,
-	}
-	return m.UpsertDefinitions("_system", []CronJob{janitorDef})
-}
-
-func janitorTask(db *sql.DB, _ []byte) (string, error) {
-	res, err := db.Exec(
-		`DELETE FROM job_runs WHERE created_at < datetime('now', '-30 days')`,
-	)
-	if err != nil {
-		return "", err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return "No old job runs to clean up", nil
-	}
-	return fmt.Sprintf("Cleaned up %d old job runs", n), nil
-}
-
-// Start begins the job system: zombie recovery, scheduler goroutines, and workers.
-// It assumes UpsertDefinitions has already been called for all plugins.
+// Start begins the job system: builtin jobs, zombie recovery, scheduler
+// goroutines, the watchdog, and the worker lanes. It assumes
+// UpsertDefinitions has already been called for all plugins and system
+// job sets.
 func (m *Manager) Start() error {
 	if err := m.registerBuiltinJobs(); err != nil {
-		return fmt.Errorf("register builtin jobs: %w", err)
+		return fmtError("register builtin jobs", err)
 	}
 
 	if err := m.zombieRecovery(); err != nil {
 		return err
 	}
 
-	log.Printf("jobs: starting manager workers=%d registered_definitions=%d", m.workers, m.registeredDefinitionCount())
+	log.Printf("jobs: starting manager workers=%d fast_workers=%d registered_definitions=%d",
+		m.workers, m.fastWorker, m.registeredDefinitionCount())
 
-	// Launch scheduler goroutines for each job definition.
+	// Launch a scheduler goroutine for every enabled cron definition.
 	rows, err := m.db.Query(`SELECT id, schedule FROM job_definitions WHERE enabled = 1`)
 	if err != nil {
-		return fmt.Errorf("load job definitions: %w", err)
+		return fmtError("load job definitions", err)
 	}
 	defer rows.Close()
 
@@ -292,14 +328,13 @@ func (m *Manager) Start() error {
 		var id int64
 		var schedule string
 		if err := rows.Scan(&id, &schedule); err != nil {
-			return fmt.Errorf("scan job definition: %w", err)
+			return fmtError("scan job definition", err)
 		}
-		meta := m.lookupDefinition(id)
 		// Empty schedule means ad-hoc only (no cron), skip scheduler.
 		if schedule == "" {
-			log.Printf("jobs: scheduler skipped for ad-hoc definition %s", formatJobMeta(meta))
 			continue
 		}
+		meta := m.lookupDefinition(id)
 		if !m.hasTask(id) {
 			log.Printf("jobs: scheduler skipped for unregistered definition %s schedule=%q", formatJobMeta(meta), schedule)
 			continue
@@ -308,16 +343,24 @@ func (m *Manager) Start() error {
 		go m.runScheduler(id, schedule, &wg)
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return fmtError("iterate job definitions", err)
 	}
 
-	// Launch worker goroutines.
+	// Watchdog: timeouts, lost claims, delayed-retry wakeups.
+	wg.Add(1)
+	go m.runWatchdog(&wg)
+
+	// Worker lanes: normal workers serve everything (high priority
+	// first); fast workers only serve PriorityHigh runs.
 	for i := 0; i < m.workers; i++ {
 		wg.Add(1)
-		go m.runWorker(i, &wg)
+		go m.runWorker(i, false, &wg)
+	}
+	for i := 0; i < m.fastWorker; i++ {
+		wg.Add(1)
+		go m.runWorker(1000+i, true, &wg)
 	}
 
-	// When Stop is called, wait for all goroutines to finish.
 	go func() {
 		wg.Wait()
 		close(m.done)
@@ -326,482 +369,30 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// Stop signals all goroutines to stop and waits for them to finish (with a 30s timeout).
+// Stop signals all goroutines to stop, cancels the contexts of running
+// tasks, and waits for workers to finish (with a 30 s timeout). Tasks
+// that observe their context finalize as cancelled; leftover "running"
+// rows are reset to planned by the next startup's zombie recovery. Stop
+// is idempotent.
 func (m *Manager) Stop() {
-	close(m.stop)
-	select {
-	case <-m.done:
-		log.Printf("jobs: all workers stopped cleanly")
-	case <-time.After(30 * time.Second):
-		log.Printf("jobs: timeout waiting for workers to stop")
-	}
-}
+	m.stopOnce.Do(func() {
+		close(m.stop)
 
-// insertPlannedRun inserts a planned run for jobID with the given payload and
-// retry count. If an identical run (same job_id + payload) is already planned
-// or running, it returns that run's ID with duplicate=true instead of inserting.
-// The unique partial index idx_job_runs_active_unique makes this race-free.
-func (m *Manager) insertPlannedRun(jobID int64, payload *string, retryCount int) (runID int64, duplicate bool, err error) {
-	res, err := m.db.Exec(
-		`INSERT INTO job_runs (job_id, status, payload, retry_count) VALUES (?, ?, ?, ?)`,
-		jobID, StatusPlanned, payload, retryCount,
-	)
-	if err == nil {
-		id, _ := res.LastInsertId()
-		return id, false, nil
-	}
-	// The unique index rejected the insert: an identical active run exists.
-	// `payload IS ?` matches both NULL (never a conflict, defensive) and TEXT payloads.
-	var existing int64
-	if lookupErr := m.db.QueryRow(
-		`SELECT id FROM job_runs WHERE job_id = ? AND payload IS ? AND status IN (?, ?) LIMIT 1`,
-		jobID, payload, StatusPlanned, StatusRunning,
-	).Scan(&existing); lookupErr == nil {
-		return existing, true, nil
-	}
-	return 0, false, err
-}
-
-// Enqueue creates a new planned job run and returns the run ID.
-// payload can be nil for cron-triggered jobs.
-func (m *Manager) Enqueue(pluginID, jobName string, payload []byte) (int64, error) {
-	var jobID int64
-	err := m.db.QueryRow(
-		`SELECT id FROM job_definitions WHERE plugin_id = ? AND name = ?`,
-		pluginID, jobName,
-	).Scan(&jobID)
-	if err != nil {
-		return 0, fmt.Errorf("job definition %s/%s not found: %w", pluginID, jobName, err)
-	}
-
-	var payloadStr *string
-	if payload != nil {
-		s := string(payload)
-		payloadStr = &s
-	}
-
-	id, duplicate, err := m.insertPlannedRun(jobID, payloadStr, 0)
-	if err != nil {
-		return 0, fmt.Errorf("enqueue job run: %w", err)
-	}
-	meta := m.lookupDefinition(jobID)
-	if duplicate {
-		log.Printf("jobs: enqueue skipped run=%d %s (identical active run exists)", id, formatJobMeta(meta))
-		return id, nil
-	}
-	log.Printf("jobs: enqueued run=%d %s payload_bytes=%d payload_preview=%q", id, formatJobMeta(meta), len(payload), previewText(string(payload), 160))
-	m.emitEvent(RunEvent{Type: "enqueued", RunID: id, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
-	return id, nil
-}
-
-// ListRuns returns recent job runs (last N) with the pending count.
-func (m *Manager) ListRuns(limit int) (*ListResponse, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-
-	rows, err := m.db.Query(
-		`SELECT jr.id, jd.plugin_id, jd.name, jr.status, jr.retry_count, jr.payload,
-		        jr.started_at, jr.finished_at, jr.error, jr.result, jr.created_at
-		 FROM job_runs jr
-		 JOIN job_definitions jd ON jd.id = jr.job_id
-		 ORDER BY jr.created_at DESC
-		 LIMIT ?`, limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list job runs: %w", err)
-	}
-	defer rows.Close()
-
-	runs := make([]Run, 0)
-	for rows.Next() {
-		var r Run
-		var pluginID, jobName, status string
-		var startedAt, finishedAt, errStr, resultStr, payloadStr *string
-		if err := rows.Scan(&r.ID, &pluginID, &jobName, &status, &r.RetryCount, &payloadStr,
-			&startedAt, &finishedAt, &errStr, &resultStr, &r.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan job run: %w", err)
+		// Cancel running tasks so wedged tasks let go promptly; the
+		// workers then finalize the runs as cancelled (no auto-retry —
+		// cron jobs re-enqueue on their next tick anyway).
+		m.activeMu.Lock()
+		for _, ar := range m.active {
+			ar.cancel()
 		}
-		r.PluginID = pluginID
-		r.JobName = jobName
-		r.Status = status
-		if payloadStr != nil {
-			r.Payload = json.RawMessage(*payloadStr)
-		}
-		r.StartedAt = parseTimePtr(startedAt)
-		r.FinishedAt = parseTimePtr(finishedAt)
-		if errStr != nil {
-			r.Error = errStr
-		}
-		if resultStr != nil {
-			r.Result = resultStr
-		}
-		runs = append(runs, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var pendingCount int
-	err = m.db.QueryRow(
-		`SELECT COUNT(*) FROM job_runs WHERE status IN (?, ?)`,
-		StatusPlanned, StatusRunning,
-	).Scan(&pendingCount)
-	if err != nil {
-		return nil, fmt.Errorf("count pending jobs: %w", err)
-	}
-
-	return &ListResponse{Runs: runs, PendingCount: pendingCount}, nil
-}
-
-// RetryRun re-queues an errored or cancelled run by inserting a new planned row
-// carrying one more retry than the run it replaces.
-func (m *Manager) RetryRun(runID int64) (int64, error) {
-	var jobID int64
-	var status string
-	var payload *string
-	var retryCount int
-	err := m.db.QueryRow(
-		`SELECT job_id, status, payload, retry_count FROM job_runs WHERE id = ?`, runID,
-	).Scan(&jobID, &status, &payload, &retryCount)
-	if err != nil {
-		return 0, fmt.Errorf("retry: %w", err)
-	}
-	if status != StatusErrored && status != StatusCancelled {
-		return 0, fmt.Errorf("retry: run %d has status %q, can only retry errored or cancelled runs", runID, status)
-	}
-
-	id, duplicate, err := m.insertPlannedRun(jobID, payload, retryCount+1)
-	if err != nil {
-		return 0, fmt.Errorf("retry insert: %w", err)
-	}
-	meta := m.lookupDefinition(jobID)
-	if duplicate {
-		log.Printf("jobs: retry skipped run=%d (identical active run=%d exists)", runID, id)
-		return id, nil
-	}
-	log.Printf("jobs: retried run=%d as run=%d %s payload_bytes=%d payload_preview=%q", runID, id, formatJobMeta(meta), len(derefString(payload)), previewText(derefString(payload), 160))
-	m.emitEvent(RunEvent{Type: "retried", RunID: id, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
-	return id, nil
-}
-
-// CancelRun cancels a planned (not yet running) job run.
-func (m *Manager) CancelRun(runID int64) error {
-	res, err := m.db.Exec(
-		`UPDATE job_runs
-		 SET status = 'cancelled', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		 WHERE id = ? AND status = 'planned'`,
-		runID,
-	)
-	if err != nil {
-		return fmt.Errorf("cancel: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("cancel: run %d not found or not in planned status", runID)
-	}
-	var jobID int64
-	_ = m.db.QueryRow(`SELECT job_id FROM job_runs WHERE id = ?`, runID).Scan(&jobID)
-	meta := m.lookupDefinition(jobID)
-	log.Printf("jobs: cancelled run=%d %s", runID, formatJobMeta(meta))
-	m.emitEvent(RunEvent{Type: "cancelled", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusCancelled})
-	return nil
-}
-
-// runScheduler inserts a planned job_run row at each tick for a given definition.
-func (m *Manager) runScheduler(defID int64, schedule string, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	meta := m.lookupDefinition(defID)
-	d, ok := parseSimpleSchedule(schedule)
-	if !ok {
-		log.Printf("jobs: scheduler unsupported %s schedule=%q", formatJobMeta(meta), schedule)
-		return
-	}
-
-	log.Printf("jobs: scheduler started %s schedule=%q", formatJobMeta(meta), schedule)
-
-	for {
-		// Calculate next tick.
-		var sleep time.Duration
-		if strings.HasPrefix(schedule, "@every ") {
-			sleep = d
-		} else {
-			now := time.Now()
-			next := now.Truncate(d).Add(d)
-			if next.Before(now) || next.Equal(now) {
-				next = next.Add(d)
-			}
-			sleep = next.Sub(now)
-		}
+		m.activeMu.Unlock()
+		m.kick()
 
 		select {
-		case <-m.stop:
-			log.Printf("jobs: scheduler stopping %s", formatJobMeta(meta))
-			return
-		case <-time.After(sleep):
+		case <-m.done:
+			log.Printf("jobs: all workers stopped cleanly")
+		case <-time.After(30 * time.Second):
+			log.Printf("jobs: timeout waiting for workers to stop")
 		}
-
-		// Check if definition still exists and is enabled.
-		var enabled bool
-		err := m.db.QueryRow(`SELECT enabled FROM job_definitions WHERE id = ?`, defID).Scan(&enabled)
-		if err != nil {
-			log.Printf("jobs: scheduler lookup failed %s: %v", formatJobMeta(meta), err)
-			continue
-		}
-		if !enabled {
-			log.Printf("jobs: scheduler saw disabled definition %s", formatJobMeta(meta))
-			continue
-		}
-
-		res, err := m.db.Exec(`INSERT INTO job_runs (job_id, status) VALUES (?, ?)`, defID, StatusPlanned)
-		if err != nil {
-			log.Printf("jobs: scheduler enqueue failed %s: %v", formatJobMeta(meta), err)
-			continue
-		}
-		runID, _ := res.LastInsertId()
-		log.Printf("jobs: scheduler enqueued run=%d %s", runID, formatJobMeta(meta))
-		m.emitEvent(RunEvent{Type: "enqueued", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusPlanned})
-	}
-}
-
-// runWorker is a persistent worker goroutine that polls for planned jobs.
-func (m *Manager) runWorker(id int, wg *sync.WaitGroup) {
-	defer wg.Done()
-	log.Printf("jobs: worker=%d started", id)
-
-	for {
-		select {
-		case <-m.stop:
-			log.Printf("jobs: worker=%d stopping", id)
-			return
-		default:
-		}
-
-		// Atomic dequeue: UPDATE ... RETURNING (Kleppmann, 2017).
-		// go-sqlite3 doesn't support RETURNING, so we use a two-step approach
-		// wrapped in an immediate transaction for atomicity.
-		jobID, runID, payload, ok := m.atomicDequeue()
-		if !ok {
-			// No jobs available, sleep before polling again.
-			select {
-			case <-m.stop:
-				return
-			case <-time.After(1 * time.Second):
-			}
-			continue
-		}
-
-		task, meta, hasTask := m.taskAndDefinition(jobID)
-		if meta.ID == 0 {
-			meta = m.lookupDefinition(jobID)
-		}
-		log.Printf("jobs: worker=%d claimed run=%d %s payload_bytes=%d payload_preview=%q", id, runID, formatJobMeta(meta), len(payload), previewText(string(payload), 160))
-		m.emitEvent(RunEvent{Type: "running", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusRunning})
-
-		if !hasTask || task == nil {
-			log.Printf("jobs: worker=%d no task registered run=%d %s", id, runID, formatJobMeta(meta))
-			m.db.Exec(
-				`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
-				StatusErrored, "No task registered for this job definition", runID,
-			)
-			errMsg := "No task registered for this job definition"
-			m.emitEvent(RunEvent{Type: "errored", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusErrored, Error: &errMsg})
-			continue
-		}
-
-		// Execute the task with panic recovery.
-		func() {
-			started := time.Now()
-			defer func() {
-				if r := recover(); r != nil {
-					errMsg := fmt.Sprintf("panic: %v", r)
-					log.Printf("jobs: worker=%d panicked run=%d %s duration=%s panic=%q", id, runID, formatJobMeta(meta), time.Since(started), previewText(errMsg, 240))
-					m.db.Exec(
-						`UPDATE job_runs SET status = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), error = ? WHERE id = ?`,
-						StatusErrored, errMsg, runID,
-					)
-					m.emitEvent(RunEvent{Type: "errored", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusErrored, Error: &errMsg})
-				}
-			}()
-
-			result, taskErr := task(m.db, payload)
-			now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-			duration := time.Since(started)
-			if taskErr != nil {
-				errStr := taskErr.Error()
-				log.Printf("jobs: worker=%d errored run=%d %s duration=%s error=%q", id, runID, formatJobMeta(meta), duration, previewText(errStr, 240))
-				m.db.Exec(
-					`UPDATE job_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?`,
-					StatusErrored, now, errStr, runID,
-				)
-				m.emitEvent(RunEvent{Type: "errored", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusErrored, Error: &errStr})
-			} else {
-				log.Printf("jobs: worker=%d done run=%d %s duration=%s result=%q", id, runID, formatJobMeta(meta), duration, previewText(result, 240))
-				m.db.Exec(
-					`UPDATE job_runs SET status = ?, finished_at = ?, result = ? WHERE id = ?`,
-					StatusDone, now, result, runID,
-				)
-				m.emitEvent(RunEvent{Type: "done", RunID: runID, PluginID: meta.PluginID, JobName: meta.Name, Status: StatusDone, Result: &result})
-			}
-		}()
-	}
-}
-
-// atomicDequeue atomically claims the next planned job run.
-// Uses a compare-and-swap (CAS) pattern: SELECT a candidate, then
-// UPDATE WHERE id=? AND status='planned'. SQLite serializes writes,
-// so only one worker's UPDATE succeeds — the loser retries (Kleppmann, 2017).
-func (m *Manager) atomicDequeue() (jobID, runID int64, payload []byte, ok bool) {
-	// Retry up to 3 times to handle CAS conflicts.
-	for attempt := 0; attempt < 3; attempt++ {
-		// Step 1: Pick a candidate (non-locking read).
-		var pld *string
-		err := m.db.QueryRow(
-			`SELECT id, job_id, payload FROM job_runs
-			 WHERE status = ?
-			 ORDER BY created_at ASC
-			 LIMIT 1`,
-			StatusPlanned,
-		).Scan(&runID, &jobID, &pld)
-		if err != nil {
-			return 0, 0, nil, false
-		}
-
-		// Step 2: Atomically claim it. The WHERE status = 'planned' guard ensures
-		// that if another worker already claimed it, RowsAffected will be 0.
-		res, err := m.db.Exec(
-			`UPDATE job_runs
-			 SET status = ?, started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			 WHERE id = ? AND status = ?`,
-			StatusRunning, runID, StatusPlanned,
-		)
-		if err != nil {
-			log.Printf("jobs: atomic dequeue: update: %v", err)
-			continue
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			// Another worker claimed this row. Try the next one.
-			continue
-		}
-
-		if pld != nil {
-			payload = []byte(*pld)
-		}
-		return jobID, runID, payload, true
-	}
-	return 0, 0, nil, false
-}
-
-// --- Helpers ---
-
-func (m *Manager) registeredDefinitionCount() int {
-	m.tasksMu.RLock()
-	defer m.tasksMu.RUnlock()
-	return len(m.defs)
-}
-
-func (m *Manager) hasTask(jobID int64) bool {
-	m.tasksMu.RLock()
-	defer m.tasksMu.RUnlock()
-	_, ok := m.tasks[jobID]
-	return ok
-}
-
-func (m *Manager) taskAndDefinition(jobID int64) (func(*sql.DB, []byte) (string, error), jobDefMeta, bool) {
-	m.tasksMu.RLock()
-	defer m.tasksMu.RUnlock()
-	task, ok := m.tasks[jobID]
-	meta := m.defs[jobID]
-	return task, meta, ok
-}
-
-func (m *Manager) emitEvent(evt RunEvent) {
-	if m == nil {
-		return
-	}
-	m.observerMu.RLock()
-	observer := m.observer
-	m.observerMu.RUnlock()
-	if observer != nil {
-		observer(evt)
-	}
-}
-
-func (m *Manager) lookupDefinition(jobID int64) jobDefMeta {
-	m.tasksMu.RLock()
-	meta, ok := m.defs[jobID]
-	m.tasksMu.RUnlock()
-	if ok {
-		return meta
-	}
-
-	meta.ID = jobID
-	_ = m.db.QueryRow(
-		`SELECT plugin_id, name, schedule FROM job_definitions WHERE id = ?`,
-		jobID,
-	).Scan(&meta.PluginID, &meta.Name, &meta.Schedule)
-	return meta
-}
-
-func formatJobMeta(meta jobDefMeta) string {
-	if meta.ID == 0 && meta.PluginID == "" && meta.Name == "" {
-		return "def_id=0"
-	}
-	if meta.PluginID == "" && meta.Name == "" {
-		return fmt.Sprintf("def_id=%d", meta.ID)
-	}
-	return fmt.Sprintf("job=%s/%s def_id=%d", meta.PluginID, meta.Name, meta.ID)
-}
-
-func previewText(s string, maxRunes int) string {
-	if maxRunes <= 0 || s == "" {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	return string(r[:maxRunes]) + "..."
-}
-
-func derefString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func parseTimePtr(s *string) *time.Time {
-	if s == nil {
-		return nil
-	}
-	t, err := time.Parse("2006-01-02T15:04:05Z", *s)
-	if err != nil {
-		// Try with fractional seconds.
-		t, err = time.Parse("2006-01-02T15:04:05.000Z", *s)
-		if err != nil {
-			return nil
-		}
-	}
-	return &t
-}
-
-// parseSimpleSchedule parses the same schedule formats as the old scheduler.
-func parseSimpleSchedule(schedule string) (time.Duration, bool) {
-	switch {
-	case strings.HasPrefix(schedule, "@every "):
-		d, err := time.ParseDuration(strings.TrimPrefix(schedule, "@every "))
-		if err != nil {
-			return 0, false
-		}
-		return d, true
-	case schedule == "@daily":
-		return 24 * time.Hour, true
-	case schedule == "@hourly":
-		return time.Hour, true
-	default:
-		return 0, false
-	}
+	})
 }

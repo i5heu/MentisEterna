@@ -19,6 +19,7 @@ import (
 
 	"github.com/i5heu/MentisEterna/internal/config"
 	"github.com/i5heu/MentisEterna/internal/db"
+	"github.com/i5heu/MentisEterna/internal/jobs"
 )
 
 // --- Fakes ---
@@ -930,7 +931,7 @@ func TestPendingInlineCleanupDeletesAbandonedFile(t *testing.T) {
 	svc.DB.Exec(`UPDATE files SET pending_inline_at = ? WHERE id = ?`, pastTime, rec.ID)
 
 	// Run cleanup
-	result, err := svc.PendingInlineCleanupTask(svc.DB.DB, nil)
+	result, err := svc.PendingInlineCleanupTask(context.Background(), &jobs.RunContext{DB: svc.DB.DB})
 	if err != nil {
 		t.Fatalf("PendingInlineCleanupTask: %v", err)
 	}

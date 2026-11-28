@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/searchindex"
 	internaltags "github.com/i5heu/MentisEterna/internal/tags"
@@ -1249,7 +1250,8 @@ func noteIDAndAction(w http.ResponseWriter, r *http.Request) (int64, string, boo
 
 // syncEmbeddingTask is the job task handler for vector embedding generation.
 // It re-reads the current note state so title/path/tag changes are indexed too.
-func (s *Server) syncEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) syncEmbeddingTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.llm == nil {
 		return "", fmt.Errorf("vss_index: no embedding client configured")
 	}
@@ -1322,7 +1324,8 @@ func (s *Server) generateTitleForNote(db *sql.DB, noteID int64, body string) (st
 
 // generateTitleTask is the job task handler for auto-generating a note title.
 // It accepts a JSON payload with "note_id" and "body" fields.
-func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) generateTitleTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.titleClient == nil {
 		return "", fmt.Errorf("generate_title: no chat client configured")
 	}
@@ -1347,7 +1350,7 @@ func (s *Server) generateTitleTask(db *sql.DB, payload []byte) (string, error) {
 // It performs a safe SQLite snapshot, encrypts it with AES-256-GCM, and
 // uploads to all configured S3 endpoints. The job payload is unused — the
 // task always performs a full backup.
-func (s *Server) backupTask(db *sql.DB, _ []byte) (string, error) {
+func (s *Server) backupTask(_ context.Context, _ *jobs.RunContext) (string, error) {
 	if s.backupService == nil {
 		return "", fmt.Errorf("backup: service not configured")
 	}
@@ -1362,7 +1365,7 @@ func (s *Server) backupTask(db *sql.DB, _ []byte) (string, error) {
 // purgeTask is the job task handler for backup retention cleanup.
 // It lists all backups across all configured S3 endpoints, applies the
 // default retention policy, and deletes expired backups.
-func (s *Server) purgeTask(db *sql.DB, _ []byte) (string, error) {
+func (s *Server) purgeTask(_ context.Context, _ *jobs.RunContext) (string, error) {
 	if s.backupService == nil {
 		return "", fmt.Errorf("backup/purge: service not configured")
 	}
@@ -1376,7 +1379,8 @@ func (s *Server) purgeTask(db *sql.DB, _ []byte) (string, error) {
 
 // ocrFileTask is the job task handler for OCR on uploaded files.
 // It accepts a JSON payload with "file_id" field.
-func (s *Server) ocrFileTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) ocrFileTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	payload := rt.Payload
 	if s.ocrClient == nil || s.mediaService == nil {
 		return "", fmt.Errorf("ocr_file: OCR client or media service not configured")
 	}
@@ -1412,7 +1416,8 @@ func (s *Server) enqueueOCR(fileID int64) {
 
 // syncOCREmbeddingTask generates a vector embedding for OCR text and stores it
 // in vss_files_ocr (rowid = file_id). The payload is {"file_id": N, "ocr_text": "..."}.
-func (s *Server) syncOCREmbeddingTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) syncOCREmbeddingTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.llm == nil {
 		return "", fmt.Errorf("ocr_embedding: no embedding client configured")
 	}
@@ -1464,7 +1469,8 @@ func (s *Server) enqueueOCREmbedding(fileID int64, ocrText string) {
 
 // sttFileTask is the job task handler for STT on uploaded audio files.
 // It accepts a JSON payload with "file_id" field.
-func (s *Server) sttFileTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) sttFileTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	payload := rt.Payload
 	if s.sttClient == nil || s.mediaService == nil {
 		return "", fmt.Errorf("stt_file: STT client or media service not configured")
 	}
@@ -1500,7 +1506,8 @@ func (s *Server) enqueueSTT(fileID int64) {
 
 // syncSTTEmbeddingTask generates a vector embedding for STT text and stores it
 // in vss_files_stt (rowid = file_id). The payload is {"file_id": N, "stt_text": "..."}.
-func (s *Server) syncSTTEmbeddingTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) syncSTTEmbeddingTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.llm == nil {
 		return "", fmt.Errorf("stt_embedding: no embedding client configured")
 	}
@@ -1685,7 +1692,8 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-func (s *Server) generateAutoTagsTask(db *sql.DB, payload []byte) (string, error) {
+func (s *Server) generateAutoTagsTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db, payload := rt.DB, rt.Payload
 	if s.autoTagger == nil {
 		return "", fmt.Errorf("generate_auto_tags: no auto tagger configured")
 	}
@@ -1713,7 +1721,8 @@ func (s *Server) generateAutoTagsTask(db *sql.DB, payload []byte) (string, error
 	return fmt.Sprintf("Generated %d auto tags for note %d", len(autoTags), p.NoteID), nil
 }
 
-func (s *Server) refreshAllAutoTagsTask(db *sql.DB, _ []byte) (string, error) {
+func (s *Server) refreshAllAutoTagsTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db := rt.DB
 	if s.autoTagger == nil {
 		return "", fmt.Errorf("refresh_all_auto_tags: no auto tagger configured")
 	}

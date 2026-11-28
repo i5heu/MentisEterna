@@ -32,8 +32,8 @@ import (
 	"strings"
 	"sync"
 
-	internaltags "github.com/i5heu/MentisEterna/internal/tags"
 	"github.com/i5heu/MentisEterna/internal/config"
+	internaltags "github.com/i5heu/MentisEterna/internal/tags"
 	gosqlite3 "github.com/mattn/go-sqlite3"
 )
 
@@ -235,26 +235,38 @@ func (d *DB) ensureAuthTables() error {
 func (d *DB) ensureJobTables() error {
 	_, err := d.Exec(`
 		CREATE TABLE IF NOT EXISTS job_definitions (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			plugin_id   TEXT    NOT NULL,
-			name        TEXT    NOT NULL,
-			schedule    TEXT    NOT NULL,
-			enabled     INTEGER NOT NULL DEFAULT 1,
-			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			plugin_id      TEXT    NOT NULL,
+			name           TEXT    NOT NULL,
+			schedule       TEXT    NOT NULL,
+			enabled        INTEGER NOT NULL DEFAULT 1,
+			priority       INTEGER NOT NULL DEFAULT 0,
+			max_parallel   INTEGER NOT NULL DEFAULT 1,
+			timeout_seconds INTEGER NOT NULL DEFAULT 0,
+			max_retries    INTEGER NOT NULL DEFAULT 0,
+			created_at     DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 			UNIQUE(plugin_id, name)
 		);
 
 		CREATE TABLE IF NOT EXISTS job_runs (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			job_id      INTEGER NOT NULL REFERENCES job_definitions(id) ON DELETE CASCADE,
-			status      TEXT    NOT NULL DEFAULT 'planned',
-			payload     TEXT,
-			retry_count INTEGER NOT NULL DEFAULT 0,
-			started_at  DATETIME,
-			finished_at DATETIME,
-			error       TEXT,
-			result      TEXT,
-			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id          INTEGER NOT NULL REFERENCES job_definitions(id) ON DELETE CASCADE,
+			status          TEXT    NOT NULL DEFAULT 'planned',
+			payload         TEXT,
+			retry_count     INTEGER NOT NULL DEFAULT 0,
+			priority        INTEGER NOT NULL DEFAULT 0,
+			next_run_at     DATETIME,
+			duration_ms     INTEGER,
+			worker_id       INTEGER,
+			progress_done   INTEGER,
+			progress_total  INTEGER,
+			progress_message TEXT,
+			progress_at     DATETIME,
+			started_at      DATETIME,
+			finished_at     DATETIME,
+			error           TEXT,
+			result          TEXT,
+			created_at      DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_job_runs_status ON job_runs(status);
@@ -296,6 +308,99 @@ func (d *DB) ensureJobTables() error {
 				return err
 			}
 		}
+	}
+
+	// Job system v2: execution metadata on definitions (priority lane,
+	// parallelism cap, timeout, auto-retries) and run observability
+	// (priority, delayed-retry due time, live progress, duration, worker).
+	defCols, derr := d.tableColumns("job_definitions")
+	if derr == nil {
+		v2DefCols := [][2]string{
+			{"priority", "INTEGER NOT NULL DEFAULT 0"},
+			{"max_parallel", "INTEGER NOT NULL DEFAULT 1"},
+			{"timeout_seconds", "INTEGER NOT NULL DEFAULT 0"},
+			{"max_retries", "INTEGER NOT NULL DEFAULT 0"},
+		}
+		for _, c := range v2DefCols {
+			if !defCols[c[0]] {
+				if _, err := d.Exec(`ALTER TABLE job_definitions ADD COLUMN ` + c[0] + ` ` + c[1]); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if cerr == nil {
+		v2RunCols := [][2]string{
+			{"priority", "INTEGER NOT NULL DEFAULT 0"},
+			{"next_run_at", "DATETIME"},
+			{"duration_ms", "INTEGER"},
+			{"worker_id", "INTEGER"},
+			{"progress_done", "INTEGER"},
+			{"progress_total", "INTEGER"},
+			{"progress_message", "TEXT"},
+			{"progress_at", "DATETIME"},
+		}
+		for _, c := range v2RunCols {
+			if !cols[c[0]] {
+				if _, err := d.Exec(`ALTER TABLE job_runs ADD COLUMN ` + c[0] + ` ` + c[1]); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	// Per-definition stats ledger: aggregates every finish (success
+	// rate, durations, last result) and survives the 30-day run-retention
+	// janitor.
+	if _, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS job_definition_stats (
+			job_id            INTEGER PRIMARY KEY REFERENCES job_definitions(id) ON DELETE CASCADE,
+			runs_total        INTEGER NOT NULL DEFAULT 0,
+			runs_done         INTEGER NOT NULL DEFAULT 0,
+			runs_errored      INTEGER NOT NULL DEFAULT 0,
+			runs_cancelled    INTEGER NOT NULL DEFAULT 0,
+			auto_retries      INTEGER NOT NULL DEFAULT 0,
+			total_duration_ms INTEGER NOT NULL DEFAULT 0,
+			min_duration_ms   INTEGER,
+			max_duration_ms   INTEGER,
+			last_finished_at  DATETIME,
+			last_status       TEXT,
+			last_result       TEXT,
+			last_error        TEXT
+		);
+	`); err != nil {
+		return err
+	}
+
+	// One-time backfill: seed ledger rows for definitions that already
+	// have run history (INSERT OR IGNORE keeps this idempotent;
+	// incremental bumps take over from here). Old runs predating v2
+	// have no duration_ms, so duration aggregates start accruing from
+	// the first v2 finish onward.
+	if _, err := d.Exec(`
+		INSERT OR IGNORE INTO job_definition_stats
+		  (job_id, runs_total, runs_done, runs_errored, runs_cancelled,
+		   auto_retries, total_duration_ms, min_duration_ms, max_duration_ms,
+		   last_finished_at, last_status)
+		SELECT r.job_id,
+		       COUNT(*),
+		       SUM(CASE WHEN r.status = 'done' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN r.status = 'errored' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN r.status = 'cancelled' THEN 1 ELSE 0 END),
+		       0,
+		       COALESCE(SUM(CASE WHEN r.status = 'done' THEN r.duration_ms ELSE 0 END), 0),
+		       MIN(CASE WHEN r.status = 'done' THEN r.duration_ms END),
+		       MAX(CASE WHEN r.status = 'done' THEN r.duration_ms END),
+		       MAX(r.finished_at),
+		       (SELECT r2.status FROM job_runs r2
+		         WHERE r2.job_id = r.job_id
+		           AND r2.status IN ('done','errored','cancelled')
+		         ORDER BY COALESCE(r2.finished_at, r2.created_at) DESC, r2.id DESC
+		         LIMIT 1)
+		FROM job_runs r
+		GROUP BY r.job_id;
+	`); err != nil {
+		return err
 	}
 
 	return nil

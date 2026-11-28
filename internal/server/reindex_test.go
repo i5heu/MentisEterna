@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,7 +68,7 @@ func TestReindexSTTEnqueuesErroredAudioMP4(t *testing.T) {
 
 	// Simulate an errored STT run: the task fails against the model and
 	// persists the error into files_stt.
-	if _, err := s.sttFileTask(s.db.DB, []byte(fmt.Sprintf(`{"file_id":%d}`, fileID))); err != nil {
+	if _, err := s.sttFileTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: []byte(fmt.Sprintf(`{"file_id":%d}`, fileID))}); err != nil {
 		t.Fatalf("sttFileTask (errored run): %v", err)
 	}
 	var errMsg string
@@ -114,7 +115,7 @@ func TestReindexSTTEnqueuesErroredAudioMP4(t *testing.T) {
 	// Once the model recovers, the re-enqueued run must clear the error and
 	// store the transcript.
 	s.sttClient = mockSTT{text: "hello world"}
-	if _, err := s.sttFileTask(s.db.DB, []byte(fmt.Sprintf(`{"file_id":%d}`, fileID))); err != nil {
+	if _, err := s.sttFileTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: []byte(fmt.Sprintf(`{"file_id":%d}`, fileID))}); err != nil {
 		t.Fatalf("sttFileTask (recovered run): %v", err)
 	}
 	var sttText string

@@ -83,11 +83,18 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 		log.Fatalf("webauthn: %v", err)
 	}
 
-	jobMgr := jobs.NewManager(d.DB, config.Get().Jobs.Workers)
+	jobMgr := jobs.NewManager(d.DB, config.Get().Jobs.Workers, config.Get().Jobs.FastWorkers)
 	liveHub := newLiveHub()
 	jobMgr.SetObserver(func(evt jobs.RunEvent) {
+		// Progress events stream on their own ws type (the job queue
+		// merges them into the running row without a refetch); every
+		// other lifecycle event prompts a queue refresh.
+		liveType := liveTypeJobsChange
+		if evt.Type == "progress" {
+			liveType = liveTypeJobsProgress
+		}
 		liveHub.broadcast(liveMessage{
-			Type:      liveTypeJobsChange,
+			Type:      liveType,
 			Timestamp: liveTimestamp(),
 			Job:       &evt,
 		})
@@ -295,13 +302,17 @@ func (s *Server) Start(ctx context.Context) error {
 		if len(pluginJobs) == 0 {
 			continue
 		}
-		// Convert notetype.CronJob → jobs.CronJob
+		// Convert notetype.CronJob → jobs.CronJob (same shape).
 		jobsForPlugin := make([]jobs.CronJob, len(pluginJobs))
 		for i, j := range pluginJobs {
 			jobsForPlugin[i] = jobs.CronJob{
-				Name:     j.Name,
-				Schedule: j.Schedule,
-				Task:     j.Task,
+				Name:        j.Name,
+				Schedule:    j.Schedule,
+				Priority:    j.Priority,
+				MaxParallel: j.MaxParallel,
+				Timeout:     j.Timeout,
+				MaxRetries:  j.MaxRetries,
+				Task:        j.Task,
 			}
 		}
 		if err := s.jobManager.UpsertDefinitions(plugin.ID(), jobsForPlugin); err != nil {
@@ -311,17 +322,23 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	// Register ad-hoc maintenance jobs (on-demand, not cron).
-	// Must happen before Start() so workers see the tasks.
+	// High priority + generous parallelism: these are per-note jobs the
+	// UI actively waits on. Must happen before Start() so workers see
+	// the tasks.
+	embeddingParallel := 4
+	llmTimeout := 30 * time.Minute
 	if s.llm != nil {
 		systemJobs := []jobs.CronJob{{
-			Name: "recalculate_recipe_ingredient_categories",
-			Task: s.recalculateRecipeIngredientCategoriesTask,
+			Name:        "recalculate_recipe_ingredient_categories",
+			MaxParallel: 2,
+			Timeout:     30 * time.Minute,
+			Task:        s.recalculateRecipeIngredientCategoriesTask,
 		}}
 		if s.db.VSSAvailable() {
 			systemJobs = append(systemJobs,
-				jobs.CronJob{Name: "vss_index", Task: s.syncEmbeddingTask},
-				jobs.CronJob{Name: "sync_ocr_embedding", Task: s.syncOCREmbeddingTask},
-				jobs.CronJob{Name: "sync_stt_embedding", Task: s.syncSTTEmbeddingTask},
+				jobs.CronJob{Name: "vss_index", Priority: jobs.PriorityHigh, MaxParallel: embeddingParallel, Timeout: llmTimeout, Task: s.syncEmbeddingTask},
+				jobs.CronJob{Name: "sync_ocr_embedding", Priority: jobs.PriorityHigh, MaxParallel: embeddingParallel, Timeout: llmTimeout, Task: s.syncOCREmbeddingTask},
+				jobs.CronJob{Name: "sync_stt_embedding", Priority: jobs.PriorityHigh, MaxParallel: embeddingParallel, Timeout: llmTimeout, Task: s.syncSTTEmbeddingTask},
 			)
 		}
 		if err := s.jobManager.RegisterAdHoc("_system", systemJobs); err != nil {
@@ -329,16 +346,22 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Register ad-hoc chat-model jobs.
+	// Register ad-hoc chat-model jobs — interactive latency, high lane.
 	if s.titleClient != nil || s.autoTagger != nil {
 		chatJobs := make([]jobs.CronJob, 0, 2)
 		if s.titleClient != nil {
-			chatJobs = append(chatJobs, jobs.CronJob{Name: "generate_title", Task: s.generateTitleTask})
+			chatJobs = append(chatJobs, jobs.CronJob{
+				Name:        "generate_title",
+				Priority:    jobs.PriorityHigh,
+				MaxParallel: 4,
+				Timeout:     llmTimeout,
+				Task:        s.generateTitleTask,
+			})
 		}
 		if s.autoTagger != nil {
 			chatJobs = append(chatJobs,
-				jobs.CronJob{Name: "generate_auto_tags", Task: s.generateAutoTagsTask},
-				jobs.CronJob{Name: "refresh_all_auto_tags", Task: s.refreshAllAutoTagsTask},
+				jobs.CronJob{Name: "generate_auto_tags", Priority: jobs.PriorityHigh, MaxParallel: 4, Timeout: llmTimeout, Task: s.generateAutoTagsTask},
+				jobs.CronJob{Name: "refresh_all_auto_tags", Timeout: 1 * time.Hour, Task: s.refreshAllAutoTagsTask},
 			)
 		}
 		if len(chatJobs) > 0 {
@@ -348,11 +371,14 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Register the ad-hoc LLM subtask generation job (on-demand, not cron).
+	// Register the ad-hoc LLM subtask generation job (interactive).
 	if s.subtaskGen != nil {
 		if err := s.jobManager.RegisterAdHoc("_system", []jobs.CronJob{{
-			Name: "generate_subtasks",
-			Task: s.generateSubTasksTask,
+			Name:        "generate_subtasks",
+			Priority:    jobs.PriorityHigh,
+			MaxParallel: 2,
+			Timeout:     llmTimeout,
+			Task:        s.generateSubTasksTask,
 		}}); err != nil {
 			log.Fatalf("Failed to register subtask generation job: %v", err)
 		}
@@ -362,18 +388,18 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.mediaService != nil {
 		s.mediaService.EnqueueFunc = s.jobManager.Enqueue
 		if err := s.jobManager.UpsertDefinitions("_media", []jobs.CronJob{
-			{Name: "repair_replicas", Schedule: "@every 30m", Task: s.mediaService.RepairSweepTask},
-			{Name: "cleanup_pending_inline", Schedule: "@every 1h", Task: s.mediaService.PendingInlineCleanupTask},
+			{Name: "repair_replicas", Schedule: "@every 30m", Timeout: 30 * time.Minute, MaxRetries: 3, Task: s.mediaService.RepairSweepTask},
+			{Name: "cleanup_pending_inline", Schedule: "@every 1h", Timeout: 30 * time.Minute, Task: s.mediaService.PendingInlineCleanupTask},
 		}); err != nil {
 			log.Fatalf("Failed to register media cron jobs: %v", err)
 		}
 		if err := s.jobManager.RegisterAdHoc("_media", []jobs.CronJob{
-			{Name: "repair_file_replica", Task: s.mediaService.RepairReplicaTask},
-			{Name: "delete_file_replica", Task: s.mediaService.DeleteReplicaTask},
-			{Name: "ocr_file", Task: s.ocrFileTask},
-			{Name: "stt_file", Task: s.sttFileTask},
-			{Name: "stt_to_note", Task: s.ingestSTTToNoteTask},
-			{Name: "ocr_to_note", Task: s.ingestOCRToNoteTask},
+			{Name: "repair_file_replica", Priority: jobs.PriorityHigh, MaxRetries: 3, Task: s.mediaService.RepairReplicaTask},
+			{Name: "delete_file_replica", Priority: jobs.PriorityHigh, Task: s.mediaService.DeleteReplicaTask},
+			{Name: "ocr_file", Priority: jobs.PriorityHigh, Timeout: llmTimeout, Task: s.ocrFileTask},
+			{Name: "stt_file", Priority: jobs.PriorityHigh, Timeout: llmTimeout, Task: s.sttFileTask},
+			{Name: "stt_to_note", Priority: jobs.PriorityHigh, Timeout: llmTimeout, Task: s.ingestSTTToNoteTask},
+			{Name: "ocr_to_note", Priority: jobs.PriorityHigh, Timeout: llmTimeout, Task: s.ingestOCRToNoteTask},
 		}); err != nil {
 			log.Fatalf("Failed to register media ad-hoc jobs: %v", err)
 		}
@@ -383,8 +409,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// Register encrypted backup and retention purge cron jobs.
 	if s.backupService != nil {
 		if err := s.jobManager.UpsertDefinitions("_backup", []jobs.CronJob{
-			{Name: "encrypted_backup", Schedule: "@every 12h", Task: s.backupTask},
-			{Name: "retention_purge", Schedule: "@every 24h", Task: s.purgeTask},
+			{Name: "encrypted_backup", Schedule: "@every 12h", Timeout: 1 * time.Hour, Task: s.backupTask},
+			{Name: "retention_purge", Schedule: "@every 24h", Timeout: 1 * time.Hour, Task: s.purgeTask},
 		}); err != nil {
 			log.Fatalf("Failed to register backup job: %v", err)
 		}
@@ -536,6 +562,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Job routes
 	mux.Handle("/jobs", protected(s.handleJobs))
+	mux.Handle("/jobs/stats", protected(s.handleJobStats))
 	mux.Handle("/jobs/", protected(s.handleJobByID))
 
 	// On-demand backup trigger
@@ -651,6 +678,21 @@ func listenerURL(addr string, tlsEnabled bool) string {
 }
 
 // --- Job Handlers ---
+
+// handleJobStats serves GET /jobs/stats: worker pools, queue depth,
+// 24 h window, and per-definition lifetime statistics.
+func (s *Server) handleJobStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	resp, err := s.jobManager.Stats()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

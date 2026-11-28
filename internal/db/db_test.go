@@ -390,3 +390,127 @@ func TestJobDedupeMigration(t *testing.T) {
 		t.Errorf("expected unique index idx_job_runs_active_unique, got %d", count)
 	}
 }
+
+// TestJobSystemV2Migration verifies that a pre-v2 job system (no
+// priority/max_parallel/timeout/max_retries on definitions, no
+// progress/scheduling/duration columns on runs, no stats ledger) is
+// migrated on open: columns are added, the job_definition_stats table
+// is created and backfilled from existing run history exactly once.
+func TestJobSystemV2Migration(t *testing.T) {
+	prePath := filepath.Join(t.TempDir(), "pre-v2.db")
+	pre, err := sql.Open("sqlite3", prePath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open pre db: %v", err)
+	}
+	// v1 schema: legacy definitions and runs tables.
+	if _, err := pre.Exec(`
+		CREATE TABLE job_definitions (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			plugin_id   TEXT    NOT NULL,
+			name        TEXT    NOT NULL,
+			schedule    TEXT    NOT NULL,
+			enabled     INTEGER NOT NULL DEFAULT 1,
+			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(plugin_id, name)
+		);
+		CREATE TABLE job_runs (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id      INTEGER NOT NULL REFERENCES job_definitions(id) ON DELETE CASCADE,
+			status      TEXT    NOT NULL DEFAULT 'planned',
+			payload     TEXT,
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			started_at  DATETIME,
+			finished_at DATETIME,
+			error       TEXT,
+			result      TEXT,
+			created_at  DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+	`); err != nil {
+		pre.Close()
+		t.Fatalf("create v1 schema: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO job_definitions (plugin_id, name, schedule) VALUES ('test', 'job', '@daily')`); err != nil {
+		pre.Close()
+		t.Fatalf("insert definition: %v", err)
+	}
+	// History: 2 done, 1 errored, 1 planned.
+	for range 2 {
+		if _, err := pre.Exec(`INSERT INTO job_runs (job_id, status, result) VALUES (1, 'done', 'ok')`); err != nil {
+			pre.Close()
+			t.Fatalf("insert done: %v", err)
+		}
+	}
+	if _, err := pre.Exec(`INSERT INTO job_runs (job_id, status, error) VALUES (1, 'errored', 'boom')`); err != nil {
+		pre.Close()
+		t.Fatalf("insert errored: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO job_runs (job_id, status) VALUES (1, 'planned')`); err != nil {
+		pre.Close()
+		t.Fatalf("insert planned: %v", err)
+	}
+	pre.Close()
+
+	// Open runs the v2 migration.
+	d, err := Open(prePath)
+	if err != nil {
+		t.Fatalf("open (migrate): %v", err)
+	}
+	defer d.Close()
+
+	// New run columns exist and default correctly.
+	var prio int
+	var nextRun, dur, progDone, progTotal, worker sql.NullInt64
+	if err := d.QueryRow(`SELECT priority, next_run_at, duration_ms, progress_done, progress_total, worker_id FROM job_runs WHERE status = 'planned'`).
+		Scan(&prio, &nextRun, &dur, &progDone, &progTotal, &worker); err != nil {
+		t.Fatalf("scan v2 run row: %v", err)
+	}
+	if prio != 0 || nextRun.Valid || dur.Valid || worker.Valid {
+		t.Fatalf("unexpected v2 defaults: prio=%d next=%v dur=%v worker=%v", prio, nextRun, dur, worker)
+	}
+	// New definition columns exist and default correctly.
+	var defPrio, defParallel, defTimeout, defRetries int
+	if err := d.QueryRow(`SELECT priority, max_parallel, timeout_seconds, max_retries FROM job_definitions WHERE id = 1`).
+		Scan(&defPrio, &defParallel, &defTimeout, &defRetries); err != nil {
+		t.Fatalf("scan v2 definition row: %v", err)
+	}
+	if defPrio != 0 || defParallel < 1 || defTimeout != 0 || defRetries != 0 {
+		t.Fatalf("unexpected v2 defaults: prio=%d par=%d timeout=%d retries=%d", defPrio, defParallel, defTimeout, defRetries)
+	}
+
+	// Ledger backfilled from existing history: 4 total, 2 done, 1 errored,
+	// last status from the most recent run, NULL durations (v1 rows had
+	// none).
+	var runsTotal, runsDone, runsErrored int
+	var lastStatus string
+	var totalDur sql.NullInt64
+	if err := d.QueryRow(`SELECT runs_total, runs_done, runs_errored, last_status, total_duration_ms FROM job_definition_stats WHERE job_id = 1`).
+		Scan(&runsTotal, &runsDone, &runsErrored, &lastStatus, &totalDur); err != nil {
+		t.Fatalf("scan stats ledger: %v", err)
+	}
+	if runsTotal != 4 || runsDone != 2 || runsErrored != 1 {
+		t.Fatalf("ledger counts = %d/%d/%d", runsTotal, runsDone, runsErrored)
+	}
+	if totalDur.Valid && totalDur.Int64 != 0 {
+		t.Fatalf("v1 rows have no durations; total_duration_ms = %v", totalDur)
+	}
+	// The "last" run is the most recent TERMINAL one (the errored row,
+	// id 3) — never a planned one.
+	if lastStatus != "errored" {
+		t.Fatalf("last_status = %q, want %q", lastStatus, "errored")
+	}
+
+	// Reopening must not double-count the backfill.
+	d.Close()
+	d2, err := Open(prePath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer d2.Close()
+	if err := d2.QueryRow(`SELECT runs_total, runs_done, runs_errored FROM job_definition_stats WHERE job_id = 1`).
+		Scan(&runsTotal, &runsDone, &runsErrored); err != nil {
+		t.Fatalf("scan ledger on reopen: %v", err)
+	}
+	if runsTotal != 4 || runsDone != 2 || runsErrored != 1 {
+		t.Fatalf("backfill not idempotent: %d/%d/%d", runsTotal, runsDone, runsErrored)
+	}
+}

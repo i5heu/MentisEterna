@@ -8,6 +8,7 @@ import (
 	"log"
 
 	"github.com/i5heu/MentisEterna/internal/config"
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	recipeplugin "github.com/i5heu/MentisEterna/pkg/notetype/recipe"
 )
@@ -137,7 +138,8 @@ func (s *Server) recipeNoteIDs(ctx context.Context, dbConn *sql.DB) ([]int64, er
 	return noteIDs, nil
 }
 
-func (s *Server) recalculateRecipeIngredientCategoriesTask(dbConn *sql.DB, _ []byte) (string, error) {
+func (s *Server) recalculateRecipeIngredientCategoriesTask(_ context.Context, rt *jobs.RunContext) (string, error) {
+	dbConn := rt.DB
 	noteIDs, err := s.recipeNoteIDs(context.Background(), dbConn)
 	if err != nil {
 		return "", err

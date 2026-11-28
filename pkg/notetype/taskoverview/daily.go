@@ -1,10 +1,13 @@
 package taskoverview
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
+
+	"github.com/i5heu/MentisEterna/internal/jobs"
 )
 
 // --- Daily task generation & persistence ---
@@ -22,7 +25,8 @@ type latestDailyGeneration struct {
 
 // regenerateAllDailyTasks is the cron job that regenerates daily tasks
 // for every task_overview note at midnight UTC.
-func regenerateAllDailyTasks(db *sql.DB, payload []byte) (string, error) {
+func regenerateAllDailyTasks(_ context.Context, rt *jobs.RunContext) (string, error) {
+	db := rt.DB
 	tasks, err := loadAllTasks(db)
 	if err != nil {
 		return "", fmt.Errorf("load tasks: %w", err)

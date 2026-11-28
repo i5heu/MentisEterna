@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/internal/llm"
 	"github.com/i5heu/MentisEterna/internal/media"
 )
@@ -224,7 +226,7 @@ func TestIngestSTTToNoteTaskAppendsTranscript(t *testing.T) {
 	}
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, resp.Note.ID))
-	if _, err := s.ingestSTTToNoteTask(s.db.DB, payload); err != nil {
+	if _, err := s.ingestSTTToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("ingestSTTToNoteTask: %v", err)
 	}
 
@@ -268,7 +270,7 @@ func TestIngestSTTToNoteTaskGeneratesTitleAndForcesTag(t *testing.T) {
 	noteID := resp.Note.ID
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, noteID))
-	if _, err := s.ingestSTTToNoteTask(s.db.DB, payload); err != nil {
+	if _, err := s.ingestSTTToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("ingestSTTToNoteTask: %v", err)
 	}
 
@@ -329,7 +331,7 @@ func TestIngestSTTToNoteTaskSTTFailureSkipsTitleAndTag(t *testing.T) {
 	noteID := resp.Note.ID
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, noteID))
-	msg, err := s.ingestSTTToNoteTask(s.db.DB, payload)
+	msg, err := s.ingestSTTToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload})
 	if err != nil {
 		t.Fatalf("ingestSTTToNoteTask: %v", err)
 	}
@@ -504,7 +506,7 @@ func TestIngestSTTToNoteTaskPrependsDateToTitle(t *testing.T) {
 	noteID := resp.Note.ID
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d,"date_prefix":"05-08-26"}`, resp.File.ID, noteID))
-	if _, err := s.ingestSTTToNoteTask(s.db.DB, payload); err != nil {
+	if _, err := s.ingestSTTToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("ingestSTTToNoteTask: %v", err)
 	}
 
@@ -673,7 +675,7 @@ func TestIngestOCRToNoteTaskAppendsText(t *testing.T) {
 	}
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, resp.Note.ID))
-	if _, err := s.ingestOCRToNoteTask(s.db.DB, payload); err != nil {
+	if _, err := s.ingestOCRToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("ingestOCRToNoteTask: %v", err)
 	}
 
@@ -717,7 +719,7 @@ func TestIngestOCRToNoteTaskGeneratesTitleAndForcesTag(t *testing.T) {
 	noteID := resp.Note.ID
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, noteID))
-	if _, err := s.ingestOCRToNoteTask(s.db.DB, payload); err != nil {
+	if _, err := s.ingestOCRToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("ingestOCRToNoteTask: %v", err)
 	}
 
@@ -778,7 +780,7 @@ func TestIngestOCRToNoteTaskOCRFailureSkipsTitleAndTag(t *testing.T) {
 	noteID := resp.Note.ID
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d}`, resp.File.ID, noteID))
-	msg, err := s.ingestOCRToNoteTask(s.db.DB, payload)
+	msg, err := s.ingestOCRToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload})
 	if err != nil {
 		t.Fatalf("ingestOCRToNoteTask: %v", err)
 	}
@@ -942,7 +944,7 @@ func TestIngestOCRToNoteTaskPrependsDateToTitle(t *testing.T) {
 	noteID := resp.Note.ID
 
 	payload := []byte(fmt.Sprintf(`{"file_id":%d,"note_id":%d,"date_prefix":"05-08-26"}`, resp.File.ID, noteID))
-	if _, err := s.ingestOCRToNoteTask(s.db.DB, payload); err != nil {
+	if _, err := s.ingestOCRToNoteTask(context.Background(), &jobs.RunContext{DB: s.db.DB, Payload: payload}); err != nil {
 		t.Fatalf("ingestOCRToNoteTask: %v", err)
 	}
 

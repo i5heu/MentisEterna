@@ -17,6 +17,7 @@ const (
 	liveTypeReady                  = "live.ready"
 	liveTypeNotesChange            = "notes.changed"
 	liveTypeJobsChange             = "jobs.changed"
+	liveTypeJobsProgress           = "jobs.progress"
 	liveTypePluginProgress         = "plugin.progress"
 	liveReasonInlineUploadResolved = "inline_upload_resolved"
 	liveTypeEditSync               = "edit.sync"
@@ -158,9 +159,13 @@ func (s *Server) notifyJobEvent(evt jobs.RunEvent) {
 	if s == nil || s.liveHub == nil {
 		return
 	}
+	liveType := liveTypeJobsChange
+	if evt.Type == "progress" {
+		liveType = liveTypeJobsProgress
+	}
 	copied := evt
 	s.liveHub.broadcast(liveMessage{
-		Type:      liveTypeJobsChange,
+		Type:      liveType,
 		Timestamp: liveTimestamp(),
 		Job:       &copied,
 	})

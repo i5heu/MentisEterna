@@ -26,11 +26,14 @@
 package llminferencer
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/i5heu/MentisEterna/internal/jobs"
 	"github.com/i5heu/MentisEterna/pkg/notetype"
 )
 
@@ -226,8 +229,9 @@ func (p *Plugin) CronJobs() []notetype.CronJob {
 		{
 			Name:     "stats_retention",
 			Schedule: "@every 24h",
-			Task: func(db *sql.DB, _ []byte) (string, error) {
-				n, err := sweepStats(db)
+			Timeout:  10 * time.Minute,
+			Task: func(_ context.Context, rt *jobs.RunContext) (string, error) {
+				n, err := sweepStats(rt.DB)
 				if err != nil {
 					return "", err
 				}

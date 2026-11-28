@@ -49,6 +49,22 @@ func TestNewServerJobWorkersFromEnv(t *testing.T) {
 	}
 }
 
+// newTestServer uses the configured fast-lane count; the default (3)
+// must reach the manager alongside the normal pool.
+func TestNewServerJobFastWorkersDefault(t *testing.T) {
+	config.Reset()
+	t.Cleanup(config.Reset)
+	s := newTestServer(t)
+	if got := s.jobManager.FastWorkerCount(); got != 3 {
+		t.Fatalf("FastWorkerCount() = %d, want 3", got)
+	}
+	config.Get().Jobs.FastWorkers = 5
+	s2 := newTestServer(t)
+	if got := s2.jobManager.FastWorkerCount(); got != 5 {
+		t.Fatalf("FastWorkerCount() = %d, want 5", got)
+	}
+}
+
 func TestRecipeCategoryWorkerCountDefault(t *testing.T) {
 	config.Reset()
 	t.Cleanup(config.Reset)

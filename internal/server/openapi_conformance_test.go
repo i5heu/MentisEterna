@@ -677,6 +677,7 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 	}))
 	mux.Handle("/tags", protected(s.handleTags))
 	mux.Handle("/jobs", protected(s.handleJobs))
+	mux.Handle("/jobs/stats", protected(s.handleJobStats))
 	mux.Handle("/jobs/", protected(s.handleJobByID))
 	mux.Handle("/backup/trigger", protected(s.handleBackupTrigger))
 	mux.Handle("/backup/purge", protected(s.handleBackupPurge))

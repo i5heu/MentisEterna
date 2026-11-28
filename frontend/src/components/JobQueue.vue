@@ -17,7 +17,9 @@
                 <span>Job Queue</span>
                 <button class="btn-ghost" @click="expanded = false">✕</button>
             </div>
-            <div v-if="loading" class="job-empty">Loading…</div>
+            <div v-if="loading && runs.length === 0" class="job-empty">
+                Loading…
+            </div>
             <div v-else-if="runs.length === 0" class="job-empty">
                 No recent jobs.
             </div>
@@ -40,6 +42,12 @@
                                 }}{{ run.job_name }}</span
                             >
                             <span
+                                class="job-priority"
+                                v-if="run.priority > 0"
+                                title="High-priority (interactive) job"
+                                >⚡</span
+                            >
+                            <span
                                 class="job-attempt-count"
                                 title="Attempt number (retries + 1)"
                                 >#{{ run.retry_count + 1 }}</span
@@ -51,9 +59,50 @@
                                 >↻{{ run.retry_count }}</span
                             >
                         </div>
-                        <span class="job-time">{{
-                            fmtTime(run.created_at)
-                        }}</span>
+                        <span class="job-time"
+                            >{{ fmtTime(run.created_at)
+                            }}<template v-if="runDuration(run)">
+                                · {{ runDuration(run) }}</template
+                            ></span>
+
+                        <!-- Live progress bar for running jobs -->
+                        <div
+                            v-if="run.status === 'running' && run.progress_total"
+                            class="job-progress"
+                        >
+                            <div class="job-progress-bar">
+                                <div
+                                    class="job-progress-fill"
+                                    :style="{
+                                        width:
+                                            progressPercent(run) + '%',
+                                    }"
+                                />
+                            </div>
+                            <span class="job-progress-label">
+                                {{ run.progress_done }}/{{ run.progress_total }}
+                            </span>
+                        </div>
+                        <div
+                            v-if="run.status === 'running' && !run.progress_total"
+                            class="job-progress-note"
+                        >
+                            running…
+                        </div>
+                        <span
+                            v-if="run.progress_message && run.status === 'running'"
+                            class="job-progress-message"
+                            >{{ run.progress_message }}</span
+                        >
+
+                        <!-- Delayed retry countdown -->
+                        <span
+                            v-if="
+                                run.status === 'planned' && run.next_run_at
+                            "
+                            class="job-note"
+                            >retry due {{ fmtTime(run.next_run_at) }}</span
+                        >
                         <span
                             v-if="
                                 run.status === 'failed' ||
@@ -72,6 +121,14 @@
                         >
                     </div>
                     <div class="job-actions">
+                        <button
+                            v-if="canCancel(run)"
+                            class="btn-ghost job-cancel-btn"
+                            title="Cancel"
+                            @click="doCancel(run.id)"
+                        >
+                            ⊘
+                        </button>
                         <button
                             v-if="
                                 run.status === 'failed' ||
@@ -93,7 +150,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { fetchJobs, retryJob } from "../api.js";
+import { fetchJobs, retryJob, cancelJob } from "../api.js";
 
 const props = defineProps({ token: String, inline: Boolean });
 const emit = defineEmits(["job-done"]);
@@ -110,6 +167,8 @@ function statusIcon(status) {
     switch (status) {
         case "pending":
             return "⏳";
+        case "planned":
+            return "⏳";
         case "running":
             return "⟳";
         case "completed":
@@ -123,6 +182,38 @@ function statusIcon(status) {
         default:
             return "?";
     }
+}
+
+function progressPercent(run) {
+    if (!run.progress_total) return 0;
+    return Math.min(
+        100,
+        Math.round((run.progress_done / run.progress_total) * 100),
+    );
+}
+
+function canCancel(run) {
+    return run.status === "planned" || run.status === "running" || run.status === "pending";
+}
+
+function runDuration(run) {
+    if (run.duration_ms != null) {
+        return fmtDuration(run.duration_ms);
+    }
+    if (run.status === "running" && run.started_at) {
+        return fmtDuration(Date.now() - new Date(run.started_at).getTime());
+    }
+    return "";
+}
+
+function fmtDuration(ms) {
+    if (ms == null || ms < 0) return "";
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h${String(m % 60).padStart(2, "0")}m`;
 }
 
 function fmtTime(iso) {
@@ -167,6 +258,15 @@ async function doRetry(runId) {
     }
 }
 
+async function doCancel(runId) {
+    try {
+        await cancelJob(props.token, runId);
+        await load();
+    } catch (e) {
+        console.error("cancel job failed", e);
+    }
+}
+
 function scheduleLoad() {
     if (loadTimer) return;
     loadTimer = window.setTimeout(() => {
@@ -177,8 +277,23 @@ function scheduleLoad() {
 
 function onLiveMessage(event) {
     const type = event?.detail?.type;
+    if (type === "jobs.progress") {
+        mergeProgress(event.detail.job);
+        return;
+    }
     if (type !== "jobs.changed" && type !== "live.ready") return;
     scheduleLoad();
+}
+
+// mergeProgress folds a jobs.progress live event into the running row
+// without a refetch — keeps live progress buttery smooth.
+function mergeProgress(evt) {
+    if (!evt) return;
+    const run = runs.value.find((r) => r.id === evt.run_id);
+    if (!run || run.status !== "running") return;
+    if (evt.progress_done != null) run.progress_done = evt.progress_done;
+    if (evt.progress_total != null) run.progress_total = evt.progress_total;
+    if (evt.progress_message) run.progress_message = evt.progress_message;
 }
 
 onMounted(() => {
@@ -328,7 +443,8 @@ onUnmounted(() => {
     color: #60a5fa;
 }
 
-.icon-pending {
+.icon-pending,
+.icon-planned {
     color: var(--tag-bg-color);
 }
 
@@ -342,6 +458,13 @@ onUnmounted(() => {
     align-items: center;
     gap: 6px;
     min-width: 0;
+}
+
+.job-priority {
+    flex-shrink: 0;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--accent-teal);
 }
 
 .job-attempt-count {
@@ -380,6 +503,53 @@ onUnmounted(() => {
     margin-top: 2px;
 }
 
+.job-progress {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.job-progress-bar {
+    flex: 1;
+    height: 4px;
+    background: var(--raised-bg);
+    border-radius: 2px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.job-progress-fill {
+    height: 100%;
+    background: var(--accent-teal);
+    transition: width 0.3s ease;
+}
+
+.job-progress-label {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--font-color-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.job-progress-note {
+    display: block;
+    font-size: 10px;
+    color: var(--font-color-secondary);
+    margin-top: 3px;
+}
+
+.job-progress-message,
+.job-note {
+    display: block;
+    font-size: 11px;
+    color: var(--font-color-secondary);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .job-error {
     display: block;
     font-size: 11px;
@@ -402,12 +572,19 @@ onUnmounted(() => {
 
 .job-actions {
     flex-shrink: 0;
+    display: flex;
+    gap: 4px;
 }
 
-.job-retry-btn {
+.job-retry-btn,
+.job-cancel-btn {
     padding: 2px 8px;
     font-size: 14px;
     line-height: 1;
+}
+
+.job-cancel-btn {
+    color: var(--heading-color);
 }
 
 .job-running .job-status-icon {
