@@ -259,20 +259,46 @@ func (h *liveHub) routeToDevice(toDeviceID string, from *liveClient, msg liveMes
 	target.enqueueJSON(msg)
 }
 
+// deliver hands msg to one client's write loop. The registered-check,
+// the send, and any eviction share the hub lock with unregister's
+// close(client.send) — a send racing a close on the same channel would
+// panic the server (send on closed channel), and the buffer check
+// guarantees delivery never blocks while holding the lock.
+func (h *liveHub) deliver(c *liveClient, msg liveMessage) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.clients[c]; !ok {
+		return // already unregistered: its send channel is closed
+	}
+	select {
+	case c.send <- msg:
+	default:
+		// Wedged write loop: evict under the same lock discipline as
+		// unregister (device registry included, close exactly once).
+		h.removeLocked(c)
+		_ = c.conn.Close()
+	}
+}
+
+// removeLocked unregisters c: closes its send channel exactly once and
+// drops its device-registry entry. Caller holds h.mu.
+func (h *liveHub) removeLocked(c *liveClient) {
+	if _, ok := h.clients[c]; ok {
+		delete(h.clients, c)
+		close(c.send)
+	}
+	if c.deviceID != "" && h.devices[c.deviceID] == c {
+		delete(h.devices, c.deviceID)
+	}
+}
+
 func (h *liveHub) unregister(client *liveClient) {
 	h.mu.Lock()
-	var gone *liveClient
-	if _, ok := h.clients[client]; ok {
-		delete(h.clients, client)
-		close(client.send)
-	}
-	if client.deviceID != "" && h.devices[client.deviceID] == client {
-		delete(h.devices, client.deviceID)
-		gone = client
-	}
+	deviceRegistered := client.deviceID != "" && h.devices[client.deviceID] == client
+	h.removeLocked(client)
 	h.mu.Unlock()
-	if gone != nil {
-		h.broadcastToUser(gone.username, nil, liveMessage{Type: liveTypeDeviceOffline, DeviceID: gone.deviceID})
+	if deviceRegistered {
+		h.broadcastToUser(client.username, nil, liveMessage{Type: liveTypeDeviceOffline, DeviceID: client.deviceID})
 	}
 }
 
@@ -285,12 +311,7 @@ func (h *liveHub) broadcast(msg liveMessage) {
 	h.mu.RUnlock()
 
 	for _, client := range clients {
-		select {
-		case client.send <- msg:
-		default:
-			h.unregister(client)
-			_ = client.conn.Close()
-		}
+		h.deliver(client, msg)
 	}
 }
 
@@ -305,17 +326,12 @@ func (h *liveHub) broadcastToUser(username string, except *liveClient, msg liveM
 	h.mu.RUnlock()
 
 	for _, cl := range targets {
-		cl.enqueueJSON(msg)
+		h.deliver(cl, msg)
 	}
 }
 
 func (c *liveClient) enqueueJSON(msg liveMessage) {
-	select {
-	case c.send <- msg:
-	default:
-		c.hub.unregister(c)
-		_ = c.conn.Close()
-	}
+	c.hub.deliver(c, msg)
 }
 
 func (c *liveClient) readLoop() {

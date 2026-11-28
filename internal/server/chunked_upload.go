@@ -590,6 +590,48 @@ func (s *Server) maybeAutoFinishChunkedUpload(noteID int64, uploadID string, chu
 	}()
 }
 
+// Tunables for awaitChunkedUploadFinish — tests shrink them.
+var (
+	chunkedFinishAwaitPoll    = 100 * time.Millisecond
+	chunkedFinishAwaitTimeout = 60 * time.Second
+)
+
+// awaitChunkedUploadFinish serves the loser of a finalize race: when a
+// request hits the finish endpoint while the auto-finish goroutine (or
+// another request) is already finalizing the session, the winner
+// persists its response blob on the session row. The loser polls for
+// that outcome and returns the identical response instead of a 409 —
+// finish becomes idempotent. Returns (nil, nil) when the outcome did
+// not arrive in time (fall back to the 409) and an error when the
+// winner's finalize failed.
+func (s *Server) awaitChunkedUploadFinish(noteID int64, uploadID string) (map[string]interface{}, error) {
+	deadline := time.Now().Add(chunkedFinishAwaitTimeout)
+	for {
+		row, err := s.loadUploadSession(uploadID, noteID)
+		if err != nil {
+			return nil, errChunkedUploadNotFound
+		}
+		if row.Status == "done" {
+			if row.FinishResult == nil || *row.FinishResult == "" {
+				return nil, nil // done without a stored result (legacy row): 409
+			}
+			var resp map[string]interface{}
+			if json.Unmarshal([]byte(*row.FinishResult), &resp) != nil {
+				return nil, nil // stored blob unparseable: 409
+			}
+			return resp, nil
+		}
+		if row.Status == "failed" {
+			// The winner's finalize errored — surface it truthfully.
+			return nil, fmt.Errorf("upload finalize failed")
+		}
+		if time.Now().After(deadline) {
+			return nil, nil // still finalizing when the budget ran out
+		}
+		time.Sleep(chunkedFinishAwaitPoll)
+	}
+}
+
 // handleChunkedFinish assembles all chunks, verifies the whole-file SHA-256 if
 // provided, and finalizes the upload via the existing media service.
 // POST /notes/{id}/chunked/{uploadID}/finish
@@ -611,6 +653,20 @@ func (s *Server) handleChunkedFinish(w http.ResponseWriter, r *http.Request, not
 		case stderrors.Is(err, errChunkedUploadExpired):
 			http.Error(w, errChunkedUploadExpired.Error(), http.StatusGone)
 		case stderrors.Is(err, errChunkedUploadAlreadyFinalizing), stderrors.Is(err, errChunkedUploadAlreadyCompleted):
+			// Lost the finalize race to the auto-finish goroutine (or a
+			// concurrent request): the winner persists its response on
+			// the session — wait for it and return the identical 201
+			// instead of bouncing the client off a 409.
+			awaited, awaitErr := s.awaitChunkedUploadFinish(noteID, uploadID)
+			if awaitErr == nil && awaited != nil {
+				s.setLongWriteDeadline(w)
+				writeJSON(w, http.StatusCreated, awaited)
+				return
+			}
+			if awaitErr != nil {
+				http.Error(w, awaitErr.Error(), http.StatusConflict)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusConflict)
 		case strings.HasPrefix(err.Error(), "not all chunks received:") || strings.HasPrefix(err.Error(), "missing chunk "):
 			http.Error(w, err.Error(), http.StatusConflict)

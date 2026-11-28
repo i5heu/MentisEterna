@@ -76,10 +76,16 @@ func (m *Manager) enforceTimeouts() {
 			payload = []byte(*payloadStr)
 		}
 
-		m.finishRun(v.runID, v.ar.defID, v.meta, StatusErrored, "", errMsg, v.meta.Timeout.Milliseconds())
-		m.emitEvent(RunEvent{Type: "errored", RunID: v.runID, PluginID: v.meta.PluginID,
-			JobName: v.meta.Name, Status: StatusErrored, Error: &errMsg})
-		m.autoRetry(dqClaim{runID: v.runID, defID: v.ar.defID, payload: payload, retryCount: retryCount}, v.meta, errMsg)
+		// Guarded transition: only the winner of the terminal write
+		// emits the event and requeues. Without this guard a task that
+		// ignores its cancelled context keeps the run in m.active, and
+		// every watchdog tick would re-emit the errored event (and
+		// re-attempt the retry) until the task finally returns.
+		if m.finishRun(v.runID, v.ar.defID, v.meta, StatusErrored, "", errMsg, v.meta.Timeout.Milliseconds()) {
+			m.emitEvent(RunEvent{Type: "errored", RunID: v.runID, PluginID: v.meta.PluginID,
+				JobName: v.meta.Name, Status: StatusErrored, Error: &errMsg})
+			m.autoRetry(dqClaim{runID: v.runID, defID: v.ar.defID, payload: payload, retryCount: retryCount}, v.meta, errMsg)
+		}
 	}
 }
 

@@ -151,6 +151,16 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
 import { fetchJobs, retryJob, cancelJob } from "../api.js";
+import {
+    statusIcon,
+    progressPercent,
+    canCancel,
+    runDuration,
+    fmtTime,
+    mergeProgress,
+    pendingCountFrom,
+    collectNewTitleDone,
+} from "../jobSystem.js";
 
 const props = defineProps({ token: String, inline: Boolean });
 const emit = defineEmits(["job-done"]);
@@ -163,84 +173,14 @@ const seenDone = ref(new Set());
 
 let loadTimer = null;
 
-function statusIcon(status) {
-    switch (status) {
-        case "pending":
-            return "⏳";
-        case "planned":
-            return "⏳";
-        case "running":
-            return "⟳";
-        case "completed":
-        case "done":
-            return "✓";
-        case "failed":
-        case "errored":
-            return "✗";
-        case "cancelled":
-            return "⊘";
-        default:
-            return "?";
-    }
-}
-
-function progressPercent(run) {
-    if (!run.progress_total) return 0;
-    return Math.min(
-        100,
-        Math.round((run.progress_done / run.progress_total) * 100),
-    );
-}
-
-function canCancel(run) {
-    return run.status === "planned" || run.status === "running" || run.status === "pending";
-}
-
-function runDuration(run) {
-    if (run.duration_ms != null) {
-        return fmtDuration(run.duration_ms);
-    }
-    if (run.status === "running" && run.started_at) {
-        return fmtDuration(Date.now() - new Date(run.started_at).getTime());
-    }
-    return "";
-}
-
-function fmtDuration(ms) {
-    if (ms == null || ms < 0) return "";
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
-    const h = Math.floor(m / 60);
-    return `${h}h${String(m % 60).padStart(2, "0")}m`;
-}
-
-function fmtTime(iso) {
-    if (!iso) return "";
-    const d = new Date(iso);
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const hour = String(d.getHours()).padStart(2, "0");
-    const minute = String(d.getMinutes()).padStart(2, "0");
-    return `${month}-${day} ${hour}:${minute}`;
-}
-
 async function load() {
     loading.value = true;
     try {
         const data = await fetchJobs(props.token);
         runs.value = data.runs || [];
-        pendingCount.value = data.pending_count ?? data.total ?? 0;
-        for (const r of runs.value) {
-            if (
-                r.job_name === "generate_title" &&
-                (r.status === "completed" || r.status === "done") &&
-                !seenDone.value.has(r.id)
-            ) {
-                seenDone.value.add(r.id);
-                emit("job-done", { name: "generate_title", runId: r.id });
-            }
+        pendingCount.value = pendingCountFrom(data);
+        for (const evt of collectNewTitleDone(runs.value, seenDone.value)) {
+            emit("job-done", evt);
         }
     } catch {
         // Silently ignore errors when polling.
@@ -278,22 +218,13 @@ function scheduleLoad() {
 function onLiveMessage(event) {
     const type = event?.detail?.type;
     if (type === "jobs.progress") {
-        mergeProgress(event.detail.job);
+        // Fold the progress event into the running row without a
+        // refetch — keeps live progress buttery smooth.
+        mergeProgress(runs.value, event.detail.job);
         return;
     }
     if (type !== "jobs.changed" && type !== "live.ready") return;
     scheduleLoad();
-}
-
-// mergeProgress folds a jobs.progress live event into the running row
-// without a refetch — keeps live progress buttery smooth.
-function mergeProgress(evt) {
-    if (!evt) return;
-    const run = runs.value.find((r) => r.id === evt.run_id);
-    if (!run || run.status !== "running") return;
-    if (evt.progress_done != null) run.progress_done = evt.progress_done;
-    if (evt.progress_total != null) run.progress_total = evt.progress_total;
-    if (evt.progress_message) run.progress_message = evt.progress_message;
 }
 
 onMounted(() => {

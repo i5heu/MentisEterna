@@ -182,6 +182,10 @@ mirrors the package layout — one test file per source file:
 | `finalize_test.go` | exactly-once terminal writes, ledger-vs-model PBT, backoff bounds PBT, auto-retry policy |
 | `stats_test.go` | empty-DB snapshot, 24h window, per-definition ledger, busy split per lane, retry wakeups |
 | `faults_test.go` | fault propagation (missing tables, aborted UPDATE) |
+| `race_cancel_test.go` | cancel-vs-finish and double-cancel races: a parked write transaction makes the interleavings deterministic (InUse handshake, no sleeps); late task success cannot override a committed cancel |
+| `restart_test.go` | file-backed DBs (`openFileTestDBAt`): graceful restart cycle (in-flight → Stop → reopen → queued run continues, ledger carries over) and hard-crash recovery through the full Start path |
+| `watchdog_race_test.go` | reverse watchdog/task order: a late task success keeps the watchdog's timeout verdict, single requeue, exactly-once ledger |
+| `legacy_test.go` | pre-v2 rows in the live queue: foreign status strings, NULL-payload rows (index allows them, `Enqueue(nil)` does not dedupe), legacy/malformed `next_run_at` due-gate behavior |
 
 Property-based tests use `pgregory.net/rapid`; structural assertions use
 `github.com/google/go-cmp` (both already module dependencies). Run with
@@ -189,8 +193,15 @@ Property-based tests use `pgregory.net/rapid`; structural assertions use
 
 ```bash
 go test ./internal/jobs/ -race -count=2
-go test ./internal/jobs/ -cover   # currently ~93% of statements
+go test ./internal/jobs/ -cover   # currently ~92% of statements
 ```
+
+The websocket pipeline (observer → live hub → `jobs.progress` /
+`jobs.changed` frames) is covered end-to-end by
+`internal/server/jobs_live_test.go` with a real running worker; the
+job-queue UI logic shared by `JobQueue.vue` and `OptionsView.vue` is
+extracted into `frontend/src/jobSystem.js` and unit-tested by
+`frontend/src/__tests__/jobSystem.test.js` (`npm test`).
 
 Migration coverage (v1 schema → v2 columns/ledger/backfill) lives in
 `internal/db/db_test.go`.

@@ -117,6 +117,16 @@ func (m *Manager) runWorker(id int, fast bool, wg *sync.WaitGroup) {
 			case <-m.notify:
 			case <-time.After(m.pollInterval):
 			}
+			// Stop outranks a racing kick: select picks randomly when
+			// both channels are ready, and the kick that Stop (or a
+			// finishing sibling) delivered must never cause NEW work to
+			// be claimed during shutdown — queued rows stay queued for
+			// the next process.
+			select {
+			case <-m.stop:
+				return
+			default:
+			}
 			continue
 		}
 		m.execute(claim, fast)
@@ -128,6 +138,16 @@ func (m *Manager) runWorker(id int, fast bool, wg *sync.WaitGroup) {
 // It owns the run's active-tracking entry and the task context; every
 // terminal transition goes through the guarded finishRun.
 func (m *Manager) execute(claim dqClaim, fast bool) {
+	// Shutdown discipline: a dequeue that straddled Stop (its claim
+	// landed while the workers were already told to stop) must not
+	// start its task — the run is unclaimed back to planned, queued
+	// work survives the restart.
+	select {
+	case <-m.stop:
+		m.unclaimOnShutdown(claim)
+		return
+	default:
+	}
 	task, meta, hasTask := m.taskAndDefinition(claim.defID)
 	meta = orLookupDefinition(m, meta, claim.defID)
 	log.Printf("jobs: worker=%d claimed run=%d %s attempt=%d payload_bytes=%d payload_preview=%q",
@@ -230,6 +250,33 @@ func (m *Manager) execute(claim dqClaim, fast bool) {
 			JobName: meta.Name, Status: StatusDone, Result: &result,
 			DurationMS: ptrInt64(durationMS), Attempt: claim.retryCount + 1})
 	}
+}
+
+// unclaimOnShutdown returns a run claimed by a straddled dequeue back
+// to the planned queue: shutdown must never start new work, and the
+// guarded UPDATE keeps a concurrent cancel exactly-once (a terminal row
+// is left alone).
+func (m *Manager) unclaimOnShutdown(claim dqClaim) {
+	res, err := m.db.Exec(
+		`UPDATE job_runs
+		 SET status = ?, started_at = NULL, progress_at = NULL, worker_id = NULL
+		 WHERE id = ? AND status = ?`,
+		StatusPlanned, claim.runID, StatusRunning,
+	)
+	if err != nil {
+		// Leave the row running: the next startup's zombie recovery
+		// resets it — never worse than a crash mid-run.
+		log.Printf("jobs: shutdown unclaim run=%d failed: %v", claim.runID, err)
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// A concurrent cancel/timeout finalized the row first — the
+		// guarded transition kept it exactly-once; nothing to undo.
+		log.Printf("jobs: shutdown unclaim run=%d skipped (row already finalized)", claim.runID)
+		return
+	}
+	log.Printf("jobs: shutdown unclaimed run=%d back to planned", claim.runID)
 }
 
 // runTaskWithRecover invokes the task, converting a panic into an error

@@ -12,9 +12,13 @@ import (
 // insertPlannedRun inserts a planned run for jobID with the given
 // payload, retry count, and optional due time (delayed auto-retries).
 // The run inherits the definition's priority. If an identical run (same
-// job_id + payload) is already planned or running, it returns that
-// run's ID with duplicate=true instead of inserting — the unique
-// partial index idx_job_runs_active_unique makes this race-free.
+// job_id + NON-NULL payload) is already planned or running, it returns
+// that run's ID with duplicate=true instead of inserting — the unique
+// partial index idx_job_runs_active_unique makes this race-free. NULL
+// payloads are exempt by SQLite semantics (NULLs are distinct in
+// unique indexes, so multiple active NULL-payload rows are legal by
+// design — the scheduler prevents cron pile-up with its own active-run
+// check); a NULL-payload insert therefore always inserts.
 func (m *Manager) insertPlannedRun(jobID int64, payload *string, retryCount int, nextRunAt *time.Time) (runID int64, duplicate bool, err error) {
 	var nextRunStr any
 	if nextRunAt != nil {
@@ -43,7 +47,9 @@ func (m *Manager) insertPlannedRun(jobID int64, payload *string, retryCount int,
 
 // Enqueue creates a new planned job run and returns the run ID.
 // payload can be nil for cron-triggered jobs. Workers are woken
-// immediately; an identical active run dedupes to its ID.
+// immediately; an identical active run with the same NON-NULL payload
+// dedupes to its ID (NULL-payload runs are exempt — see
+// insertPlannedRun).
 func (m *Manager) Enqueue(pluginID, jobName string, payload []byte) (int64, error) {
 	var jobID int64
 	err := m.db.QueryRow(

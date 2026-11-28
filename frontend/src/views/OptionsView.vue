@@ -1180,6 +1180,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import JobQueue from "../components/JobQueue.vue";
+import { fmtMs, fmtSuccess, fmtLast } from "../jobSystem.js";
 import ShortcutHint from "../components/ShortcutHint.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
 import {
@@ -1791,32 +1792,6 @@ async function fetchStats() {
 // --- Job system stats ---
 const jobStats = ref(null);
 let jobStatsTimer = null;
-
-function fmtMs(ms) {
-    if (ms == null || ms <= 0) return "—";
-    if (ms < 1000) return `${ms}ms`;
-    const s = ms / 1000;
-    if (s < 60) return `${s.toFixed(1)}s`;
-    const m = Math.floor(s / 60);
-    return `${m}m${String(Math.round(s % 60)).padStart(2, "0")}s`;
-}
-
-function fmtSuccess(d) {
-    const attempted = d.runs_done + d.runs_errored;
-    if (!attempted) return "—";
-    return `${Math.round((d.runs_done / attempted) * 100)}%`;
-}
-
-function fmtLast(d) {
-    if (!d.last_status) return "—";
-    if (d.last_status === "errored" && d.last_error) {
-        return d.last_error;
-    }
-    if (d.last_status === "done" && d.last_result) {
-        return d.last_result;
-    }
-    return d.last_status;
-}
 
 async function loadJobStats() {
     try {
