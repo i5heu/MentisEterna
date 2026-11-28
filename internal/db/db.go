@@ -187,10 +187,47 @@ func (d *DB) migrate() error {
 	if err := d.ensureSTTTables(); err != nil {
 		return err
 	}
+	if err := d.ensureDeviceTables(); err != nil {
+		return err
+	}
 	if err := d.migrateTags(); err != nil {
 		return err
 	}
 	return d.ensureNotesFTS()
+}
+
+// ensureDeviceTables provisions the device-to-device channel's persistence:
+// the registry mapping every announced device id to its owning username (so
+// the relay can authorize queueing to a device even while it is offline) and
+// the pending-message queue (opaque payloads; see internal/server
+// live_device_queue.go). Rows are small and bounded by per-device caps, so
+// no retention beyond the queue TTL is needed.
+func (d *DB) ensureDeviceTables() error {
+	_, err := d.Exec(`
+		CREATE TABLE IF NOT EXISTS device_registry (
+			device_id    TEXT PRIMARY KEY,
+			username     TEXT    NOT NULL,
+			last_seen_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+
+		CREATE TABLE IF NOT EXISTS device_queue (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			username        TEXT    NOT NULL,
+			to_device_id    TEXT    NOT NULL,
+			from_device_id  TEXT    NOT NULL,
+			channel         TEXT    NOT NULL DEFAULT '',
+			client_msg_id   TEXT    NOT NULL DEFAULT '',
+			data            TEXT    NOT NULL,
+			created_at      DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			expires_at      DATETIME NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_device_queue_target
+			ON device_queue(username, to_device_id, id);
+		CREATE INDEX IF NOT EXISTS idx_device_queue_expires
+			ON device_queue(expires_at);
+	`)
+	return err
 }
 
 func (d *DB) ensureAuthTables() error {

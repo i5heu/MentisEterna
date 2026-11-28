@@ -85,6 +85,9 @@ func New(d *db.DB, addr string, llmClient llm.Embedder, titleClient llm.Generato
 
 	jobMgr := jobs.NewManager(d.DB, config.Get().Jobs.Workers, config.Get().Jobs.FastWorkers)
 	liveHub := newLiveHub()
+	// Device-to-device queue: persisted offline delivery for the device
+	// channel (opaque payloads, FIFO, acked on receipt, TTL-bounded).
+	liveHub.attachDeviceQueue(newDeviceQueue(d.DB, deviceQueueConfigFromGlobal()))
 	jobMgr.SetObserver(func(evt jobs.RunEvent) {
 		// Progress events stream on their own ws type (the job queue
 		// merges them into the running row without a refetch); every
@@ -266,6 +269,9 @@ func generateTokenHex(n int) (string, error) {
 
 func (s *Server) Start(ctx context.Context) error {
 	initAdminPassword(s.db)
+
+	// Device queue janitor: sweep TTL-expired rows until shutdown.
+	s.liveHub.startJanitor(ctx)
 
 	// Validate all registered plugins at startup — fail fast on capability mismatches.
 	for _, plugin := range notetype.Registry {
@@ -453,6 +459,7 @@ func (s *Server) Start(ctx context.Context) error {
 	})
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.Handle("/session", protected(s.handleSession))
+	mux.Handle("/devices", protected(s.handleDevices))
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.Handle("/mcp", http.HandlerFunc(s.handleMCP))
 	mux.Handle("/ws", protected(s.handleWebSocket))
@@ -650,7 +657,6 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		s.jobManager.Stop()
 	}()
-
 	// Outbound MCP proxy tunnel: permanent reconnecting connection to the
 	// public relay proxy (see docs/MCPProxy.md).
 	if s.mcpTunnel != nil {

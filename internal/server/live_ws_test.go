@@ -487,22 +487,37 @@ func TestLiveHubRegisterUnregister_PBT(t *testing.T) {
 		})
 	})
 
-	// Invariant: unregister closes the client's send channel.
-	// Failure mode: consumer goroutines hang on a channel that's never closed.
-	t.Run("unregister closes send channel", func(t *testing.T) {
+	// Invariant: unregister signals teardown via the stop channel and must
+	// NOT close the send channel (queue drains block on it with
+	// backpressure — a close would race their blocking sends into a panic).
+	// Failure mode: the write loop hangs on a connection that is gone, or a
+	// blocked drain delivery panics on send-to-closed-channel.
+	t.Run("unregister closes stop, never send", func(t *testing.T) {
 		t.Parallel()
 		rapid.Check(t, func(t *rapid.T) {
 			hub := newLiveHub()
-			client := &liveClient{hub: hub, send: make(chan liveMessage, 1)}
+			client := &liveClient{
+				hub:  hub,
+				send: make(chan liveMessage, 1),
+				stop: make(chan struct{}),
+			}
 			hub.register(client)
 			hub.unregister(client)
 			select {
-			case _, ok := <-client.send:
-				if ok {
-					t.Fatal("send channel still open after unregister")
-				}
+			case <-client.stop:
 			default:
-				t.Fatal("send channel not closed (or buffer not drained)")
+				t.Fatal("stop channel not closed after unregister")
+			}
+			// The send channel must remain open so concurrent blocking
+			// deliveries (deliverQueued) cannot panic; a receive must not
+			// report closure.
+			select {
+			case _, ok := <-client.send:
+				if !ok {
+					t.Fatal("send channel closed after unregister — drains could panic")
+				}
+				t.Fatal("send channel unexpectedly non-empty")
+			default:
 			}
 		})
 	})

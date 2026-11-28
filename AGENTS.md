@@ -643,55 +643,106 @@ Same-user device-to-device channel over the existing `/ws` websocket relay, with
 app-layer E2E encryption (ECDH P-256 + AES-GCM-256 via WebCrypto; no WebRTC).
 Only teleport traffic is encrypted — `edit.sync`/`edit.body` stay plaintext.
 
-Wire protocol (server is transport-only, never parses the payload):
+Wire protocol (the server stores/relays opaque ciphertext, never parses it):
 
 - `device.hello` — client announces its device id (fingerprint of its ECDH public
-  key); the server registers it per user and broadcasts `device.online` to the
-  user's other connections. **A hello also returns the current same-user
-  registry to the announcer as `device.online` snapshots** — presence sync, so
-  a device that reloaded or just paired learns who is online without waiting
-  for their next announcement (broadcasts alone are push-only). `device.offline`
-  is broadcast on disconnect.
-- `device.msg` — `{ to_device_id, from_device_id, channel, data }` unicast relay.
-  The server routes to exactly one target connection and **silently drops** any
-  message whose target is unknown, the sender itself, or a different user
-  (cross-user guard in `liveHub.routeToDevice`).
+  key); the server registers it per user, **persists it in the `device_registry`
+  table** (device id → username, so the same-user guard holds while a target is
+  offline), broadcasts `device.online` to the user's other connections (with the
+  target's pending-queue count), and **returns the current same-user registry
+  to the announcer as `device.online` snapshots** — presence sync, so a device
+  that reloaded or just paired learns who is online without waiting for their
+  next announcement. A hello also **drains the device's pending queue** (below).
+  `device.offline` (with the queued count) is broadcast on disconnect.
+- `device.msg` — `{ to_device_id, from_device_id, channel, data,
+  client_msg_id? }` unicast relay. `channel: "teleport"` is **queued offline**:
+  the frame is persisted in the `device_queue` table (FIFO by rowid, opaque
+  payload, per-row TTL) and drained to the target's registered connection —
+  now or at its next hello. The sender receives a `device.status` frame per
+  message: `delivered` (handed to a live target connection), `queued` (target
+  offline; delivered on its next hello, expires after the TTL), or `refused`
+  (unknown device / cross-user target / per-device cap exceeded / live-only
+  channel with an offline target). Unknown and cross-user targets share one
+  refusal (no oracle for other accounts' device ids). Every delivered frame
+  carries its `queue_id`.
+- `device.ack` — `{ queue_id }`: the receiver confirms a delivered frame; the
+  row is deleted (guarded by the acking connection's username + device id).
+  Unacked rows are **redelivered on the next reconnect** (at-least-once; the
+  frontend reassembly is idempotent — chunks key by `(transfer_id, seq)`,
+  completed transfers are deduped). A connection that dies mid-drain therefore
+  loses nothing.
 - `channel: "pairing"` — plaintext JSON (public data only), the mutual-consent
   handshake: `pair.request` (signed with ECDSA-SHA-256 over `{v,name,id,pub}`,
   proving the sender holds the advertised key) → the target shows a confirmation
   prompt → `pair.response` `{accepted:true|false}` (accept is signed; decline and
   requester cancel carry no identity claim). On accept BOTH sides persist each
-  other as peers — one confirmation connects both directions. Forged requests
-  (id≠fingerprint(pub), spoofed `from_device_id`, bad signature) are ignored;
-  a response that does not authenticate as the exact requested device is
-  rejected. Inbound `device.msg` is forwarded to the device channel by `api.js`
-  (single forwarder, dynamic import) so confirmations work from any view.
-- `channel: "teleport"` — E2E-encrypted frames (see below), only accepted from
-  paired peers.
+  other as peers — one confirmation connects both directions. **Pairing is
+  live-only (never queued)**: an offline target is an immediate `refused`, so
+  the requester fails fast instead of waiting out the 60 s timeout; the request
+  itself awaits the relay's `delivered` confirmation. A re-request from an
+  already-paired peer is auto-accepted without a prompt (recovers one-sided
+  pairings). Forged requests (id≠fingerprint(pub), spoofed `from_device_id`,
+  bad signature) are ignored; a response that does not authenticate as the
+  exact requested device is rejected. Inbound `device.msg` is forwarded to the
+  device channel by `api.js` (single forwarder, dynamic import) so
+  confirmations work from any view.
+- `channel: "teleport"` — E2E-encrypted frames, only accepted from paired
+  peers; see below.
+
+Queue mechanics (`internal/server/live_device_queue.go`):
+
+- **All** teleport traffic flows through the queue (one FIFO, no
+  direct-path/queued-path interleaving). Drains are serialized per target
+  device by a per-device lock and apply real backpressure: a slow target
+  blocks its drain goroutine (never overflows or evicts), a dead target stops
+  the drain and leaves rows pending. Per-connection delivery watermarks
+  prevent double-delivery within one connection while still re-delivering
+  everything unacked to a fresh connection.
+- Config (`[device]` in `config.toml`): `queue_ttl_minutes` (default 15),
+  `queue_max_messages` (256) and `queue_max_bytes` (32 MiB) per target device;
+  a janitor sweeps expired rows (started by `Server.Start`). The queue is
+  persisted, so messages survive server restarts — and restores: it lives in
+  the encrypted DB.
+- `GET /devices` — the session user's registry: `[{device_id, online,
+  last_seen_at, queued, queued_bytes}]` (presence + pending-queue footprint).
 
 Key files:
 
 ```
-internal/server/live.go            — relay: registerDevice, routeToDevice, readLoop cases
-internal/server/live_device_test.go — routing + presence tests (no VSS needed)
+internal/server/live.go            — relay: registerDevice (+registry+drain),
+                                     handleDeviceMsg, drainDevice, acks,
+                                     device.status, writeLoop stop-channel
+internal/server/live_device_queue.go — deviceQueue store (enqueue w/ caps+TTL,
+                                     pending, ack, sweep, registry) + GET /devices
+internal/server/live_device_test.go — routing + presence tests (legacy nil-queue hub)
+internal/server/live_device_queue_test.go — offline queue, at-least-once
+                                     redelivery, FIFO, TTL, caps, cross-user,
+                                     pairing live-only, /devices, restart
 frontend/src/device/crypto.js      — WebCrypto primitives (ECDH P-256, AES-GCM-256,
                                      fingerprint, ECDSA sign/verify for pairing)
 frontend/src/device/store.js       — persisted device identity + peers (localStorage)
 frontend/src/device/pairing.js     — share payloads (paste code / QR via `qrcode` + `jsqr`)
 frontend/src/device/teleport.js    — pairing handshake state + the "DataChannel":
-                                     chunked encrypted send/receive
+                                     chunked encrypted send/receive; per-chunk
+                                     device.status correlation, queue acks,
+                                     completed-transfer dedup
 frontend/src/components/PairRequestModal.vue — global confirmation prompt
 frontend/src/components/DeviceTeleportModal.vue — global teleport UI (paired
-                                     devices, send, inbox), opened from the
-                                     app title (NotesView sidebar header)
+                                     devices with online/queued badges, send to
+                                     online AND offline peers, inbox), opened
+                                     from the app title (NotesView sidebar header)
 frontend/src/device/__tests__/crypto.test.js — key symmetry, round-trip, tamper,
                                      signature round-trip
 frontend/src/device/__tests__/pairing.test.js — handshake: accept/decline/cancel,
-                                     forged-request rejection, timeout, self-pair
+                                     forged-request rejection, timeouts, self-pair,
+                                     re-pair auto-accept, refused fast-fail
+frontend/src/device/__tests__/teleport-queue.test.js — send/status correlation,
+                                     queue acks, redelivery dedup, resume
 frontend/src/views/OptionsView.vue — "Devices &amp; Teleport" section (pairing
                                      only: this device, pair by code/QR)
 frontend/src/api.js                — announces `device.hello` on every live
-                                     (re)connect; forwards `device.msg` frames
+                                     (re)connect; forwards `device.msg` +
+                                     `device.status` frames
 ```
 
 Design notes:
@@ -705,16 +756,24 @@ Design notes:
 - Pairing is mutual-consent: scanning a code only sends a signed request; the
   target must confirm. The shared AES session key is derived locally (ECDH is
   commutative) and never crosses the wire. Requests time out after 60 s on the
-  requester side (the relay drops messages to offline targets silently).
+  requester side; a dead relay (no `device.status`) fails the pending pairing
+  after 15 s.
 - Chunks are 256 KiB plaintext (~341 KiB base64 in the relay message, well under
-  the 4 MiB `wsMaxMessageSize`); sequential `await`ed sends over the single
-  ordered websocket need no ACK. Incomplete transfers are swept after 60 s.
+  the 4 MiB `wsMaxMessageSize`). Each chunk `await`s its relay `device.status`
+  (strict FIFO + backpressure against the server-side caps; a full queue
+  refuses mid-transfer with an honest error). Incomplete transfers are swept
+  after 20 min — longer than the queue TTL (15 min) so a transfer interrupted
+  by a target-offline gap resumes from the queue when the target returns; the
+  completion check requires full `[0, total)` coverage.
+- The send UI works for offline peers too: chunks report `queued`, and the modal
+  shows "delivers when the device reconnects (within ~15 min)" plus a
+  queued-count badge from the presence frames.
 - The teleport UI (paired-devices list, send, inbox) lives in a global modal
   opened by clicking the app title (NotesView sidebar); pairing lives in
   Options → Devices &amp; Teleport. The modal re-announces `device.hello` on
-  open (presence sync) and registers the incoming/progress handlers only while
-  open — items sent while it is closed are dropped (as before). Pairing
-  confirmations are global (modal lives in App.vue).
+  open (presence sync + queue drain) and registers the incoming/progress
+  handlers only while open — items sent while it is closed are dropped (as
+  before). Pairing confirmations are global (modal lives in App.vue).
 
 ## Encrypted Backups
 

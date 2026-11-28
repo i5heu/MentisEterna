@@ -24,6 +24,7 @@ import { getOrCreateDevice, listPeers } from "../store.js";
 import {
     cancelPairing,
     handleDeviceMsg,
+    handleDeviceStatus,
     pairingState,
     pendingPairRequests,
     respondToPairRequest,
@@ -169,6 +170,52 @@ describe("device pairing handshake", () => {
         expect(listPeers().some((p) => p.id === targetId)).toBe(true);
     });
 
+    test("re-pairing an already-paired peer auto-accepts without a prompt", async () => {
+        const requester = await getOrCreateDevice();
+        const responseCountBefore = sendLiveMessage.mock.calls.length;
+
+        // First pairing: prompt, accept, both sides paired.
+        const firstRequest = {
+            kind: "pair.request",
+            v: 1,
+            request_id: "re-pair-1",
+            name: "Laptop",
+            id: requester.id,
+            pub: requester.publicKeyJwk,
+        };
+        firstRequest.sig = await signPayload(requester.privateKeyJwk, firstRequest);
+        await deliverPairingMsg(requester.id, firstRequest);
+        expect(pendingPairRequests.value).toHaveLength(1);
+        await respondToPairRequest("re-pair-1", true);
+        expect(listPeers().some((p) => p.id === requester.id)).toBe(true);
+
+        // Second request from the SAME device (e.g. the other side lost its
+        // half of the pairing): accepted silently — no stale prompt noise.
+        const secondRequest = {
+            kind: "pair.request",
+            v: 1,
+            request_id: "re-pair-2",
+            name: "Laptop",
+            id: requester.id,
+            pub: requester.publicKeyJwk,
+        };
+        secondRequest.sig = await signPayload(requester.privateKeyJwk, secondRequest);
+        await deliverPairingMsg(requester.id, secondRequest);
+        expect(pendingPairRequests.value).toHaveLength(0);
+
+        const responses = sendLiveMessage.mock.calls
+            .slice(responseCountBefore)
+            .map((c) => c[0])
+            .filter((m) => m.type === "device.msg" && m.channel === "pairing")
+            .map((m) => JSON.parse(m.data))
+            .filter((d) => d.kind === "pair.response");
+        const auto = responses.find((r) => r.request_id === "re-pair-2");
+        expect(auto).toMatchObject({ accepted: true, request_id: "re-pair-2" });
+        expect(
+            await verifyPayload(requester.publicKeyJwk, auto, auto.sig),
+        ).toBe(true);
+    });
+
     test("decline leaves both sides unpaired", async () => {
         const requester = await getOrCreateDevice();
         const target = await generateDeviceKeyPair();
@@ -280,6 +327,60 @@ describe("device pairing handshake", () => {
         try {
             const target = await generateDeviceKeyPair();
             const targetId = await fingerprint(target.publicKeyJwk);
+            const requestId = await sendPairRequest({
+                v: 1,
+                name: "Dev B",
+                id: targetId,
+                pub: target.publicKeyJwk,
+            });
+            expect(pairingState.value.state).toBe("pending");
+
+            // The relay confirmed the request reached the target; the target
+            // itself never answers.
+            handleDeviceStatus({
+                type: "device.status",
+                client_msg_id: requestId,
+                status: "delivered",
+            });
+
+            jest.advanceTimersByTime(61 * 1000);
+            expect(pairingState.value.state).toBe("error");
+            expect(pairingState.value.error).toMatch(/No response/);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test("a refused pairing request fails fast instead of timing out", async () => {
+        const target = await generateDeviceKeyPair();
+        const targetId = await fingerprint(target.publicKeyJwk);
+        const requestId = await sendPairRequest({
+            v: 1,
+            name: "Dev B",
+            id: targetId,
+            pub: target.publicKeyJwk,
+        });
+        expect(pairingState.value.state).toBe("pending");
+
+        // The pairing channel is live-only: an offline target refuses
+        // immediately, and the pending state errors out right away.
+        handleDeviceStatus({
+            type: "device.status",
+            client_msg_id: requestId,
+            status: "refused",
+            error: "device is offline (channel is delivered live only)",
+        });
+        // The refusal settles the status promise on the microtask queue.
+        await new Promise((r) => setTimeout(r, 0));
+        expect(pairingState.value.state).toBe("error");
+        expect(pairingState.value.error).toMatch(/offline/);
+    });
+
+    test("a dead relay (no confirmation) errors the pending pairing", async () => {
+        jest.useFakeTimers();
+        try {
+            const target = await generateDeviceKeyPair();
+            const targetId = await fingerprint(target.publicKeyJwk);
             await sendPairRequest({
                 v: 1,
                 name: "Dev B",
@@ -288,9 +389,11 @@ describe("device pairing handshake", () => {
             });
             expect(pairingState.value.state).toBe("pending");
 
-            jest.advanceTimersByTime(61 * 1000);
+            // No device.status ever arrives — after the confirmation window
+            // the pending pairing fails with a connection-flavored error.
+            await jest.advanceTimersByTimeAsync(16 * 1000);
             expect(pairingState.value.state).toBe("error");
-            expect(pairingState.value.error).toMatch(/No response/);
+            expect(pairingState.value.error).toMatch(/confirmation/i);
         } finally {
             jest.useRealTimers();
         }

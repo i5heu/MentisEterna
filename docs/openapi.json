@@ -612,6 +612,43 @@
                     }
                 }
             },
+            "Device": {
+                "type": "object",
+                "properties": {
+                    "device_id": {
+                        "type": "string",
+                        "description": "Fingerprint of the device's ECDH public key (routing id)."
+                    },
+                    "online": {
+                        "type": "boolean",
+                        "description": "Whether the device currently holds a live websocket connection."
+                    },
+                    "last_seen_at": {
+                        "type": "string",
+                        "description": "When the device last announced itself (RFC 3339)."
+                    },
+                    "queued": {
+                        "type": "integer",
+                        "description": "Pending undelivered messages in the offline queue."
+                    },
+                    "queued_bytes": {
+                        "type": "integer",
+                        "description": "Summed payload bytes of the pending queue rows."
+                    }
+                }
+            },
+            "DeviceListResponse": {
+                "type": "object",
+                "properties": {
+                    "devices": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Device"
+                        },
+                        "description": "Devices ordered by most recent activity."
+                    }
+                }
+            },
             "BackupTriggerResponse": {
                 "type": "object",
                 "properties": {
@@ -1943,6 +1980,28 @@
                     },
                     "503": {
                         "description": "Backups not configured"
+                    }
+                }
+            }
+        },
+        "/devices": {
+            "get": {
+                "summary": "List registered devices",
+                "operationId": "listDevices",
+                "tags": [
+                    "Devices"
+                ],
+                "description": "Every device the account has announced via device.hello, with live presence and the pending offline-queue footprint (messages sent while a device was offline are queued server-side and delivered on its next websocket hello).",
+                "responses": {
+                    "200": {
+                        "description": "Device registry with presence and queue counts",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DeviceListResponse"
+                                }
+                            }
+                        }
                     }
                 }
             }

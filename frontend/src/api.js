@@ -41,16 +41,24 @@ function dispatchWindowEvent(name, detail) {
 }
 
 // Every inbound live message funnels through here: the window event feeds
-// views (presence), and device.msg frames are forwarded into the device
+// views (presence), and device-channel frames are forwarded into the device
 // channel module — exactly once, so pairing confirmations work from any view
 // and teleport frames are reassembled even when the Settings page is closed.
-// teleport.js is imported dynamically to avoid a static cycle (it imports
-// sendLiveMessage from this module).
+// device.status frames carry the relay's per-message outcome (delivered /
+// queued / refused) for sends this client is awaiting. teleport.js is
+// imported dynamically to avoid a static cycle (it imports sendLiveMessage
+// from this module).
 function dispatchLiveMessage(payload) {
     dispatchWindowEvent("live:message", payload);
     if (payload && payload.type === "device.msg") {
         import("./device/teleport.js")
             .then((m) => m.handleDeviceMsg(payload))
+            .catch(() => {});
+        return;
+    }
+    if (payload && payload.type === "device.status") {
+        import("./device/teleport.js")
+            .then((m) => m.handleDeviceStatus(payload))
             .catch(() => {});
     }
 }

@@ -36,12 +36,18 @@
                             :title="
                                 onlinePeerIds.has(peer.id)
                                     ? 'Online'
-                                    : 'Offline'
+                                    : 'Offline — sends are queued and delivered when it reconnects'
                             "
                         ></span>
                         <span class="peer-name">{{
                             peer.name || "Device"
                         }}</span>
+                        <span
+                            v-if="queuedCounts[peer.id]"
+                            class="peer-queued-badge"
+                            title="Messages waiting in the server queue for this device"
+                            >{{ queuedCounts[peer.id] }} queued</span
+                        >
                         <code class="peer-fp">{{
                             shortFingerprint(peer.id)
                         }}</code>
@@ -54,19 +60,25 @@
                     </div>
                 </div>
 
-                <!-- Teleport: send -->
-                <div v-if="onlinePeers.length" class="device-card">
+                <!-- Teleport: send (works for offline peers too — the server
+                     queues and delivers on the peer's next hello) -->
+                <div v-if="peers.length" class="device-card">
                     <div class="device-card-header">
                         <span class="device-card-title">Send to device</span>
                     </div>
                     <div
-                        v-for="peer in onlinePeers"
+                        v-for="peer in peers"
                         :key="peer.id"
                         class="teleport-peer"
                     >
                         <div class="teleport-peer-header">
                             <span class="peer-name">{{
                                 peer.name || "Device"
+                            }}</span>
+                            <span class="teleport-queue-hint">{{
+                                onlinePeerIds.has(peer.id)
+                                    ? "online"
+                                    : "offline — will queue"
                             }}</span>
                             <span
                                 v-if="progress[peer.id]"
@@ -161,7 +173,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { onMounted, onUnmounted, reactive, ref } from "vue";
 import { sendLiveMessage } from "../api.js";
 import { getOrCreateDevice, listPeers, removePeer } from "../device/store.js";
 import {
@@ -174,6 +186,7 @@ import {
 
 const peers = ref([]);
 const onlinePeerIds = ref(new Set());
+const queuedCounts = reactive({});
 const textDrafts = reactive({});
 const sendingTo = reactive({});
 const progress = reactive({});
@@ -181,10 +194,6 @@ const sendErrs = reactive({});
 const incomingItems = ref([]);
 const fileInput = ref(null);
 let pendingFilePeer = null;
-
-const onlinePeers = computed(() =>
-    peers.value.filter((p) => onlinePeerIds.value.has(p.id)),
-);
 
 function shortFingerprint(id) {
     if (!id) return "";
@@ -212,14 +221,29 @@ function removePaired(id) {
     refreshPeers();
 }
 
+// Outcome copy from the per-chunk delivery summary: fully delivered, fully
+// queued (peer offline), or a mix (peer went offline mid-transfer).
+function describeOutcome(summary) {
+    if (!summary) {
+        return "Sent.";
+    }
+    if (summary.queued === 0) {
+        return "Delivered.";
+    }
+    if (summary.delivered === 0) {
+        return `Queued (${summary.queued} chunk${summary.queued === 1 ? "" : "s"}) — delivers when the device reconnects (within ~15 min).`;
+    }
+    return `Partly delivered, ${summary.queued} chunk${summary.queued === 1 ? "" : "s"} queued for reconnect (within ~15 min).`;
+}
+
 async function sendTextTo(peer) {
     sendingTo[peer.id] = true;
     sendErrs[peer.id] = "";
     progress[peer.id] = "";
     try {
-        await sendText(peer, textDrafts[peer.id] || "");
+        const summary = await sendText(peer, textDrafts[peer.id] || "");
         textDrafts[peer.id] = "";
-        progress[peer.id] = "Sent.";
+        progress[peer.id] = describeOutcome(summary);
     } catch (e) {
         sendErrs[peer.id] = e.message || "Send failed";
     } finally {
@@ -249,8 +273,8 @@ async function fileChosen(event) {
     sendErrs[peer.id] = "";
     progress[peer.id] = "";
     try {
-        await sendFile(peer, file);
-        progress[peer.id] = "Sent.";
+        const summary = await sendFile(peer, file);
+        progress[peer.id] = describeOutcome(summary);
     } catch (e) {
         sendErrs[peer.id] = e.message || "Send failed";
     } finally {
@@ -290,12 +314,18 @@ function onLiveMsg(event) {
                 payload.device_id,
             );
         }
+        if (typeof payload.queued === "number") {
+            queuedCounts[payload.device_id] = payload.queued;
+        }
         return;
     }
     if (payload.type === "device.offline") {
         const next = new Set(onlinePeerIds.value);
         next.delete(payload.device_id);
         onlinePeerIds.value = next;
+        if (typeof payload.queued === "number") {
+            queuedCounts[payload.device_id] = payload.queued;
+        }
         return;
     }
     // device.msg frames are forwarded to the device channel by api.js
@@ -303,8 +333,9 @@ function onLiveMsg(event) {
     // work from any view; this modal only reads their results.
 }
 
-function onTeleportProgress({ peerId, sent, total }) {
-    progress[peerId] = `Sent ${sent}/${total} chunks…`;
+function onTeleportProgress({ peerId, sent, total, status }) {
+    const noun = status === "queued" ? "Queued" : "Sent";
+    progress[peerId] = `${noun} ${sent}/${total} chunks…`;
 }
 
 onMounted(async () => {
@@ -472,6 +503,23 @@ onUnmounted(() => {
     font-size: 0.7rem;
     color: var(--font-color-secondary);
     flex-shrink: 0;
+}
+
+.peer-queued-badge {
+    font-size: 0.68rem;
+    color: var(--accent-teal);
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    padding: 0.05rem 0.3rem;
+    flex-shrink: 0;
+}
+
+.teleport-queue-hint {
+    font-size: 0.68rem;
+    color: var(--font-color-secondary);
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .peer-remove {

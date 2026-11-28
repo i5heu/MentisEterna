@@ -143,6 +143,18 @@ fast_workers = 3
 # Number of concurrent workers for recipe-category classification.
 category_workers = 10
 
+[device]
+# Same-user device-to-device channel (pairing + teleport). Messages sent to
+# an offline device are held in a server-side queue (opaque ciphertext —
+# E2E encryption is unchanged) and delivered in order when the device
+# reconnects; undelivered rows expire after the TTL and are swept.
+# How long an undelivered device message stays queued (minutes).
+queue_ttl_minutes = 15
+# Per-device caps for the pending queue (a device at its cap refuses new
+# messages until it picks up its backlog).
+queue_max_messages = 256
+queue_max_bytes = 33554432  # 32 MiB
+
 [mcp]
 # MCP (Model Context Protocol) endpoint for external coding agents, served at
 # POST /mcp (streamable-http). Tools manage task notes (list/add/complete).

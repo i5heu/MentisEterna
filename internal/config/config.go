@@ -14,6 +14,7 @@ type Config struct {
 	Printer  PrinterConfig  `toml:"printer"`
 	Jobs     JobsConfig     `toml:"jobs"`
 	Recipe   RecipeConfig   `toml:"recipe"`
+	Device   DeviceConfig   `toml:"device"`
 	MCP      MCPConfig      `toml:"mcp"`
 }
 
@@ -101,6 +102,20 @@ type JobsConfig struct {
 
 type RecipeConfig struct {
 	CategoryWorkers int `toml:"category_workers"` // was RECIPE_CATEGORY_WORKERS
+}
+
+// DeviceConfig configures the same-user device-to-device channel (pairing +
+// teleport). The pending-message queue lets a device receive what peers sent
+// while it was offline: rows persist server-side (opaque ciphertext) until
+// delivered-and-acked or expired.
+type DeviceConfig struct {
+	// QueueTTLMinutes is how long an undelivered device.msg stays queued
+	// for an offline device. <=0 → 15.
+	QueueTTLMinutes int `toml:"queue_ttl_minutes"`
+	// QueueMaxMessages caps pending rows per target device. <=0 → 256.
+	QueueMaxMessages int `toml:"queue_max_messages"`
+	// QueueMaxBytes caps the summed payload bytes per target device. <=0 → 32 MiB.
+	QueueMaxBytes int64 `toml:"queue_max_bytes"`
 }
 
 // MCPConfig configures the MCP (Model Context Protocol) endpoint at /mcp and
