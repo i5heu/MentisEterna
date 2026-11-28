@@ -17,19 +17,186 @@ import {
 
 const LINK_HINT_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 
+/**
+ * A link-search "target" abstracts the editable surface the `[[` popup is
+ * attached to. Implementations: plain textareas (reply/threadReply composes)
+ * and the Monaco note body editor. All coordinates are relative to the
+ * element that absolutely positions the popup (the textarea origin for
+ * textareas, the wrapper element for Monaco).
+ *
+ * Shape:
+ * {
+ *   isAvailable(): boolean,
+ *   text: Ref<string>,                    // current content
+ *   onChange?: () => void,                // dirty marking on input
+ *   getOffset(): number,                  // caret offset in the content
+ *   ownsFocus(): boolean,
+ *   applyText(newText, selectOffset): void,
+ *   getCaretRect(): { left, top },        // caret coords, popup space
+ *   getLineHeight(): number,              // px
+ *   getClientWidth(): number,             // px, for popup clamping
+ *   getViewportTop(): number,             // viewport top, for flip clamping
+ * }
+ */
+
+/**
+ * Measures the caret position inside a textarea by mirroring its styles in
+ * an off-DOM div. Returns coordinates relative to the textarea's origin,
+ * adjusted for its current scroll.
+ */
+function getTextareaCaretPosition(textarea, position) {
+    const div = document.createElement("div");
+    const span = document.createElement("span");
+    const style = window.getComputedStyle(textarea);
+    const props = [
+        "boxSizing",
+        "width",
+        "height",
+        "overflowX",
+        "overflowY",
+        "borderTopWidth",
+        "borderRightWidth",
+        "borderBottomWidth",
+        "borderLeftWidth",
+        "paddingTop",
+        "paddingRight",
+        "paddingBottom",
+        "paddingLeft",
+        "fontStyle",
+        "fontVariant",
+        "fontWeight",
+        "fontStretch",
+        "fontSize",
+        "fontSizeAdjust",
+        "lineHeight",
+        "fontFamily",
+        "textAlign",
+        "textTransform",
+        "textIndent",
+        "textDecoration",
+        "letterSpacing",
+        "wordSpacing",
+        "tabSize",
+        "MozTabSize",
+    ];
+
+    div.style.position = "absolute";
+    div.style.visibility = "hidden";
+    div.style.whiteSpace = "pre-wrap";
+    div.style.wordWrap = "break-word";
+    div.style.top = "0";
+    div.style.left = "0";
+
+    for (const prop of props) {
+        div.style[prop] = style[prop];
+    }
+
+    div.textContent = textarea.value.slice(0, position);
+    span.textContent = textarea.value.slice(position) || ".";
+    div.appendChild(span);
+    document.body.appendChild(div);
+
+    const left = span.offsetLeft - textarea.scrollLeft;
+    const top = span.offsetTop - textarea.scrollTop;
+
+    document.body.removeChild(div);
+    return { left, top };
+}
+
+export function createTextareaLinkTarget({ elementRef, textRef, onChange }) {
+    function element() {
+        return elementRef.value;
+    }
+
+    return {
+        isAvailable: () => Boolean(element()),
+        text: textRef,
+        onChange,
+        getOffset: () => element()?.selectionStart ?? 0,
+        ownsFocus: () =>
+            Boolean(element()) && document.activeElement === element(),
+        applyText(newText, selectOffset) {
+            textRef.value = newText;
+            requestAnimationFrame(() => {
+                const el = element();
+                if (!el) return;
+                el.focus();
+                el.setSelectionRange(selectOffset, selectOffset);
+            });
+        },
+        getCaretRect() {
+            const el = element();
+            if (!el) return { left: 0, top: 0 };
+            const { left, top } = getTextareaCaretPosition(
+                el,
+                el.selectionStart ?? 0,
+            );
+            return { left, top };
+        },
+        getLineHeight() {
+            const el = element();
+            if (!el) return 18;
+            const style = window.getComputedStyle(el);
+            return parseFloat(style.lineHeight) || parseFloat(style.fontSize) || 18;
+        },
+        getClientWidth: () => element()?.clientWidth ?? 0,
+        getViewportTop: () => element()?.getBoundingClientRect().top ?? 0,
+    };
+}
+
+/**
+ * Monaco-backed target. `componentRef` points at the exposed API of a
+ * MonacoEditor.vue instance (may be null before mount / while unloaded);
+ * `wrapperRef` is the element that positions the link popup.
+ */
+export function createMonacoLinkTarget({
+    componentRef,
+    wrapperRef,
+    textRef,
+    onChange,
+}) {
+    function component() {
+        const c = componentRef?.value;
+        return c && typeof c.isReady === "function" && c.isReady() ? c : null;
+    }
+
+    function wrapper() {
+        return wrapperRef?.value ?? null;
+    }
+
+    return {
+        isAvailable: () => Boolean(component()),
+        text: textRef,
+        onChange,
+        getOffset: () => component()?.getOffset() ?? 0,
+        ownsFocus: () => component()?.ownsFocus() ?? false,
+        applyText: (newText, selectOffset) =>
+            component()?.applyText(newText, selectOffset),
+        getCaretRect() {
+            const c = component();
+            if (!c) return { left: 0, top: 0 };
+            const rect = c.getCaretViewportRect();
+            const w = wrapper();
+            if (!w) return { left: rect.left, top: rect.top };
+            const wrapperRect = w.getBoundingClientRect();
+            return {
+                left: rect.left - wrapperRect.left,
+                top: rect.top - wrapperRect.top,
+            };
+        },
+        getLineHeight: () => component()?.lineHeightPx() ?? 23,
+        getClientWidth: () => wrapper()?.clientWidth ?? 0,
+        getViewportTop: () => wrapper()?.getBoundingClientRect().top ?? 0,
+    };
+}
+
 export function useNoteLinkSearch({
     token,
     streamSearchNotes,
-    bodyTextarea,
-    newReplyTextarea,
-    threadReplyTextarea,
-    editBody,
-    newReplyBody,
-    threadReplyBody,
+    targets,
     mainChatFeedEl,
     threadChatFeedEl,
     hideHintOverlay,
-    onBodyChange,
     hintRefreshSources = [],
 }) {
     const linkSearchQuery = ref("");
@@ -53,26 +220,7 @@ export function useNoteLinkSearch({
     let linkHintRefreshFrame = 0;
 
     function getLinkSearchContext(target = linkSearchTarget.value) {
-        switch (target) {
-            case "body":
-                return {
-                    textarea: bodyTextarea,
-                    text: editBody,
-                    onChange: onBodyChange,
-                };
-            case "reply":
-                return {
-                    textarea: newReplyTextarea,
-                    text: newReplyBody,
-                };
-            case "threadReply":
-                return {
-                    textarea: threadReplyTextarea,
-                    text: threadReplyBody,
-                };
-            default:
-                return null;
-        }
+        return targets?.[target] || null;
     }
 
     function normalizeLinkHintKey(key) {
@@ -417,12 +565,10 @@ export function useNoteLinkSearch({
 
     function detectLinkSearchTrigger(textBefore) {
         const lastOpen = textBefore.lastIndexOf("[[");
-        const lastClose = textBefore.lastIndexOf("]]"
-        );
+        const lastClose = textBefore.lastIndexOf("]]");
         if (lastOpen !== -1 && lastOpen > lastClose) {
             const query = textBefore.slice(lastOpen + 2);
-            if (!query.includes("]]"
-            ) && !query.includes("\n")) {
+            if (!query.includes("]]") && !query.includes("\n")) {
                 return {
                     type: "wiki",
                     start: lastOpen,
@@ -456,12 +602,11 @@ export function useNoteLinkSearch({
 
     function updateLinkSearchFromCursor() {
         const context = getLinkSearchContext();
-        const element = context?.textarea.value;
-        if (!context || !element) {
+        if (!context || !context.isAvailable()) {
             closeLinkSearch();
             return;
         }
-        const position = element.selectionStart ?? 0;
+        const position = context.getOffset();
         const textBefore = context.text.value.slice(0, position);
         const trigger = detectLinkSearchTrigger(textBefore);
         if (!trigger) {
@@ -493,76 +638,12 @@ export function useNoteLinkSearch({
         linkSearchTimeout = setTimeout(doLinkSearch, 150);
     }
 
-    function getTextareaCaretPosition(textarea, position) {
-        const div = document.createElement("div");
-        const span = document.createElement("span");
-        const style = window.getComputedStyle(textarea);
-        const props = [
-            "boxSizing",
-            "width",
-            "height",
-            "overflowX",
-            "overflowY",
-            "borderTopWidth",
-            "borderRightWidth",
-            "borderBottomWidth",
-            "borderLeftWidth",
-            "paddingTop",
-            "paddingRight",
-            "paddingBottom",
-            "paddingLeft",
-            "fontStyle",
-            "fontVariant",
-            "fontWeight",
-            "fontStretch",
-            "fontSize",
-            "fontSizeAdjust",
-            "lineHeight",
-            "fontFamily",
-            "textAlign",
-            "textTransform",
-            "textIndent",
-            "textDecoration",
-            "letterSpacing",
-            "wordSpacing",
-            "tabSize",
-            "MozTabSize",
-        ];
-
-        div.style.position = "absolute";
-        div.style.visibility = "hidden";
-        div.style.whiteSpace = "pre-wrap";
-        div.style.wordWrap = "break-word";
-        div.style.top = "0";
-        div.style.left = "0";
-
-        for (const prop of props) {
-            div.style[prop] = style[prop];
-        }
-
-        div.textContent = textarea.value.slice(0, position);
-        span.textContent = textarea.value.slice(position) || ".";
-        div.appendChild(span);
-        document.body.appendChild(div);
-
-        const left = span.offsetLeft - textarea.scrollLeft;
-        const top = span.offsetTop - textarea.scrollTop;
-
-        document.body.removeChild(div);
-        return { left, top };
-    }
-
     function updateLinkPopupPosition() {
-        const element = getLinkSearchContext()?.textarea.value;
-        if (!element || !linkSearchVisible.value) return;
+        const context = getLinkSearchContext();
+        if (!context || !context.isAvailable() || !linkSearchVisible.value) return;
 
-        const { left: caretLeft, top: caretTop } = getTextareaCaretPosition(
-            element,
-            element.selectionStart ?? 0,
-        );
-        const style = window.getComputedStyle(element);
-        const lineHeight =
-            parseFloat(style.lineHeight) || parseFloat(style.fontSize) || 18;
+        const { left: caretLeft, top: caretTop } = context.getCaretRect();
+        const lineHeight = context.getLineHeight();
         const popupWidth = 320;
         const popupHeight = 220;
         const gap = 8;
@@ -571,11 +652,11 @@ export function useNoteLinkSearch({
         let left = Math.max(pad, caretLeft);
         let top = caretTop + lineHeight + gap;
 
-        const maxLeft = Math.max(pad, element.clientWidth - popupWidth - pad);
+        const maxLeft = Math.max(pad, context.getClientWidth() - popupWidth - pad);
         left = Math.min(left, maxLeft);
 
-        const rect = element.getBoundingClientRect();
-        const popupBottom = rect.top + top + popupHeight;
+        const viewportTop = context.getViewportTop();
+        const popupBottom = viewportTop + top + popupHeight;
         if (popupBottom > window.innerHeight - 12) {
             top = Math.max(pad, caretTop - popupHeight - gap);
         }
@@ -627,16 +708,14 @@ export function useNoteLinkSearch({
     }
 
     function linkSearchOwnsFocus() {
-        if (!linkSearchVisible.value) return false;
-        const element = getLinkSearchContext()?.textarea.value;
-        return Boolean(element) && document.activeElement === element;
+        const context = getLinkSearchContext();
+        return context ? context.ownsFocus() : false;
     }
 
     function selectLinkResult(note) {
         const context = getLinkSearchContext();
-        const element = context?.textarea.value;
-        if (!context || !element) return;
-        const position = element.selectionStart ?? 0;
+        if (!context || !context.isAvailable()) return;
+        const position = context.getOffset();
         const textBefore = context.text.value.slice(0, position);
         const textAfter = context.text.value.slice(position);
         const linkText = `[${note.title || "Untitled"}](/note/${note.id})`;
@@ -653,14 +732,8 @@ export function useNoteLinkSearch({
         if (replaceStart == null || replaceStart < 0) return;
 
         const newText = textBefore.slice(0, replaceStart) + linkText;
-        context.text.value = newText + textAfter;
+        context.applyText(newText + textAfter, newText.length);
         closeLinkSearch();
-        requestAnimationFrame(() => {
-            element.focus();
-            const cursorPos = newText.length;
-            element.setSelectionRange(cursorPos, cursorPos);
-            updateLinkPopupPosition();
-        });
         context.onChange?.();
     }
 

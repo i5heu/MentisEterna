@@ -775,25 +775,24 @@
                             <span class="message-badge">root</span>
                         </div>
                         <div class="message-body">
-                            <div v-if="isEditing" class="body-textarea-wrapper">
-                                <textarea
-                                    ref="bodyTextarea"
-                                    v-model="editBody"
-                                    class="body-textarea"
-                                    :title="getShortcutLabel('focus-note-body')"
+                            <div
+                                v-if="isEditing"
+                                ref="bodyEditorWrapper"
+                                class="body-textarea-wrapper"
+                            >
+                                <MonacoEditor
+                                    ref="monacoBody"
+                                    class="body-monaco"
+                                    :model-value="editBody"
+                                    language="markdown"
                                     placeholder="Write your note here… (drag files here)"
-                                    @input="onLinkEditorInput('body')"
-                                    @click="
-                                        onLinkEditorCaretMove('body', $event)
-                                    "
-                                    @keyup="
-                                        onLinkEditorCaretMove('body', $event)
-                                    "
-                                    @keydown="onLinkEditorKeydown('body', $event)"
-                                    @scroll="onLinkEditorScroll('body')"
-                                                    @dragover.prevent
-                                                    @drop.prevent="onBodyDrop"
-                                                    @paste="onBodyPaste"
+                                    :title="getShortcutLabel('focus-note-body')"
+                                    :intercept-key="interceptMonacoBodyKey"
+                                    @update:model-value="onMonacoBodyChange"
+                                    @cursor-moved="onLinkEditorCaretMove('body')"
+                                    @scrolled="onLinkEditorScroll('body')"
+                                    @paste-files="onBodyPaste"
+                                    @drop-files="onBodyDrop"
                                 />
                                 <ShortcutHint
                                     v-if="
@@ -1688,7 +1687,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import {
+    ref,
+    computed,
+    defineAsyncComponent,
+    onMounted,
+    onUnmounted,
+    watch,
+} from "vue";
 import MarkdownIt from "markdown-it";
 import markdownItFootnote from "markdown-it-footnote";
 import spoilerPlugin from "../spoilerPlugin.js";
@@ -1752,8 +1758,16 @@ import {
     setCollapsedSection,
     toggleCollapsedSection,
 } from "./notesViewSearch.js";
-import { useNoteLinkSearch } from "../composables/useNoteLinkSearch.js";
+import {
+    createMonacoLinkTarget,
+    createTextareaLinkTarget,
+    useNoteLinkSearch,
+} from "../composables/useNoteLinkSearch.js";
 import { useNotesLiveSync } from "../composables/useNotesLiveSync.js";
+// Monaco is a heavy dependency: load it lazily so it lands in its own chunk.
+const MonacoEditor = defineAsyncComponent(
+    () => import("../components/MonacoEditor.vue"),
+);
 
 const props = defineProps({
     token: String,
@@ -1794,7 +1808,8 @@ const editTitleInput = ref(null);
 const UNSAVED_NOTE_WARNING =
     "You have unsaved changes in this note. Leave without saving?";
 const searchInputEl = ref(null);
-const bodyTextarea = ref(null);
+const monacoBody = ref(null);
+const bodyEditorWrapper = ref(null);
 const newReplyTitleInput = ref(null);
 const newReplyTextarea = ref(null);
 const threadReplyTitleInput = ref(null);
@@ -1815,18 +1830,52 @@ const { enqueueAttachment, enqueueInline, enqueueMultipleInline, resumeStoredUpl
 const showUploadModal = ref(false);
 
 function insertAtCursor(text) {
-    const el = bodyTextarea.value;
-    if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    editBody.value =
-        editBody.value.slice(0, start) + text + editBody.value.slice(end);
-    requestAnimationFrame(() => {
-        el.focus();
-        const pos = start + text.length;
-        el.setSelectionRange(pos, pos);
-    });
+    const editor = monacoBody.value;
+    if (!editor) {
+        // Editor not mounted yet (shouldn't normally happen while editing):
+        // fall back to appending.
+        if (!text) return;
+        editBody.value += text;
+        dirty.value = true;
+        return;
+    }
+    editor.insertAtCursor(text);
     dirty.value = true;
+}
+
+// Monaco note body: v-model sync + dirty marking + [[ link-search triggers.
+// Every content change (user typing, link insertion, snippet inserts) flows
+// through here.
+function onMonacoBodyChange(value) {
+    if (value === editBody.value) return;
+    editBody.value = value;
+    dirty.value = true;
+    onLinkEditorInput("body");
+}
+
+// Keys the [[ link-search popup owns while it is open over the Monaco body.
+// Mirrors the old textarea keydown semantics: the global window-capture
+// shortcuts act first (they preventDefault when they handle a key); Monaco's
+// own command dispatch must then be blocked, because it ignores an already
+// preventDefault'ed event.
+function interceptMonacoBodyKey(event) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return false;
+    if (!linkSearchVisible.value || linkSearchTarget.value !== "body") {
+        return false;
+    }
+    switch (event.key) {
+        case "ArrowDown":
+        case "ArrowUp":
+        case "Enter":
+        case "Escape":
+            onLinkEditorKeydown("body", event);
+            return event.defaultPrevented;
+        case "ArrowLeft":
+        case "ArrowRight":
+            return Boolean(onLinkEditorKeydown("body", event));
+        default:
+            return false;
+    }
 }
 
 // Note-type options from the registry (single source of truth)
@@ -2094,18 +2143,24 @@ const {
 } = useNoteLinkSearch({
     token: props.token,
     streamSearchNotes,
-    bodyTextarea,
-    newReplyTextarea,
-    threadReplyTextarea,
-    editBody,
-    newReplyBody,
-    threadReplyBody,
+    targets: {
+        body: createMonacoLinkTarget({
+            componentRef: monacoBody,
+            wrapperRef: bodyEditorWrapper,
+            textRef: editBody,
+        }),
+        reply: createTextareaLinkTarget({
+            elementRef: newReplyTextarea,
+            textRef: newReplyBody,
+        }),
+        threadReply: createTextareaLinkTarget({
+            elementRef: threadReplyTextarea,
+            textRef: threadReplyBody,
+        }),
+    },
     mainChatFeedEl,
     threadChatFeedEl,
     hideHintOverlay: () => hideHintOverlay?.(),
-    onBodyChange: () => {
-        dirty.value = true;
-    },
     hintRefreshSources: [
         selectedRendererKey,
         threadRendererKey,
@@ -2358,7 +2413,7 @@ function focusNoteTitle() {
 }
 
 function focusBodyEditor() {
-    document.querySelector(".body-textarea")?.focus();
+    monacoBody.value?.focus();
 }
 
 function focusReplyTitle() {
@@ -3103,9 +3158,7 @@ function newNote(
     if (updateURL) {
         pushURL();
     }
-    requestAnimationFrame(() =>
-        document.querySelector(".body-textarea")?.focus(),
-    );
+    requestAnimationFrame(() => monacoBody.value?.focus());
     return true;
 }
 
@@ -3114,9 +3167,7 @@ function newChildNote() {
     const created = newNote(selected.value);
     if (!created) return;
     isEditing.value = true;
-    requestAnimationFrame(() =>
-        document.querySelector(".body-textarea")?.focus(),
-    );
+    requestAnimationFrame(() => monacoBody.value?.focus());
 }
 
 function confirmDelete() {
@@ -5265,28 +5316,12 @@ function onPopstate() {
     overflow: hidden;
 }
 
-.chat-feed .body-textarea {
-    field-sizing: content;
-}
-
-.body-textarea {
+/* Monaco note body editor: raised, bordered surface that grows with content */
+.body-monaco {
     flex: 1;
-    border: none;
-    border-radius: 0;
-    background: var(--html-bg);
-    padding: 1.25rem;
-    font-size: 0.95rem;
-    line-height: 1.7;
-    min-height: 0;
     min-width: 0;
-    resize: none;
 }
 
-.body-textarea:focus {
-    border-color: transparent;
-}
-
-/* Body textarea wrapper (for link search popup positioning) */
 .body-textarea-wrapper {
     position: relative;
     flex: 1;
@@ -5898,10 +5933,9 @@ function onPopstate() {
     color: var(--font-color);
 }
 
-.message-body .body-textarea {
+.message-body .body-monaco {
     flex: unset;
     min-height: 120px;
-    padding: 0.6rem;
     border-radius: 3px;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
