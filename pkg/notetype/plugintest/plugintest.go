@@ -99,6 +99,7 @@ func Run(t *testing.T, plugin notetype.Plugin, td TestData) {
 			title TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'standard',
 			pinned INTEGER NOT NULL DEFAULT 0,
+			high_private INTEGER NOT NULL DEFAULT 0,
 			parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 		)`); err != nil {
 			t.Fatalf("create notes table: %v", err)
@@ -202,6 +203,7 @@ func Run(t *testing.T, plugin notetype.Plugin, td TestData) {
 				title TEXT NOT NULL,
 				type TEXT NOT NULL DEFAULT 'standard',
 				pinned INTEGER NOT NULL DEFAULT 0,
+			high_private INTEGER NOT NULL DEFAULT 0,
 				parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 			)`); err != nil {
 				t.Fatalf("create notes table: %v", err)
@@ -268,6 +270,7 @@ func Run(t *testing.T, plugin notetype.Plugin, td TestData) {
 			title TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'standard',
 			pinned INTEGER NOT NULL DEFAULT 0,
+			high_private INTEGER NOT NULL DEFAULT 0,
 			parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 		)`); err != nil {
 			t.Fatalf("create notes table: %v", err)
@@ -373,6 +376,7 @@ func DB(t *testing.T, plugin notetype.Plugin) *db.DB {
 		title      TEXT NOT NULL,
 		type       TEXT NOT NULL DEFAULT 'standard',
 		pinned     INTEGER NOT NULL DEFAULT 0,
+		high_private INTEGER NOT NULL DEFAULT 0,
 		parent_id  INTEGER REFERENCES notes(id) ON DELETE SET NULL,
 		created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	)`); err != nil {

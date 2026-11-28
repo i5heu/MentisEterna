@@ -483,6 +483,95 @@ export async function setNotePin(token, id, pinned) {
     });
 }
 
+// setNotePrivacy marks a note highly private: remote LLM providers never
+// receive its content (archive chat excludes it, prompt-embedding call
+// sites downgrade to the local LLM).
+export async function setNotePrivacy(token, id, highPrivate) {
+    return request(`/notes/${id}/privacy`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ high_private: highPrivate }),
+    });
+}
+
+// fetchRelatedNotes returns the semantic neighbors of a note.
+export async function fetchRelatedNotes(token, id) {
+    return request(`/notes/${id}/related`, {
+        headers: authHeaders(token),
+    });
+}
+
+// streamArchiveChat asks a question over the archive (RAG). The server
+// streams NDJSON events: status → sources → answer → done (or error).
+export async function streamArchiveChat(token, query, options = {}) {
+    const res = await fetch(`/notes/chat`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+            ...authHeaders(token),
+            "Content-Type": "application/json",
+            Accept: "application/x-ndjson",
+        },
+        body: JSON.stringify({ query }),
+        signal: options.signal,
+    });
+    if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        throw new Error("unauthorized");
+    }
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.trim() || `HTTP ${res.status}`);
+    }
+    if (!res.body) {
+        options.onDone?.({ type: "done" });
+        return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const processLine = (line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        let event;
+        try {
+            event = JSON.parse(trimmed);
+        } catch {
+            return;
+        }
+        options.onEvent?.(event);
+        if (event.type === "status") {
+            options.onStatus?.(event);
+        } else if (event.type === "sources") {
+            options.onSources?.(event);
+        } else if (event.type === "answer") {
+            options.onAnswer?.(event);
+        } else if (event.type === "error") {
+            options.onError?.(event);
+        } else if (event.type === "done") {
+            options.onDone?.(event);
+        }
+    };
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex = buffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+            processLine(buffer.slice(0, newlineIndex));
+            buffer = buffer.slice(newlineIndex + 1);
+            newlineIndex = buffer.indexOf("\n");
+        }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+        processLine(buffer);
+    }
+}
+
 export async function fetchTags(token, query) {
     const q = query ? `?q=${encodeURIComponent(query)}` : "";
     return request(`/tags${q}`, { headers: authHeaders(token) });

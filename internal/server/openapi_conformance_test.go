@@ -623,6 +623,9 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
+	mux.Handle("/notes/chat", protected(func(w http.ResponseWriter, r *http.Request) {
+		s.archiveChat(w, r)
+	}))
 	mux.Handle("/notes/", protected(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/history") {
 			if r.Method == http.MethodGet {
@@ -646,6 +649,14 @@ func (s *Server) getMuxForTest() *http.ServeMux {
 			} else {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/related") {
+			s.getNoteRelated(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/privacy") {
+			s.setNotePrivacy(w, r)
 			return
 		}
 		if idx := strings.LastIndex(r.URL.Path, "/actions/"); idx >= 0 {

@@ -285,11 +285,14 @@ func (l llmClassifier) BeginUse() func() {
 // (OpenRouter / Mistral / any OpenAI-compatible provider, with the
 // note-stored API key), that provider wins; a {local: true} binding or no
 // binding at all falls back to the config.toml feature/tier system client
-// (the local LLM). On resolver failure the config client is used so a
-// broken inferencer note degrades gracefully rather than blocking
-// classification.
-var newClassifier = func(db *sql.DB, noteID int64) classifier {
-	client, _, err := llminferencer.ResolveChat(db, "rss_classify")
+// (the local LLM). The prompt is built from note bodies (the rss_prompt
+// note's body, the reader note's rules scope), so resolution goes through
+// the privacy guard: when the reader or prompt note is marked high_private,
+// a remote binding is downgraded to the local LLM for the call. On resolver
+// failure the config client is used so a broken inferencer note degrades
+// gracefully rather than blocking classification.
+var newClassifier = func(db *sql.DB, readerNoteID, promptNoteID int64) classifier {
+	client, _, err := llminferencer.ResolveChatForNotes(db, "rss_classify", readerNoteID, promptNoteID)
 	if err != nil || client == nil {
 		return llmClassifier{client: llm.NewRSSClassifierClient()}
 	}
@@ -537,7 +540,7 @@ func classifyPendingItems(db *sql.DB, noteID int64, cfg Config) int {
 	}
 	weights := classificationWeights(db, noteID)
 
-	cls := newClassifier(db, noteID)
+	cls := newClassifier(db, noteID, promptRef.NoteID)
 	release := cls.BeginUse()
 	defer release()
 

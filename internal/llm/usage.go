@@ -42,6 +42,13 @@ var usageSpecs = []UsageSpec{
 		Wired:       true,
 	},
 	{
+		ID:          "chat",
+		Feature:     "chat",
+		Label:       "Archive Chat (RAG)",
+		Description: "Answers questions over your own notes (retrieval-augmented chat: semantic search feeds relevant note excerpts as context). Notes marked highly private are excluded from remote-provider context",
+		Wired:       true,
+	},
+	{
 		ID:          "title",
 		Feature:     "title",
 		Label:       "Note Title Generation",
@@ -117,6 +124,8 @@ func NewFeatureChatClient(usage string) *ChatClient {
 		client = NewRSSClassifierClient()
 	case "rss_summarize":
 		client = NewRSSSummarizerClient()
+	case "chat":
+		client = NewArchiveChatClient()
 	}
 	if client == nil {
 		return nil

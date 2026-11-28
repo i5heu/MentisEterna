@@ -101,8 +101,9 @@ tiny   = { model = "granite-4.1-3b-Q4_K_M", base_url = "" }
 # NOTE: "LLM Inferencer" note types can override feature/tier routing per
 # branch of the note hierarchy: the nearest llm_inferencer note binding the
 # usage (OpenRouter / Mistral / any OpenAI-compatible provider; four tiers:
-# big/middle/small/tiny) wins, and this config remains the fallback. rss_classify
-# and rss_summarize are wired this way today — see docs/LLMInferencer.md.
+# big/middle/small/tiny) wins, and this config remains the fallback. chat,
+# rss_classify and rss_summarize are wired this way today — see
+# docs/LLMInferencer.md.
 [llm.features]
 title        = { tier = "tiny" }
 tags         = { tier = "medium" }
@@ -111,6 +112,7 @@ ocr          = { tier = "medium" }
 stt          = { tier = "small" }
 rss_classify = { tier = "medium" }
 rss_summarize = { tier = "small" }
+chat         = { tier = "medium" }
 
 [media]
 # Local cache directory for media files. Leave blank to disable media (and

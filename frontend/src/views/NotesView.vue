@@ -35,6 +35,13 @@
                 </span>
                 <button
                     class="btn-ghost icon-btn shortcut-anchor"
+                    title="Archive chat — ask questions over your notes (RAG)"
+                    @click="showArchiveChat = true"
+                >
+                    ⚡
+                </button>
+                <button
+                    class="btn-ghost icon-btn shortcut-anchor"
                     :title="getShortcutLabel('open-options')"
                     @click="openOptions"
                 >
@@ -292,6 +299,13 @@
                             title="Pinned"
                         >
                             📌
+                        </span>
+                        <span
+                            v-if="note.high_private"
+                            class="pin-indicator private-lock"
+                            title="Highly private — remote LLMs never read this"
+                        >
+                            🔒
                         </span>
                     </div>
                     <div
@@ -708,6 +722,18 @@
                                 "
                                 :label="getHintLabel('toggle-pin')"
                             />
+                        </button>
+                        <button
+                            class="btn-ghost pin-editor-btn"
+                            :class="{ 'high-private': selected?.high_private }"
+                            :title="
+                                selected?.high_private
+                                    ? 'Highly private — remote LLM providers never read this note (click to clear)'
+                                    : 'Mark as highly private — remote LLM providers will never read this note'
+                            "
+                            @click="toggleHighPrivate(selected)"
+                        >
+                            🔒
                         </button>
                         <button
                             class="btn-danger shortcut-anchor"
@@ -1229,6 +1255,32 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Related notes: semantic neighbors, resurfaced -->
+                <div
+                    v-if="relatedNotes.length"
+                    class="related-notes-panel"
+                >
+                    <div class="related-notes-label">Related notes</div>
+                    <div class="related-notes-chips">
+                        <button
+                            v-for="rel in relatedNotes"
+                            :key="rel.id"
+                            class="related-chip"
+                            :title="rel.path || rel.title"
+                            @click="selectNoteById(rel.id)"
+                        >
+                            <span class="related-title">{{
+                                rel.title || "Untitled"
+                            }}</span>
+                            <span
+                                v-if="rel.high_private"
+                                class="related-lock"
+                                >🔒</span
+                            >
+                        </button>
+                    </div>
+                </div>
             </template>
             <div v-else class="no-selection">
                 <p>Select a note or create a new one</p>
@@ -1613,6 +1665,14 @@
         />
         <KeyboardShortcutsHelpModal v-model="showHotkeys" :items="hotkeys" />
 
+        <!-- Archive chat (RAG over your own notes) -->
+        <ArchiveChatModal
+            v-if="showArchiveChat"
+            :token="token"
+            @select-note="onChatSelectNote"
+            @close="showArchiveChat = false"
+        />
+
         <!-- Upload modal -->
         <UploadModal
             :visible="showUploadModal"
@@ -1646,6 +1706,8 @@ import {
     fetchAncestors,
     streamSearchNotes,
     setNotePin,
+    setNotePrivacy,
+    fetchRelatedNotes,
     fetchTags,
     generateAutoTags,
     pluginActionV2,
@@ -1658,6 +1720,7 @@ import LinkHintOverlay from "../components/LinkHintOverlay.vue";
 import KeyboardShortcutsHelpModal from "../components/KeyboardShortcutsHelpModal.vue";
 import UploadModal from "../components/UploadModal.vue";
 import UploadProgress from "../components/UploadProgress.vue";
+import ArchiveChatModal from "../components/ArchiveChatModal.vue";
 import { useUploadQueue } from "../composables/useUploadQueue.js";
 import { openTeleportModal } from "../device/teleport.js";
 import {
@@ -2657,6 +2720,54 @@ async function togglePin(note) {
     }
 }
 
+// --- highly private flag (remote LLM providers never read these notes) ---
+
+async function toggleHighPrivate(note) {
+    if (!note?.id) return;
+    const newValue = !note.high_private;
+    try {
+        await setNotePrivacy(props.token, note.id, newValue);
+        await loadNotes();
+        if (selected.value?.id === note.id) {
+            selected.value.high_private = newValue;
+        }
+    } catch (e) {
+        saveError.value = e.message;
+    }
+}
+
+// --- related notes (semantic neighbors of the selected note) ---
+
+const relatedNotes = ref([]);
+let relatedRequestSeq = 0;
+
+async function loadRelated(noteId) {
+    if (!noteId) {
+        relatedNotes.value = [];
+        return;
+    }
+    const seq = ++relatedRequestSeq;
+    try {
+        const resp = await fetchRelatedNotes(props.token, noteId);
+        if (seq !== relatedRequestSeq) return; // stale response
+        relatedNotes.value =
+            resp && Array.isArray(resp.results) ? resp.results : [];
+    } catch {
+        if (seq === relatedRequestSeq) {
+            relatedNotes.value = [];
+        }
+    }
+}
+
+// --- archive chat (RAG) ---
+
+const showArchiveChat = ref(false);
+
+function onChatSelectNote(id) {
+    showArchiveChat.value = false;
+    selectNoteById(id);
+}
+
 async function refreshSelectedCollections(noteId, typeValue = null) {
     if (!noteId) return;
     populateParentSearch(selected.value);
@@ -2858,6 +2969,7 @@ async function selectNote(
     } else {
         loadChildren(note.id);
     }
+    loadRelated(note.id);
     populateParentSearch(note);
     await loadAncestors(note.id);
     if (updateURL) {
@@ -2891,6 +3003,7 @@ async function selectSearchResult(
             parent_id: sr.parent_id,
             type: sr.type || "standard",
             pinned: sr.pinned || false,
+            high_private: sr.high_private || false,
             body: sr.body,
             created_at: sr.created_at,
             updated_at: sr.updated_at,
@@ -2917,6 +3030,7 @@ async function selectSearchResult(
     } else {
         loadChildren(sr.id);
     }
+    loadRelated(sr.id);
     populateParentSearch(selected.value);
     await loadAncestors(sr.id);
     if (updateURL) {
@@ -4604,6 +4718,67 @@ function onPopstate() {
 
 .pin-editor-btn.pinned {
     color: var(--accent-amber);
+}
+
+.pin-indicator.private-lock {
+    right: 2.1rem;
+}
+
+/* Highly private toggle in the editor toolbar */
+.pin-editor-btn.high-private {
+    color: var(--accent-amber);
+    border-color: var(--accent-amber);
+}
+
+/* Related notes panel (semantic neighbors) */
+.related-notes-panel {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.related-notes-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--font-color-secondary);
+}
+
+.related-notes-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.related-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--raised-bg, var(--panel-bg));
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    color: var(--font-color);
+    font-family: var(--font-mono, monospace);
+    font-size: 0.78rem;
+    padding: 4px 9px;
+    cursor: pointer;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.related-chip:hover {
+    border-color: var(--accent-teal);
+    color: var(--accent-teal);
+}
+
+.related-lock {
+    font-size: 0.7rem;
+    opacity: 0.9;
 }
 
 .empty-list {

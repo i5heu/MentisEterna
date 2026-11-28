@@ -150,14 +150,15 @@ func (s *Server) writeIngestResponse(w http.ResponseWriter, noteID int64, rec me
 		return
 	}
 	note := NoteDetail{
-		ID:        sum.ID,
-		Title:     sum.Title,
-		ParentID:  sum.ParentID,
-		Type:      sum.Type,
-		Pinned:    sum.Pinned,
-		Body:      sum.Body,
-		CreatedAt: sum.CreatedAt,
-		UpdatedAt: sum.UpdatedAt,
+		ID:          sum.ID,
+		Title:       sum.Title,
+		ParentID:    sum.ParentID,
+		Type:        sum.Type,
+		Pinned:      sum.Pinned,
+		HighPrivate: sum.HighPrivate,
+		Body:        sum.Body,
+		CreatedAt:   sum.CreatedAt,
+		UpdatedAt:   sum.UpdatedAt,
 	}
 	s.enrichDetail(&note)
 	note.Attachments, _ = s.loadNoteAttachments(noteID)

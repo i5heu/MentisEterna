@@ -30,7 +30,7 @@ surfaced in the note's UI ((system default tier → model), with a
 | Resolution | Global through the app's single note: call sites ask `ResolveChat(db, usage)` with no anchor. Nothing binds → `config.toml` feature/tier client. An explicit `{local: true}` binding resolves to the same `config.toml` client, but reported as `Source: "local"` (the pin is the user's explicit choice, distinct from a plain fallback). |
 | System defaults | The view reports, per usage, what `config.toml` would serve (`system_default: {tier, model, base_url}` via `llm.UsageSystemDefault`), and effective bindings (explicit / `via_default` / `local` flag). The frontend shows these defaults next to every usage in viewer and editor, and the editor's **Reset to system defaults** button clears the usage map + default tier so every usage uses the `config.toml` defaults again (provider, endpoint, key, and tier model definitions stay). |
 | OCR / STT / embeddings | Deliberately out of scope: different API shapes (image/audio/file endpoints, dedicated models). They stay bound to `config.toml`. |
-| Wired in v1 | `rss_classify` (RSS article evaluation) and `rss_summarize` (RSS telegraph digest). Others (`title`, `tags`, `subtasks`) are pre-wired into the catalog and the resolver — see "Wiring a new usage" below. |
+| Wired in v1 | `chat` (archive chat over your own notes, RAG), `rss_classify` (RSS article evaluation), and `rss_summarize` (RSS telegraph digest). Others (`title`, `tags`, `subtasks`) are pre-wired into the catalog and the resolver — see "Wiring a new usage" below. |
 
 ## 1. The note and its config
 
@@ -134,6 +134,7 @@ The **usage catalog** also lives in `internal/llm` (`usage.go`):
 |---|---|---|---|
 | `rss_classify` | RSS Evaluation | ✅ | medium |
 | `rss_summarize` | RSS Summarizer | ✅ | small |
+| `chat` | Archive Chat (RAG) | ✅ | medium |
 | `title` | Note Title Generation | — (pending) | tiny |
 | `tags` | Auto Tags | — (pending) | medium |
 | `subtasks` | Subtask Generation | — (pending) | smart |
@@ -176,6 +177,17 @@ provider) and local pins (`local`). See §6.
 
 3. Flip the catalog entry to `Wired: true`. Any inferencer note that already
    maps the usage starts routing through it immediately.
+
+**Privacy guard**: call sites whose prompt embeds content of one or more
+notes must resolve through `llminferencer.ResolveChatForNotes(db, usage,
+noteIDs...)` instead — when any of the notes is marked `high_private`
+(`notes.high_private`, toggled per note in the UI), a remote (`Source:
+"note"`) resolution is downgraded to the local `config.toml` client so the
+private content never leaves the machine. Archive chat takes the other
+path: it *excludes* `high_private` notes from the context it sends to a
+remote provider (public notes keep the remote routing; local/config
+routing includes everything and the response reports how many private
+notes were excluded).
 
 Statistics come along for free: the tags are attached where the clients are
 created — the factories in `internal/llm/tiers.go` tag themselves

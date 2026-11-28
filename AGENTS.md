@@ -58,6 +58,9 @@ The server populates `plugin.config` and `plugin.view` on note detail responses 
 
 - `GET /note-types` — catalog of all available note types (includes synthetic `standard` type)
 - `GET /notes/:id` — note detail with `plugin.config` and `plugin.view`
+- `POST /notes/:id/privacy` — toggle the `high_private` flag (remote LLM providers never read the note)
+- `GET /notes/:id/related` — semantic neighbor notes (vector search, excludes self/ancestors/children)
+- `POST /notes/chat` — archive chat (RAG): answers questions over your notes, NDJSON stream (see "Archive Chat & Related Notes")
 - `POST /notes/:id/actions/:actionID` — execute a plugin action
 - `POST /notes/:id/action` — legacy action route (delegates to same dispatcher)
 - `POST /mcp` — MCP (Model Context Protocol) endpoint, streamable-http transport (see "MCP Endpoint")
@@ -77,7 +80,8 @@ or `{local: true}` = explicit pin to the config.toml local LLM, which beats
 `default_tier`) + optional `default_tier`.
 
 The usage catalog (`internal/llm/usage.go`) lists the app's LLM usages
-(rss_classify, rss_summarize, title, tags, subtasks) with a `Wired` flag.
+(chat, rss_classify, rss_summarize, title, tags, subtasks) with a `Wired`
+flag.
 Wired usages resolve per call site via `llminferencer.ResolveChat(db, usage)`
 — no anchor: the singleton note applies globally from anywhere in the tree.
 It binds usages that map to a tier/model of its provider; `{local: true}`
@@ -85,9 +89,12 @@ pins and unmapped usages resolve to the `config.toml` feature/tier client
 (`Source: "local"` / `"config"`). The view surfaces the per-usage
 config.toml defaults (`llm.UsageSystemDefault`) next to every mapping, and
 the frontend offers a **Reset to system defaults** button (clears the usage
-map + default tier). `rss_classify` and `rss_summarize` are wired; mappings
-for unwired usages are inert until their call site migrates (see
-docs/LLMInferencer.md §5). API-keyed chat clients skip the LocalAI
+map + default tier). `chat` (archive chat), `rss_classify`, and
+`rss_summarize` are wired; mappings for unwired usages are inert until
+their call site migrates (see docs/LLMInferencer.md §5). Call sites whose
+prompt embeds note content resolve through
+`llminferencer.ResolveChatForNotes` (the **privacy guard**: `high_private`
+notes force the local LLM). API-keyed chat clients skip the LocalAI
 idle-stop machinery.
 
 **Call statistics**: every chat completion in the app (any usage, local or
@@ -282,6 +289,65 @@ The `rss` note type puts the whole subsystem in one note (see
   self-hosters pointing feeds at internal servers).
 - Tests: `go test ./pkg/notetype/rss/` — all LLM/fetch seams are stubbed;
   hermetic.
+
+## Archive Chat, Related Notes & the Privacy Flag
+
+Three intertwined features built on the chunked vector index
+(`note_search_chunks` + `vss_note_search`) and the LLM inferencer:
+
+### Highly private notes (`notes.high_private`)
+
+- `high_private INTEGER NOT NULL DEFAULT 0` on `notes` — toggled per note via
+  `POST /notes/:id/privacy` (🔒 button in the editor toolbar, indicator in
+  the note list) or set on create/update (`high_private` in the JSON body;
+  omitted = preserved on update).
+- **Semantics: a remote LLM provider never receives content of a
+  high_private note.** Two enforcement paths:
+  - Prompt-embedding call sites (RSS classification: the rss_prompt note body
+    is the prompt) resolve via `llminferencer.ResolveChatForNotes(db, usage,
+    noteIDs...)`: a remote (`Source: "note"`) binding is downgraded to the
+    local `config.toml` client for that call (warning recorded in
+    `ResolvedChat`; routing shows as `config` in the stats ledger).
+  - Archive chat *excludes* high_private notes from the retrieval context
+    when routing resolved remotely; a local/config resolution includes
+    everything. The response reports `private_excluded`.
+- Local paths (embeddings, search, related notes, MCP, backups) are
+  unaffected: the flag only guards outbound remote inference.
+- Plugintest's notes-table schema carries the column; tests that create
+  notes tables manually must include it.
+
+### Archive chat (RAG) — `POST /notes/chat`
+
+- `{"query": "...", "types": [...]}` → NDJSON stream of events:
+  `status(retrieve)` → `sources` (with `routing` + `private_excluded`) →
+  `answer` → `done` (or `error` + `done`).
+- Retrieval: query embedding (LocalAI) against `searchNoteChunkHits` +
+  attachment OCR/STT merges, top 12 candidates, top 8 sources; context =
+  numbered excerpts `[1]..[n]` (title/path/body, capped per note and in
+  total); the built-in system prompt forces citations `[N]` and honest
+  "not in your notes" answers. Handler: `internal/server/chat.go`.
+- Routing: the `chat` usage in the catalog (wired, default tier `medium`,
+  `[llm.features] chat`), resolved through `ResolveChat` — the inferencer
+  note's remote binding wins, `{local: true}` or nothing = local LLM.
+- Empty query → 400; no VSS/embedder → `error` event stream.
+- Frontend: `ArchiveChatModal.vue` (⚡ in the sidebar header) — per-question
+  RAG, source chips navigate via `selectNoteById`.
+
+### Related notes — `GET /notes/:id/related`
+
+- Semantic neighbors: the note's own text (title + body, embedding-budget
+  truncated) is re-embedded as a query against the shared chunk index; the
+  note itself, its ancestors, and its direct children are excluded (they
+  are already visible in the tree — the panel resurfaces forgotten
+  connections). Handler: `internal/server/related.go`; response is slim
+  (no bodies): `{available, results: [{id,title,type,path,distance,
+  updated_at,high_private}]}` — `available: false` without VSS/embedder.
+- Frontend: "Related notes" chip panel under the open note; loads on note
+  selection (`loadRelated`), stale responses guarded by a sequence number.
+
+Tests: `go test ./internal/server/ -run "TestArchiveChat|TestGetNoteRelated|TestSetNotePrivacy"`,
+`go test ./pkg/notetype/llminferencer/ -run "HighPrivate|ResolveChatForNotes"`, and
+`go test ./pkg/notetype/rss/ -run TestClassifierPrivate`.
 
 ## Frontend Note-Type Architecture
 
@@ -662,7 +728,7 @@ cmd/restore/main.go           — CLI tool (download + decrypt → output file)
 
 ## Database Schema Notes
 
-- `notes`: id, title, parent_id, created_at — **no body/updated_at columns** (migrated out)
+- `notes`: id, title, parent_id, created_at, pinned, type, high_private — **no body/updated_at columns** (migrated out)
 - `updates`: id, note_id, body, created_at — append-only history
 - `vss_notes`: rowid (= notes.id), body_embedding (JSON float array, 2560-dim)
 - `auth`: id, username, password_hash (SHA-512 hex)

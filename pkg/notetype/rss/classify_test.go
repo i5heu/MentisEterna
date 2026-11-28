@@ -41,7 +41,7 @@ func (s *seqClassifyClient) BeginUse() func() { return func() {} }
 func stubSeqClassifier(t *testing.T, replies []string, err error) {
 	t.Helper()
 	prev := newClassifier
-	newClassifier = func(db *sql.DB, noteID int64) classifier {
+	newClassifier = func(db *sql.DB, readerNoteID, promptNoteID int64) classifier {
 		return &seqClassifyClient{replies: replies, err: err}
 	}
 	t.Cleanup(func() { newClassifier = prev })
@@ -535,7 +535,7 @@ func TestClassifierResolvesThroughInferencerNote(t *testing.T) {
 	}
 
 	// Fallback first: no inferencer notes anywhere.
-	cls := newClassifier(d.DB, 0)
+	cls := newClassifier(d.DB, 0, 0)
 	ll, ok := cls.(llmClassifier)
 	if !ok {
 		t.Fatalf("production classifier has unexpected type %T", cls)
@@ -562,7 +562,7 @@ func TestClassifierResolvesThroughInferencerNote(t *testing.T) {
 		"usages": {"rss_classify": {"tier": "small"}}
 	}`)
 
-	cls = newClassifier(d.DB, reader)
+	cls = newClassifier(d.DB, reader, 0)
 	ll, ok = cls.(llmClassifier)
 	if !ok {
 		t.Fatalf("classifier type %T", cls)
@@ -575,6 +575,81 @@ func TestClassifierResolvesThroughInferencerNote(t *testing.T) {
 	}
 	if ll.client.APIKey != "sk-rss" {
 		t.Errorf("stored API key not applied")
+	}
+}
+
+// TestClassifierPrivatePromptNoteDowngradesRemote: the classification
+// prompt is the body of the resolved rss_prompt note — when that note (or
+// the reader itself) is marked highly private, a remote provider binding
+// must be downgraded to the local config.toml client so the private body
+// never leaves the machine.
+func TestClassifierPrivatePromptNoteDowngradesRemote(t *testing.T) {
+	p := notetype.Registry[PluginID].(*Plugin)
+	d := plugintest.DB(t, p)
+	if err := notetype.Registry["llm_inferencer"].InitSchema(d.DB); err != nil {
+		t.Fatalf("llm_inferencer schema: %v", err)
+	}
+
+	folder := createTestNote(t, d, "News", "standard", 0)
+	reader := createTestNote(t, d, "Reader", PluginID, folder)
+	prompt := createTestNote(t, d, "Classify prompt", "rss_prompt", reader)
+	inferencer, err := d.Exec(`INSERT INTO notes (title, type, parent_id) VALUES ('Inferencer', 'llm_inferencer', ?)`, folder)
+	if err != nil {
+		t.Fatalf("insert inferencer note: %v", err)
+	}
+	inferencerID, _ := inferencer.LastInsertId()
+	saveInferencerCfg(t, d, inferencerID, `{
+		"provider": "compatible",
+		"base_url": "http://127.0.0.1:9",
+		"api_key": "sk-rss",
+		"default_tier": "small",
+		"tiers": {"small": {"model": "prov/small"}},
+		"usages": {"rss_classify": {"tier": "small"}}
+	}`)
+
+	// Sanity: with a public prompt note the remote binding wins.
+	cls := newClassifier(d.DB, reader, prompt)
+	ll, ok := cls.(llmClassifier)
+	if !ok {
+		t.Fatalf("classifier type %T", cls)
+	}
+	if ll.client.Model != "prov/small" || ll.client.APIKey != "sk-rss" {
+		t.Fatalf("public prompt must keep remote resolution: model=%q key=%q", ll.client.Model, ll.client.APIKey)
+	}
+
+	// Marking the prompt note highly private downgrades to the local LLM.
+	if _, err := d.Exec(`UPDATE notes SET high_private = 1 WHERE id = ?`, prompt); err != nil {
+		t.Fatalf("flag prompt note: %v", err)
+	}
+	cls = newClassifier(d.DB, reader, prompt)
+	ll, ok = cls.(llmClassifier)
+	if !ok {
+		t.Fatalf("classifier type %T", cls)
+	}
+	if ll.client.Model != llm.FeatureModel("rss_classify") {
+		t.Errorf("private prompt must downgrade to the config model, got %q", ll.client.Model)
+	}
+	if ll.client.APIKey != "" {
+		t.Error("downgraded client must not carry the remote API key")
+	}
+	if ll.client.Source != llm.ChatSourceConfig {
+		t.Errorf("downgraded client source = %q, want config", ll.client.Source)
+	}
+
+	// A private READER note downgrades too (its body rules are in scope).
+	if _, err := d.Exec(`UPDATE notes SET high_private = 0 WHERE id = ?`, prompt); err != nil {
+		t.Fatalf("unflag prompt note: %v", err)
+	}
+	if _, err := d.Exec(`UPDATE notes SET high_private = 1 WHERE id = ?`, reader); err != nil {
+		t.Fatalf("flag reader note: %v", err)
+	}
+	cls = newClassifier(d.DB, reader, 0)
+	ll, ok = cls.(llmClassifier)
+	if !ok {
+		t.Fatalf("classifier type %T", cls)
+	}
+	if ll.client.Model != llm.FeatureModel("rss_classify") {
+		t.Errorf("private reader must downgrade to the config model, got %q", ll.client.Model)
 	}
 }
 

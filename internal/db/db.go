@@ -510,6 +510,16 @@ func (d *DB) migrateNotes() error {
 		}
 	}
 
+	// high_private marks a note as highly private: its content must never be
+	// sent to a remote LLM provider (llm_inferencer bindings). Call sites that
+	// assemble LLM prompts from note content check this flag and downgrade to
+	// the local config.toml LLM (or exclude the note) when it is set.
+	if !cols["high_private"] {
+		if _, err = d.Exec(`ALTER TABLE notes ADD COLUMN high_private INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

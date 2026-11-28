@@ -32,6 +32,7 @@ var featureSpecs = map[string]featureSpec{
 	"subtasks":      {TierSmart, "", "Qwen3.6-27B-MTP-GGUF"},
 	"rss_classify":  {TierMedium, "", "gemma-4-e2b-it-qat-q4_0"},
 	"rss_summarize": {TierSmall, "", "gemma-4-e2b-it-qat-q4_0"},
+	"chat":          {TierMedium, "", "gemma-4-e2b-it-qat-q4_0"},
 	"ocr":           {TierMedium, "ocr", "GLM-OCR-GGUF"},
 	"stt":           {TierSmall, "stt", "vibevoice-cpp-asr"},
 }
@@ -116,6 +117,14 @@ func NewRSSClassifierClient() *ChatClient {
 func NewRSSSummarizerClient() *ChatClient {
 	return NewChatClient(FeatureBaseURL("rss_summarize"), FeatureModel("rss_summarize")).
 		TagUsage("rss_summarize", ChatSourceConfig, "")
+}
+
+// NewArchiveChatClient returns a chat client bound to the chat feature's tier
+// (used by the archive chat's config.toml fallback — retrieval-augmented
+// answers over the user's own notes).
+func NewArchiveChatClient() *ChatClient {
+	return NewChatClient(FeatureBaseURL("chat"), FeatureModel("chat")).
+		TagUsage("chat", ChatSourceConfig, "")
 }
 
 // NewTieredOCRClient returns an OCR client bound to the ocr feature's tier.

@@ -21,14 +21,15 @@ import (
 
 // NoteSummary is the lightweight response shape for list endpoints.
 type NoteSummary struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
-	ParentID  *int64 `json:"parent_id"`
-	Type      string `json:"type"`
-	Pinned    bool   `json:"pinned"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
+	ParentID    *int64 `json:"parent_id"`
+	Type        string `json:"type"`
+	Pinned      bool   `json:"pinned"`
+	HighPrivate bool   `json:"high_private"`
+	Body        string `json:"body"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // PluginDetail holds plugin-specific data on detailed note responses.
@@ -45,6 +46,7 @@ type NoteDetail struct {
 	ParentID    *int64        `json:"parent_id"`
 	Type        string        `json:"type"`
 	Pinned      bool          `json:"pinned"`
+	HighPrivate bool          `json:"high_private"`
 	Body        string        `json:"body"`
 	CreatedAt   string        `json:"created_at"`
 	UpdatedAt   string        `json:"updated_at"`
@@ -74,7 +76,7 @@ type NoteUpdate struct {
 }
 
 const noteSelectSQL = `
-	SELECT n.id, n.title, n.parent_id, n.type, n.pinned, n.created_at,
+	SELECT n.id, n.title, n.parent_id, n.type, n.pinned, n.high_private, n.created_at,
 	       COALESCE(u.body, '') AS body,
 	       COALESCE(u.created_at, n.created_at) AS updated_at
 	FROM notes n
@@ -85,7 +87,7 @@ const noteSelectSQL = `
 
 func scanSummary(row interface{ Scan(...any) error }) (NoteSummary, error) {
 	var n NoteSummary
-	err := row.Scan(&n.ID, &n.Title, &n.ParentID, &n.Type, &n.Pinned, &n.CreatedAt, &n.Body, &n.UpdatedAt)
+	err := row.Scan(&n.ID, &n.Title, &n.ParentID, &n.Type, &n.Pinned, &n.HighPrivate, &n.CreatedAt, &n.Body, &n.UpdatedAt)
 	return n, err
 }
 
@@ -423,23 +425,25 @@ func (s *Server) listNotes(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Title      string          `json:"title"`
-		Body       string          `json:"body"`
-		ParentID   *int64          `json:"parent_id"`
-		Type       string          `json:"type"`
-		CustomData json.RawMessage `json:"custom_data"`
-		Tags       []string        `json:"tags"`
+		Title       string          `json:"title"`
+		Body        string          `json:"body"`
+		ParentID    *int64          `json:"parent_id"`
+		Type        string          `json:"type"`
+		CustomData  json.RawMessage `json:"custom_data"`
+		Tags        []string        `json:"tags"`
+		HighPrivate bool            `json:"high_private"`
 	}
 	if !s.decodeJSONBody(w, r, &in) {
 		return
 	}
 	n, err := s.createNoteCore(createNoteInput{
-		Title:      in.Title,
-		Body:       in.Body,
-		ParentID:   in.ParentID,
-		Type:       in.Type,
-		CustomData: in.CustomData,
-		Tags:       in.Tags,
+		Title:       in.Title,
+		Body:        in.Body,
+		ParentID:    in.ParentID,
+		Type:        in.Type,
+		CustomData:  in.CustomData,
+		Tags:        in.Tags,
+		HighPrivate: in.HighPrivate,
 	})
 	if err != nil {
 		var badReq *notetype.BadRequestError
@@ -457,12 +461,13 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 // MCP tools. It carries not-yet-normalized values (empty type/title are
 // defaulted by createNoteCore).
 type createNoteInput struct {
-	Title      string
-	Body       string
-	ParentID   *int64
-	Type       string
-	CustomData json.RawMessage
-	Tags       []string
+	Title       string
+	Body        string
+	ParentID    *int64
+	Type        string
+	CustomData  json.RawMessage
+	Tags        []string
+	HighPrivate bool
 }
 
 // singletonCheck enforces a note type's Singleton manifest flag: at most one
@@ -523,7 +528,7 @@ func (s *Server) createNoteCore(in createNoteInput) (NoteDetail, error) {
 		return NoteDetail{}, err
 	}
 
-	res, err := tx.Exec(`INSERT INTO notes (title, parent_id, type) VALUES (?, ?, ?)`, in.Title, in.ParentID, in.Type)
+	res, err := tx.Exec(`INSERT INTO notes (title, parent_id, type, high_private) VALUES (?, ?, ?, ?)`, in.Title, in.ParentID, in.Type, in.HighPrivate)
 	if err != nil {
 		return NoteDetail{}, err
 	}
@@ -571,7 +576,7 @@ func (s *Server) createNoteCore(in createNoteInput) (NoteDetail, error) {
 	}
 	n := NoteDetail{
 		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
-		Type: sum.Type, Pinned: sum.Pinned,
+		Type: sum.Type, Pinned: sum.Pinned, HighPrivate: sum.HighPrivate,
 		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
 	s.enrichDetail(&n)
@@ -607,7 +612,7 @@ func (s *Server) getNote(w http.ResponseWriter, r *http.Request) {
 	}
 	n := NoteDetail{
 		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
-		Type: sum.Type, Pinned: sum.Pinned,
+		Type: sum.Type, Pinned: sum.Pinned, HighPrivate: sum.HighPrivate,
 		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
 	s.enrichDetail(&n)
@@ -621,12 +626,13 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Title      string          `json:"title"`
-		Body       string          `json:"body"`
-		ParentID   *int64          `json:"parent_id"`
-		Type       string          `json:"type"`
-		CustomData json.RawMessage `json:"custom_data"`
-		Tags       []string        `json:"tags"`
+		Title       string          `json:"title"`
+		Body        string          `json:"body"`
+		ParentID    *int64          `json:"parent_id"`
+		Type        string          `json:"type"`
+		CustomData  json.RawMessage `json:"custom_data"`
+		Tags        []string        `json:"tags"`
+		HighPrivate *bool           `json:"high_private"`
 	}
 	if !s.decodeJSONBody(w, r, &in) {
 		return
@@ -678,6 +684,12 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if in.HighPrivate != nil {
+		if _, err := tx.Exec(`UPDATE notes SET high_private = ? WHERE id = ?`, *in.HighPrivate, id); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
 	res, err := tx.Exec(`UPDATE notes SET title = ?, parent_id = ?, type = ? WHERE id = ?`, in.Title, in.ParentID, in.Type, id)
 	if err != nil {
 		writeErr(w, err)
@@ -735,7 +747,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	}
 	n = NoteDetail{
 		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
-		Type: sum.Type, Pinned: sum.Pinned,
+		Type: sum.Type, Pinned: sum.Pinned, HighPrivate: sum.HighPrivate,
 		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
 	s.enrichDetail(&n)
@@ -869,11 +881,58 @@ func (s *Server) setNotePin(w http.ResponseWriter, r *http.Request) {
 	}
 	n = NoteDetail{
 		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
-		Type: sum.Type, Pinned: sum.Pinned,
+		Type: sum.Type, Pinned: sum.Pinned, HighPrivate: sum.HighPrivate,
 		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
 	}
 	s.enrichDetail(&n)
 	s.notifyNotesChanged("pin_changed", id)
+	writeJSON(w, http.StatusOK, n)
+}
+
+// setNotePrivacy toggles the high_private flag of a note. A note marked
+// highly private is never sent to a remote LLM provider: the archive chat
+// excludes it from remote context, and call sites that embed note bodies in
+// prompts (e.g. the RSS classification prompt) downgrade to the local LLM.
+// POST /notes/:id/privacy with {"high_private": true|false}
+func (s *Server) setNotePrivacy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, ok := noteID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		HighPrivate bool `json:"high_private"`
+	}
+	if !s.decodeJSONBody(w, r, &in) {
+		return
+	}
+
+	res, err := s.db.Exec(`UPDATE notes SET high_private = ? WHERE id = ?`, in.HighPrivate, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	var n NoteDetail
+	sum, err := scanSummary(s.db.QueryRow(noteSelectSQL+` WHERE n.id = ?`, id))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	n = NoteDetail{
+		ID: sum.ID, Title: sum.Title, ParentID: sum.ParentID,
+		Type: sum.Type, Pinned: sum.Pinned, HighPrivate: sum.HighPrivate,
+		Body: sum.Body, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,
+	}
+	s.enrichDetail(&n)
+	s.notifyNotesChanged("privacy_changed", id)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -1206,8 +1265,10 @@ func noteID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	seg := strings.TrimPrefix(r.URL.Path, "/notes/")
 	seg = strings.TrimSuffix(seg, "/history")
 	seg = strings.TrimSuffix(seg, "/children")
+	seg = strings.TrimSuffix(seg, "/related")
 	seg = strings.TrimSuffix(seg, "/action")
 	seg = strings.TrimSuffix(seg, "/pin")
+	seg = strings.TrimSuffix(seg, "/privacy")
 	seg = strings.TrimSuffix(seg, "/auto-tags")
 	// Strip /actions/:actionID suffix if present.
 	if idx := strings.LastIndex(seg, "/actions/"); idx >= 0 {

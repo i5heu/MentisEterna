@@ -474,6 +474,7 @@ func TestStatsAggregationPBT(t *testing.T) {
 			title TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'standard',
 			pinned INTEGER NOT NULL DEFAULT 0,
+			high_private INTEGER NOT NULL DEFAULT 0,
 			parent_id INTEGER REFERENCES notes(id) ON DELETE SET NULL
 		)`); err != nil {
 			t.Fatalf("notes: %v", err)

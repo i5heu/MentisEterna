@@ -29,7 +29,7 @@ func withPrivateHosts(t *testing.T) {
 func stubClassifier(t *testing.T, raw string) {
 	t.Helper()
 	prev := newClassifier
-	newClassifier = func(db *sql.DB, noteID int64) classifier {
+	newClassifier = func(db *sql.DB, readerNoteID, promptNoteID int64) classifier {
 		return stubClassifyClient{raw: raw}
 	}
 	t.Cleanup(func() { newClassifier = prev })
