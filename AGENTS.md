@@ -151,6 +151,9 @@ checklist), `add_todo` (creates a real task note through the same
 `createNoteCore` path as HTTP — embeddings, title generation, live notify),
 `set_todo_status`, `toggle_subtask` (both delegate to the task plugin's
 `HandleAction`, so validation and `completed_at` semantics are identical).
+Notes marked `high_private` are invisible to all of these except `add_todo`:
+`list_todos` filters them out and the note-addressing tools refuse with an
+in-band "marked highly private" error.
 
 Wiring an MCP client (Mistral Vibe):
 
@@ -302,7 +305,7 @@ Three intertwined features built on the chunked vector index
   the note list) or set on create/update (`high_private` in the JSON body;
   omitted = preserved on update).
 - **Semantics: a remote LLM provider never receives content of a
-  high_private note.** Two enforcement paths:
+  high_private note.** Three enforcement paths:
   - Prompt-embedding call sites (RSS classification: the rss_prompt note body
     is the prompt) resolve via `llminferencer.ResolveChatForNotes(db, usage,
     noteIDs...)`: a remote (`Source: "note"`) binding is downgraded to the
@@ -311,7 +314,15 @@ Three intertwined features built on the chunked vector index
   - Archive chat *excludes* high_private notes from the retrieval context
     when routing resolved remotely; a local/config resolution includes
     everything. The response reports `private_excluded`.
-- Local paths (embeddings, search, related notes, MCP, backups) are
+  - **MCP task tools refuse high_private notes entirely** — the external
+    agents behind the MCP endpoint must not read or act on them:
+    `list_todos` never lists them (the filter is baked into the shared task
+    select in `internal/server/mcp.go`), `get_todo` / `set_todo_status` /
+    `toggle_subtask` refuse with a caller-visible "marked highly private"
+    in-band error, and `add_todo` is unaffected (it creates a fresh,
+    non-private note). The proxy tunnel runs the same `handleMCP` handler,
+    so relayed requests are covered identically.
+- Local paths (embeddings, search, related notes, backups) are
   unaffected: the flag only guards outbound remote inference.
 - Plugintest's notes-table schema carries the column; tests that create
   notes tables manually must include it.
@@ -345,7 +356,7 @@ Three intertwined features built on the chunked vector index
 - Frontend: "Related notes" chip panel under the open note; loads on note
   selection (`loadRelated`), stale responses guarded by a sequence number.
 
-Tests: `go test ./internal/server/ -run "TestArchiveChat|TestGetNoteRelated|TestSetNotePrivacy"`,
+Tests: `go test ./internal/server/ -run "TestArchiveChat|TestGetNoteRelated|TestSetNotePrivacy|TestMCPHighPrivateWall"`,
 `go test ./pkg/notetype/llminferencer/ -run "HighPrivate|ResolveChatForNotes"`, and
 `go test ./pkg/notetype/rss/ -run TestClassifierPrivate`.
 

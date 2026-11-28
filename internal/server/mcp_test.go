@@ -627,3 +627,103 @@ func TestMCPGetTodoNotFound(t *testing.T) {
 		t.Fatalf("get_todo unknown note: rpc=%+v, want -32602", rpcErr)
 	}
 }
+
+// TestMCPHighPrivateWall verifies that notes marked high_private are
+// completely invisible to the MCP task tools: they are not listed, cannot
+// be read, and cannot be modified — while add_todo and access to normal
+// notes keep working.
+func TestMCPHighPrivateWall(t *testing.T) {
+	s, token := newMCPTestServer(t)
+
+	// One private task (with description, body, and a subtask so every
+	// tool has a real target) and one public task.
+	publicID := helperAddTodo(t, s, token)
+	text, isErr, rpcErr := mcpToolCall(t, s, token, "add_todo",
+		`{"title":"Secret task","description":"secret description","body":"secret body","subtasks":[{"label":"secret step"}]}`)
+	if rpcErr != nil || isErr {
+		t.Fatalf("add_todo private fixture failed: rpc=%+v isErr=%v text=%s", rpcErr, isErr, text)
+	}
+	var created struct {
+		Task struct {
+			NoteID int64 `json:"note_id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(text), &created); err != nil {
+		t.Fatalf("decode add_todo result %q: %v", text, err)
+	}
+	privateID := created.Task.NoteID
+	// Flag it through the same column POST /notes/:id/privacy sets.
+	if _, err := s.db.Exec(`UPDATE notes SET high_private = 1 WHERE id = ?`, privateID); err != nil {
+		t.Fatalf("flag private task: %v", err)
+	}
+	var subtaskID int64
+	if err := s.db.QueryRow(`SELECT id FROM ct_task_subtasks WHERE note_id = ?`, privateID).Scan(&subtaskID); err != nil {
+		t.Fatalf("load subtask id: %v", err)
+	}
+
+	// list_todos must hide the private task (both the default filter and
+	// status=all): its title is content too, so a private task leaking
+	// here would defeat the whole wall.
+	for _, args := range []string{`{}`, `{"status":"all"}`} {
+		text, _, _ := mcpToolCall(t, s, token, "list_todos", args)
+		if strings.Contains(text, "Secret task") {
+			t.Fatalf("list_todos %s leaked private task: %s", args, text)
+		}
+		if !strings.Contains(text, "Helper task") {
+			t.Fatalf("list_todos %s lost public task: %s", args, text)
+		}
+	}
+
+	// Every note-addressing tool must refuse with a caller-visible,
+	// in-band error (isError, not a protocol error) that names the reason.
+	// get_todo additionally must not echo any of the note's content.
+	text, isErr, rpcErr = mcpToolCall(t, s, token, "get_todo", fmt.Sprintf(`{"note_id":%d}`, privateID))
+	if rpcErr != nil || !isErr {
+		t.Fatalf("get_todo private: rpc=%+v isErr=%v, want in-band tool error", rpcErr, isErr)
+	}
+	if !strings.Contains(text, "highly private") {
+		t.Fatalf("get_todo private: refusal must explain the privacy reason, got %q", text)
+	}
+	if strings.Contains(text, "secret body") || strings.Contains(text, "secret description") {
+		t.Fatalf("get_todo private: content leaked in refusal: %s", text)
+	}
+
+	text, isErr, rpcErr = mcpToolCall(t, s, token, "set_todo_status", fmt.Sprintf(`{"note_id":%d,"status":"done"}`, privateID))
+	if rpcErr != nil || !isErr || !strings.Contains(text, "highly private") {
+		t.Fatalf("set_todo_status private: rpc=%+v isErr=%v text=%s, want privacy refusal", rpcErr, isErr, text)
+	}
+	// The refused write must not have taken effect.
+	var status string
+	if err := s.db.QueryRow(`SELECT COALESCE(status, 'todo') FROM ct_task_config WHERE note_id = ?`, privateID).Scan(&status); err != nil {
+		t.Fatalf("read task status: %v", err)
+	}
+	if status != "todo" {
+		t.Fatalf("refused set_todo_status changed status to %q", status)
+	}
+
+	text, isErr, rpcErr = mcpToolCall(t, s, token, "toggle_subtask", fmt.Sprintf(`{"subtask_id":%d,"checked":true}`, subtaskID))
+	if rpcErr != nil || !isErr || !strings.Contains(text, "highly private") {
+		t.Fatalf("toggle_subtask private: rpc=%+v isErr=%v text=%s, want privacy refusal", rpcErr, isErr, text)
+	}
+	var checked int
+	if err := s.db.QueryRow(`SELECT checked FROM ct_task_subtasks WHERE id = ?`, subtaskID).Scan(&checked); err != nil {
+		t.Fatalf("read subtask state: %v", err)
+	}
+	if checked != 0 {
+		t.Fatal("refused toggle_subtask checked the subtask")
+	}
+
+	// Unrelated behavior must be intact: public notes stay fully readable
+	// and new tasks can still be created while private ones exist.
+	text, isErr, rpcErr = mcpToolCall(t, s, token, "get_todo", fmt.Sprintf(`{"note_id":%d}`, publicID))
+	if rpcErr != nil || isErr {
+		t.Fatalf("get_todo public after wall: rpc=%+v isErr=%v text=%s", rpcErr, isErr, text)
+	}
+	if !strings.Contains(text, "Helper task") {
+		t.Fatalf("get_todo public: task missing from result: %s", text)
+	}
+	newID := helperAddTodo(t, s, token)
+	if newID == 0 {
+		t.Fatal("add_todo stopped working while private notes exist")
+	}
+}

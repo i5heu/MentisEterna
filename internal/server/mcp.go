@@ -31,7 +31,7 @@ func newMCPRegistry(s *Server) *mcp.Server {
 	reg.AddTool(mcp.ToolDefinition{
 		Tool: mcp.Tool{
 			Name:        "list_todos",
-			Description: "List task notes from the personal notes app (MentisEterna). Returns open (not done) tasks by default, ordered open-first, then by due date and priority.",
+			Description: "List task notes from the personal notes app (MentisEterna). Returns open (not done) tasks by default, ordered open-first, then by due date and priority. Notes marked highly private are never listed.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -46,7 +46,7 @@ func newMCPRegistry(s *Server) *mcp.Server {
 	reg.AddTool(mcp.ToolDefinition{
 		Tool: mcp.Tool{
 			Name:        "get_todo",
-			Description: "Get one task note in full: status, priority, due date, description, note body, and its checklist of subtasks.",
+			Description: "Get one task note in full: status, priority, due date, description, note body, and its checklist of subtasks. Notes marked highly private are not readable via MCP.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -210,6 +210,11 @@ type mcpSubtask struct {
 	Checked     bool   `json:"checked"`
 }
 
+// mcpTodoSelectSQL loads task notes for the MCP tools. It never returns
+// high_private notes: the external agents behind the MCP endpoint must not
+// read them, so the filter is baked into the shared query as defense in
+// depth — tools that resolve a note another way (mcpTaskAction) still check
+// the flag explicitly and refuse with a caller-visible message.
 const mcpTodoSelectSQL = `
 	SELECT n.id, n.title, COALESCE(n.parent_id, 0), n.created_at,
 	       COALESCE(u.body, ''),
@@ -235,7 +240,8 @@ const mcpTodoSelectSQL = `
 		SELECT note_id, COUNT(*) AS total, COALESCE(SUM(checked), 0) AS done
 		FROM ct_task_subtasks GROUP BY note_id
 	) sc ON sc.note_id = n.id
-	WHERE n.type = 'task'`
+	WHERE n.type = 'task'
+	  AND COALESCE(n.high_private, 0) = 0`
 
 const mcpTodoOrderSQL = `
 	ORDER BY CASE WHEN COALESCE(tc.status, 'todo') = 'done' THEN 1 ELSE 0 END,
@@ -339,6 +345,16 @@ func (s *Server) mcpGetTodo(ctx context.Context, args json.RawMessage) (any, err
 		return nil, mcp.InvalidParamsf("note_id is required")
 	}
 
+	// Privacy: high_private notes are never exposed over MCP. The explicit
+	// check runs before the load so the caller learns *why* (a private note
+	// would otherwise be indistinguishable from a missing one through the
+	// filtered select).
+	if private, err := s.mcpNotePrivate(p.NoteID); err != nil {
+		return nil, err
+	} else if private {
+		return nil, mcp.Publicf("task note %d is marked highly private and cannot be accessed via MCP", p.NoteID)
+	}
+
 	t, err := s.mcpLoadTodo(p.NoteID)
 	if err != nil {
 		return nil, err
@@ -347,6 +363,21 @@ func (s *Server) mcpGetTodo(ctx context.Context, args json.RawMessage) (any, err
 		return nil, err
 	}
 	return t, nil
+}
+
+// mcpNotePrivate reports whether the note is marked high_private. Notes that
+// do not exist count as not private: the caller's subsequent load produces
+// the not-found error.
+func (s *Server) mcpNotePrivate(noteID int64) (bool, error) {
+	var flag int
+	err := s.db.QueryRow(`SELECT COALESCE(high_private, 0) FROM notes WHERE id = ?`, noteID).Scan(&flag)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return flag != 0, nil
 }
 
 func (s *Server) mcpLoadTodo(noteID int64) (mcpTodo, error) {
@@ -548,14 +579,21 @@ func (s *Server) mcpToggleSubtask(ctx context.Context, args json.RawMessage) (an
 
 // mcpTaskAction runs a task plugin action on behalf of an MCP client and
 // mirrors the HTTP action dispatcher's post-processing (live notification).
+// High_private notes are refused: MCP is an external-agent surface, and the
+// action results (set_status returns the full task config) would disclose
+// their content.
 func (s *Server) mcpTaskAction(ctx context.Context, noteID int64, actionID string, params json.RawMessage) (any, error) {
 	var noteType string
-	err := s.db.QueryRow(`SELECT type FROM notes WHERE id = ?`, noteID).Scan(&noteType)
+	var private int
+	err := s.db.QueryRow(`SELECT type, COALESCE(high_private, 0) FROM notes WHERE id = ?`, noteID).Scan(&noteType, &private)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, mcp.InvalidParamsf("note %d not found", noteID)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if private != 0 {
+		return nil, mcp.Publicf("note %d is marked highly private and cannot be accessed via MCP", noteID)
 	}
 	if noteType != "task" {
 		return nil, mcp.InvalidParamsf("note %d is of type %q, not task", noteID, noteType)
