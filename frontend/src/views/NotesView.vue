@@ -4292,8 +4292,8 @@ function onPopstate() {
     border-bottom: 1px solid var(--border-color);
     background: linear-gradient(
         180deg,
-        rgba(109, 148, 132, 0.08),
-        rgba(109, 148, 132, 0)
+        rgba(63, 224, 207, 0.08),
+        rgba(63, 224, 207, 0)
     );
 }
 
@@ -4308,7 +4308,7 @@ function onPopstate() {
     width: 100%;
     font-size: 0.84rem;
     padding: 0.5rem 2.2rem 0.5rem 0.7rem;
-    border-radius: 10px;
+    border-radius: 3px;
     border: 1px solid var(--border-color);
     background: var(--raised-bg);
 }
@@ -4323,7 +4323,7 @@ function onPopstate() {
     justify-content: center;
     width: 1.55rem;
     height: 1.55rem;
-    border-radius: 999px;
+    border-radius: 2px;
     border: none;
     background: transparent;
     color: var(--font-color-secondary);
@@ -4368,7 +4368,7 @@ function onPopstate() {
     width: 100%;
     padding: 0.55rem 0.6rem;
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 3px;
     background: var(--raised-bg);
 }
 
@@ -4486,7 +4486,7 @@ function onPopstate() {
     border: 1px solid color-mix(in srgb, var(--accent-teal) 38%, transparent);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
     padding: 0.16rem 0.5rem;
-    border-radius: 999px;
+    border-radius: 2px;
 }
 
 .search-result-path,
@@ -4511,7 +4511,7 @@ function onPopstate() {
     gap: 0.5rem;
     padding: 0.5rem 0.7rem;
     border: 1px solid color-mix(in srgb, var(--accent-teal) 26%, var(--border-color));
-    border-radius: 12px;
+    border-radius: 4px;
     background: linear-gradient(
         180deg,
         color-mix(in srgb, var(--accent-teal) 18%, var(--raised-bg)),
@@ -4567,7 +4567,7 @@ function onPopstate() {
     font-size: 0.68rem;
     color: var(--accent-teal);
     font-variant-numeric: tabular-nums;
-    border-radius: 999px;
+    border-radius: 2px;
     padding: 0.14rem 0.45rem;
     background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-teal) 28%, transparent);
@@ -4750,7 +4750,7 @@ function onPopstate() {
     background: var(--raised-bg);
     color: var(--font-color);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.35rem 0.5rem;
     font-size: 0.85rem;
     font-family: inherit;
@@ -4783,11 +4783,13 @@ function onPopstate() {
     align-items: center;
     gap: 0.2rem;
     background: var(--accent-teal);
-    color: #fff;
-    border-radius: 12px;
+    color: var(--html-bg);
+    border-radius: 2px;
     padding: 0.15rem 0.55rem;
-    font-size: 0.75rem;
-    font-weight: 500;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
     white-space: nowrap;
 }
 
@@ -4823,7 +4825,7 @@ function onPopstate() {
 .tag-remove {
     background: none;
     border: none;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--font-color-secondary);
     cursor: pointer;
     padding: 0;
     font-size: 0.85rem;
@@ -4832,7 +4834,7 @@ function onPopstate() {
 }
 
 .tag-remove:hover {
-    color: #fff;
+    color: var(--heading-color);
 }
 
 .tag-input-wrapper {
@@ -4847,7 +4849,7 @@ function onPopstate() {
     background: transparent;
     color: var(--font-color);
     padding: 0.2rem 0.4rem;
-    border-radius: 12px;
+    border-radius: 4px;
     font-size: 0.75rem;
     outline: none;
     font-family: inherit;
@@ -4865,7 +4867,7 @@ function onPopstate() {
     margin-top: 2px;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     max-height: 160px;
     overflow-y: auto;
     z-index: 50;
@@ -4933,7 +4935,7 @@ function onPopstate() {
     right: 0;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 4px;
     max-height: 260px;
     overflow-y: auto;
     z-index: 50;
@@ -4945,7 +4947,7 @@ function onPopstate() {
     padding: 0.45rem 0.75rem;
     font-size: 0.7rem;
     color: var(--font-color-secondary);
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(63, 224, 207, 0.04);
 }
 
 .parent-dropdown-status {
@@ -4982,7 +4984,7 @@ function onPopstate() {
 }
 
 .parent-dropdown-section-count {
-    border-radius: 999px;
+    border-radius: 2px;
     padding: 0.12rem 0.4rem;
     color: var(--accent-teal);
     background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
@@ -5126,7 +5128,7 @@ function onPopstate() {
     overflow-y: auto;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 4px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
     z-index: 50;
 }
@@ -5145,8 +5147,8 @@ function onPopstate() {
     color: color-mix(in srgb, var(--accent-teal) 70%, var(--font-color-secondary));
     background: linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-teal) 12%, rgba(255, 255, 255, 0.03)),
-        rgba(255, 255, 255, 0.03)
+        color-mix(in srgb, var(--accent-teal) 12%, rgba(63, 224, 207, 0.03)),
+        rgba(63, 224, 207, 0.03)
     );
     border: none;
     border-top: 1px solid var(--border-color);
@@ -5188,26 +5190,26 @@ function onPopstate() {
 }
 
 .link-search-item:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(63, 224, 207, 0.05);
 }
 
 .link-search-section-header.highlighted {
-    box-shadow: inset 4px 0 0 #ffb400;
-    outline: 1px solid rgba(255, 180, 0, 0.35);
-    background: #2f2000;
-    color: #fff;
+    box-shadow: inset 4px 0 0 var(--tag-bg-color);
+    outline: 1px solid rgba(255, 179, 71, 0.35);
+    background: rgba(255, 179, 71, 0.1);
+    color: var(--font-color);
 }
 
 .link-search-item.highlighted {
-    background: #2f2000;
-    color: #fff;
-    box-shadow: inset 4px 0 0 #ffb400;
-    outline: 1px solid rgba(255, 180, 0, 0.35);
+    background: rgba(255, 179, 71, 0.1);
+    color: var(--font-color);
+    box-shadow: inset 4px 0 0 var(--tag-bg-color);
+    outline: 1px solid rgba(255, 179, 71, 0.35);
 }
 
 .link-search-item.highlighted .link-search-meta,
 .link-search-item.highlighted .link-search-relevance {
-    color: rgba(255, 255, 255, 0.92);
+    color: rgba(203, 232, 220, 0.92);
 }
 
 .link-search-body {
@@ -5308,7 +5310,7 @@ function onPopstate() {
 
 .markdown-body :deep(strong),
 .markdown-body :deep(b) {
-    color: #fff;
+    color: var(--font-color);
     font-weight: 700;
 }
 
@@ -5331,7 +5333,7 @@ function onPopstate() {
 .markdown-body :deep(pre) {
     background: var(--panel-bg);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 1rem;
     overflow-x: auto;
     margin: 0.8em 0;
@@ -5350,7 +5352,7 @@ function onPopstate() {
     padding: 0.3em 0.8em;
     margin: 0.8em 0;
     color: var(--font-color-secondary);
-    background: rgba(109, 148, 132, 0.08);
+    background: rgba(63, 224, 207, 0.08);
     border-radius: 0 6px 6px 0;
 }
 
@@ -5396,7 +5398,7 @@ function onPopstate() {
     max-width: 100%;
     max-height: max(25vh, 20em);
     margin: 0.6em auto;
-    border-radius: 6px;
+    border-radius: 3px;
 }
 
 /* Footnotes */
@@ -5425,7 +5427,7 @@ function onPopstate() {
 /* ── Spoiler / accordion ── */
 .markdown-body :deep(details.spoiler) {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     margin: 0.8em 0;
     padding: 0;
     overflow: hidden;
@@ -5440,7 +5442,7 @@ function onPopstate() {
     color: var(--accent-teal);
     background: var(--raised-bg);
     user-select: none;
-    border-radius: 8px;
+    border-radius: 3px;
     transition: background 0.15s;
     list-style: none;
 }
@@ -5455,7 +5457,7 @@ function onPopstate() {
     background: var(--hover-bg);
 }
 .markdown-body :deep(details.spoiler[open] summary) {
-    border-radius: 8px 8px 0 0;
+    border-radius: 3px 8px 0 0;
 }
 /* Inner content wrapper */
 .markdown-body :deep(.spoiler-content) {
@@ -5602,7 +5604,7 @@ function onPopstate() {
 .modal {
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 3px;
     padding: 1.75rem 2rem;
     max-width: 360px;
     width: 90%;
@@ -5639,7 +5641,7 @@ function onPopstate() {
     flex-direction: column;
     gap: 0.5rem;
     padding: 0.9rem 1rem;
-    border-radius: 12px;
+    border-radius: 4px;
     background: var(--panel-bg);
     overflow-wrap: break-word;
     border: 1px solid var(--border-color);
@@ -5709,9 +5711,9 @@ function onPopstate() {
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--accent-teal);
-    background: rgba(109, 148, 132, 0.15);
+    background: rgba(63, 224, 207, 0.15);
     padding: 0.15rem 0.5rem;
-    border-radius: 10px;
+    border-radius: 3px;
 }
 
 /* Message body inside bubbles */
@@ -5725,7 +5727,7 @@ function onPopstate() {
     flex: unset;
     min-height: 120px;
     padding: 0.6rem;
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
     width: 100%;
@@ -5752,7 +5754,7 @@ function onPopstate() {
 }
 
 .btn-thread:hover {
-    background: rgba(109, 148, 132, 0.12);
+    background: rgba(63, 224, 207, 0.12);
     color: var(--accent-teal);
 }
 
@@ -5922,7 +5924,7 @@ function onPopstate() {
 .chat-history-section {
     background: var(--panel-bg);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 3px;
     overflow: hidden;
 }
 
@@ -5948,7 +5950,7 @@ function onPopstate() {
 .composer-title {
     font-size: 0.85rem;
     padding: 0.4rem 0.7rem;
-    border-radius: 8px;
+    border-radius: 3px;
     border: 1px solid var(--border-color);
     background: var(--raised-bg);
     color: var(--font-color);
@@ -5967,7 +5969,7 @@ function onPopstate() {
     flex: 1;
     font-size: 0.85rem;
     padding: 0.45rem 0.7rem;
-    border-radius: 10px;
+    border-radius: 3px;
     border: 1px solid var(--border-color);
     background: var(--raised-bg);
     color: var(--font-color);
@@ -5986,6 +5988,80 @@ function onPopstate() {
     padding: 0.45rem 1.1rem;
     font-size: 0.85rem;
     font-weight: 600;
-    border-radius: 10px;
+    border-radius: 3px;
+}
+/* ================================================
+   HACKER TERMINAL DESIGN OVERRIDES
+   Sharp corners, uppercase micro-labels, prompt glyph.
+   ================================================ */
+
+/* Sidebar header: uppercase wordmark + status micro-chip */
+.sidebar-header {
+    padding: 0.8rem 0.7rem 0.7rem;
+    gap: 0.5rem;
+}
+.sidebar-header .app-logo {
+    width: 2.4rem;
+    height: 2.4rem;
+}
+.app-title {
+    text-transform: uppercase;
+    font-weight: 500;
+    letter-spacing: 0.09em;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+.ws-indicator {
+    flex-shrink: 0;
+    white-space: nowrap;
+    gap: 0.25rem;
+    font-size: 0.64rem;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--border-color);
+    border-radius: 2px;
+    padding: 0.16rem 0.36rem;
+    background: rgba(63, 224, 207, 0.04);
+    color: var(--font-color-secondary);
+}
+.icon-btn {
+    flex-shrink: 0;
+}
+
+/* Search: terminal prompt glyph, square field, cyan tint gradient */
+.search-box {
+    background: linear-gradient(
+        180deg,
+        rgba(63, 224, 207, 0.06),
+        rgba(63, 224, 207, 0)
+    );
+}
+.search-input-row::before {
+    content: ">";
+    position: absolute;
+    left: 0.6rem;
+    color: var(--accent-teal);
+    font-weight: 700;
+    pointer-events: none;
+}
+.search-input {
+    border-radius: 3px;
+    padding-left: 1.55rem;
+    font-size: 0.8rem;
+}
+
+/* Sharp corners instead of soft pills/rounds */
+.search-type-panel,
+.search-section-header,
+.note-item.active,
+.note-item.highlighted {
+    border-radius: 3px;
+}
+.search-result-type {
+    border-radius: 2px;
+}
+
+/* Thinner active markers */
+.note-item {
+    border-left-width: 2px;
 }
 </style>

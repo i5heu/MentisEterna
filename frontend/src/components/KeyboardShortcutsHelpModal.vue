@@ -64,7 +64,7 @@ function close() {
 .modal {
     width: min(100%, 520px);
     padding: 1.25rem;
-    border-radius: 12px;
+    border-radius: 4px;
     border: 1px solid var(--border-color);
     background: var(--panel-bg);
     box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
@@ -135,7 +135,7 @@ function close() {
 .keyboard-shortcuts-key {
     min-width: 9rem;
     padding: 0.22rem 0.55rem;
-    border-radius: 6px;
+    border-radius: 3px;
     border: 1px solid var(--border-color);
     background: var(--raised-bg);
     color: var(--tag-bg-color);

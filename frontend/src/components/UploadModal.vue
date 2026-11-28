@@ -203,16 +203,16 @@ function formatETA(entry) {
 }
 
 .upload-modal {
-    background: var(--panel-bg, #061320);
-    border: 1px solid var(--border-color, #7e7567);
-    border-radius: 12px;
+    background: var(--panel-bg, #041019);
+    border: 1px solid var(--border-color, #143c46);
+    border-radius: 4px;
     width: 420px;
     max-width: 90vw;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
     box-shadow: 0 8px 40px var(--shadow-color, rgba(0, 0, 0, 0.6));
-    color: var(--font-color, #e0e8e4);
+    color: var(--font-color, #cbe8dc);
 }
 
 .modal-header {
@@ -239,8 +239,8 @@ function formatETA(entry) {
 }
 
 .drop-zone {
-    border: 2px dashed var(--border-color, #7e7567);
-    border-radius: 10px;
+    border: 2px dashed var(--border-color, #143c46);
+    border-radius: 3px;
     padding: 32px 20px;
     text-align: center;
     transition: border-color 0.2s, background 0.2s;
@@ -278,7 +278,7 @@ function formatETA(entry) {
     gap: 8px;
     padding: 10px 12px;
     border: 1px solid var(--border-color, #444);
-    border-radius: 8px;
+    border-radius: 3px;
 }
 
 .upload-filename {

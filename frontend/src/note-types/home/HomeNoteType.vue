@@ -235,7 +235,7 @@ function formatDate(dateStr) {
     flex-direction: column;
     align-items: center;
     padding: 0.75rem 1.25rem;
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
     min-width: 5rem;
@@ -283,7 +283,7 @@ function formatDate(dateStr) {
 .mind-dump-section {
     padding: 1rem;
     border: 2px dashed var(--border-color);
-    border-radius: 10px;
+    border-radius: 3px;
     background: var(--raised-bg);
 }
 
@@ -298,7 +298,7 @@ function formatDate(dateStr) {
     padding: 0.6rem 0.75rem;
     font-size: 0.95rem;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     resize: vertical;
     font-family: inherit;
     line-height: 1.5;
@@ -357,7 +357,7 @@ function formatDate(dateStr) {
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 0.6rem;
-    border-radius: 6px;
+    border-radius: 3px;
     cursor: pointer;
     transition: background 0.1s;
 }

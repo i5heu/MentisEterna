@@ -206,7 +206,7 @@ onUnmounted(() => {
     gap: 4px;
     padding: 6px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     background: var(--panel-bg);
     color: var(--font-color);
     cursor: pointer;
@@ -225,7 +225,7 @@ onUnmounted(() => {
 .job-badge {
     background: var(--tag-bg-color);
     color: var(--html-bg);
-    border-radius: 10px;
+    border-radius: 3px;
     padding: 0 6px;
     font-size: 11px;
     font-weight: 600;
@@ -244,7 +244,7 @@ onUnmounted(() => {
     overflow-y: auto;
     background: var(--panel-bg);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     box-shadow: 0 4px 16px var(--shadow-color);
     z-index: 100;
 }
@@ -349,7 +349,7 @@ onUnmounted(() => {
     font-size: 11px;
     line-height: 1;
     padding: 2px 6px;
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--tag-bg-color);
     color: var(--html-bg);
 }
@@ -359,7 +359,7 @@ onUnmounted(() => {
     font-size: 11px;
     line-height: 1;
     padding: 2px 6px;
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
     color: var(--font-color-secondary);
 }

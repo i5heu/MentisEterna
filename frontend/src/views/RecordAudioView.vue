@@ -389,9 +389,9 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #01101f;
-    color: #e8eef5;
-    font-family: system-ui, -apple-system, sans-serif;
+    background: #01070c;
+    color: var(--font-color, #cbe8dc);
+    font-family: var(--font-mono, ui-monospace, monospace);
     padding: 24px;
     box-sizing: border-box;
 }
@@ -401,9 +401,9 @@ onUnmounted(() => {
     max-width: 420px;
     width: 100%;
     padding: 32px 24px;
-    border-radius: 12px;
-    background: #0b1c2e;
-    border: 1px solid #1d3350;
+    border-radius: 4px;
+    background: var(--panel-bg, #041019);
+    border: 1px solid var(--border-color, #143c46);
     box-sizing: border-box;
 }
 
@@ -415,43 +415,43 @@ onUnmounted(() => {
 .card p {
     margin: 0 0 20px;
     line-height: 1.5;
-    color: #a9bcd4;
+    color: var(--font-color-secondary, #7aa695);
 }
 
 .card code {
-    background: #0b1c2e;
+    background: var(--panel-bg, #041019);
     padding: 2px 6px;
     border-radius: 4px;
-    color: #9ad1ff;
+    color: var(--accent-teal, #3fe0cf);
 }
 
 .btn {
     display: inline-block;
     padding: 10px 22px;
     border: none;
-    border-radius: 8px;
-    background: #2b6cb0;
-    color: #fff;
+    border-radius: 3px;
+    background: var(--accent-teal, #3fe0cf);
+    color: var(--html-bg, #01070c);
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 700;
     cursor: pointer;
     text-decoration: none;
 }
 
 .btn:hover {
-    background: #3579c2;
+    background: #5fe9da;
 }
 
 .btn.stop {
-    background: #c0392b;
+    background: var(--heading-color);
 }
 
 .btn.stop:hover {
-    background: #d14a39;
+    background: #ff744d;
 }
 
 .pulse {
-    color: #e74c3c;
+    color: var(--heading-color);
     font-size: 28px;
     animation: pulse 1.2s ease-in-out infinite;
 }
@@ -470,7 +470,7 @@ onUnmounted(() => {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #e74c3c;
+    background: var(--heading-color);
     margin: 0 auto 16px;
     animation: pulse 1.2s ease-in-out infinite;
 }
@@ -480,11 +480,11 @@ onUnmounted(() => {
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     margin: 0 0 24px;
-    color: #e8eef5;
+    color: var(--font-color);
 }
 
 .card a:not(.btn) {
-    color: #9ad1ff;
+    color: var(--accent-teal);
 }
 
 .mic-level {
@@ -494,26 +494,26 @@ onUnmounted(() => {
 .level-track {
     height: 8px;
     border-radius: 4px;
-    background: #1d3350;
+    background: var(--border-color);
     overflow: hidden;
 }
 .level-fill {
     height: 100%;
     border-radius: 4px;
-    background: #2b6cb0;
+    background: var(--accent-teal);
     transition: width 60ms linear;
 }
 .mic-level.speaking .level-fill {
-    background: #4ade80;
+    background: #22c55e;
 }
 .level-label {
     display: block;
     margin-top: 8px;
     font-size: 13px;
-    color: #a9bcd4;
+    color: var(--font-color-secondary);
 }
 .mic-level.speaking .level-label {
-    color: #4ade80;
+    color: #22c55e;
     font-weight: 600;
 }
 
@@ -522,13 +522,13 @@ onUnmounted(() => {
     margin: 0 auto 8px;
     height: 8px;
     border-radius: 4px;
-    background: #1d3350;
+    background: var(--border-color);
     overflow: hidden;
 }
 .upload-fill {
     height: 100%;
     border-radius: 4px;
-    background: #2b6cb0;
+    background: var(--accent-teal);
     transition: width 120ms linear;
 }
 .upload-pct {

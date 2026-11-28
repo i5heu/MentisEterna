@@ -1135,7 +1135,7 @@ function removeIngredient(idx) {
     margin-bottom: 1rem;
     padding: 0.85rem 0.9rem;
     border: 1px dashed var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
 }
 
@@ -1177,7 +1177,7 @@ function removeIngredient(idx) {
 
 .recipe-schema-card {
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     overflow: hidden;
     background: var(--html-bg);
 }
@@ -1254,7 +1254,7 @@ function removeIngredient(idx) {
 .recipe-print-preview {
     margin-bottom: 0.9rem;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
     overflow: hidden;
 }
@@ -1280,7 +1280,7 @@ function removeIngredient(idx) {
     margin: 0 0 0.85rem;
     padding: 0.75rem 0.85rem;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
 }
 

@@ -289,7 +289,14 @@ Note-type rendering is powered by a **registry** in `frontend/src/note-types/reg
 
 ### Theming — dark mode only
 
-The app has a **single dark theme** (no light mode, no toggle). `App.vue` sets
+The app has a **single dark theme** (no light mode, no toggle): a
+curves — a
+**terminal aesthetic** — monospace type everywhere (`--font-mono`), near-black
+surfaces, cyan/teal accents with the amber as the single hot accent, thin
+1px borders, sharp corners (radius system: **2px** chips/badges,
+**3px** inputs/buttons/small controls, **4px** panels/modals — no pills, no
+999px circles), uppercase micro-labels, and a subtle CRT
+scanline overlay (`body::after` in `App.vue`). `App.vue` sets
 `:root { color-scheme: dark }` and defines the tokens below — note there is
 **no `--bg-color` / `--bg-color-secondary` variable** (historical components
 name it and silently eat their fallbacks, which breaks when the fallback is
@@ -297,12 +304,13 @@ light — e.g. a white modal panel). Style anything new from these tokens:
 
 | Token | Value (fallbacks in parens) | Use for |
 |---|---|---|
-| `--panel-bg` (#061320) / `--raised-bg` (#0a1d2d) | dark surfaces | modal/panel backgrounds, badges/chips instead of light grays |
-| `--html-bg` (#01101f) / `--body-bg` (#051b2e) | page layers | full-bleed backdrops |
-| `--font-color` (#e0e8e4) / `--font-color-secondary` (#a5b0ad) | text | primary/secondary text |
-| `--border-color` (#7e7567) | borders | outlines, dividers |
-| `--accent-teal` (#6d9484) | accents | in-body links, highlights |
-| `--shadow-color` (rgba(0,0,0,0.6)) | shadows | panel/elevation shadows |
+| `--panel-bg` (#041019) / `--raised-bg` (#082029) | dark surfaces | modal/panel backgrounds, badges/chips instead of light grays |
+| `--html-bg` (#01070c) / `--body-bg` (#021219) | page layers | full-bleed backdrops |
+| `--font-color` (#cbe8dc) / `--font-color-secondary` (#7aa695) | text | primary/secondary text |
+| `--border-color` (#143c46) | borders | outlines, dividers |
+| `--accent-teal` (#3fe0cf) | accents | in-body links, highlights, focus glow, prompt glyph |
+| `--font-mono` (ui-monospace, JetBrains Mono, … ) | type | everything — the base body font |
+| `--shadow-color` (rgba(3,16,20,0.75)) | shadows | panel/elevation shadows |
 
 Rules of thumb: never hardcode white/light backgrounds (`#fff`, `#fff8`, light
 rgba overlays like `rgba(255,...)`); translucent tint badges (e.g.

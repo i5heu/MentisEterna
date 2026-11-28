@@ -180,11 +180,11 @@ async function doPrint() {
     padding: 0.5rem 1.2rem;
     font-size: 0.95rem;
     border: none;
-    border-radius: 4px;
-    background: var(--amber, #f0a030);
-    color: #fff;
+    border-radius: 3px;
+    background: var(--tag-bg-color, #ffb347);
+    color: var(--html-bg);
     cursor: pointer;
-    font-weight: 600;
+    font-weight: 700;
 }
 
 .btn-amber:disabled {

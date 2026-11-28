@@ -916,7 +916,7 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: center;
     padding: 0.75rem 1.25rem;
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
     min-width: 5rem;
@@ -980,7 +980,7 @@ onBeforeUnmount(() => {
 
 .config-section-card {
     padding: 0.9rem;
-    border-radius: 8px;
+    border-radius: 3px;
     border: 1px solid var(--border-color);
     background: var(--raised-bg);
 }
@@ -1033,7 +1033,7 @@ onBeforeUnmount(() => {
 .score-preview-card {
     padding: 0.75rem 0.9rem;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--raised-bg);
     cursor: pointer;
     transition:
@@ -1067,7 +1067,7 @@ onBeforeUnmount(() => {
 
 .score-pill {
     padding: 0.15rem 0.5rem;
-    border-radius: 999px;
+    border-radius: 2px;
     background: var(--accent-teal-dim);
     color: var(--font-color);
     font-size: 0.75rem;
@@ -1113,7 +1113,7 @@ onBeforeUnmount(() => {
 .daily-task-card {
     padding: 0.75rem 1rem;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     cursor: pointer;
     background: var(--raised-bg);
     min-width: 12rem;
@@ -1167,7 +1167,7 @@ onBeforeUnmount(() => {
 
 .force-badge {
     padding: 0.1rem 0.45rem;
-    border-radius: 999px;
+    border-radius: 2px;
     font-size: 0.68rem;
     font-weight: 600;
 }
@@ -1262,7 +1262,7 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 0.6rem;
-    border-radius: 6px;
+    border-radius: 3px;
     cursor: pointer;
     transition: background 0.1s;
 }

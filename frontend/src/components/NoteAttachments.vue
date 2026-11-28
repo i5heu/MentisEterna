@@ -379,9 +379,9 @@ function formatSize(bytes) {
 }
 .stt-text {
     background: var(--raised-bg, #0d2438);
-    color: var(--font-color, #e0e8e4);
+    color: var(--font-color, #cbe8dc);
     border: 1px solid var(--border-color, #1a2c3d);
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 8px 12px;
     font-size: 0.8rem;
     line-height: 1.5;

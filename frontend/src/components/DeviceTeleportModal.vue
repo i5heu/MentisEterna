@@ -346,9 +346,9 @@ onUnmounted(() => {
 }
 
 .teleport-modal {
-    background: var(--panel-bg, #061320);
-    border: 1px solid var(--border-color, #7e7567);
-    border-radius: 12px;
+    background: var(--panel-bg, #041019);
+    border: 1px solid var(--border-color, #143c46);
+    border-radius: 4px;
     width: 100%;
     max-width: 560px;
     max-height: min(80vh, 720px);
@@ -362,7 +362,7 @@ onUnmounted(() => {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color, #7e7567);
+    border-bottom: 1px solid var(--border-color, #143c46);
 }
 
 .modal-header h2 {
@@ -383,14 +383,14 @@ onUnmounted(() => {
 .teleport-empty {
     margin: 0;
     font-size: 0.85rem;
-    color: var(--font-color-secondary, #a5b0ad);
+    color: var(--font-color-secondary, #7aa695);
     line-height: 1.5;
 }
 
 /* Devices & Teleport */
 .device-card {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.75rem 0.9rem;
     margin-bottom: 0.9rem;
 }
@@ -420,9 +420,9 @@ onUnmounted(() => {
 .teleport-text {
     width: 100%;
     box-sizing: border-box;
-    background: var(--bg-color, transparent);
+    background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     color: var(--font-color);
     font-size: 0.8rem;
     padding: 0.4rem 0.5rem;
@@ -480,7 +480,7 @@ onUnmounted(() => {
 
 .teleport-peer {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.6rem 0.7rem;
     margin-bottom: 0.6rem;
 }
@@ -504,7 +504,7 @@ onUnmounted(() => {
 
 .incoming-item {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.6rem 0.7rem;
     margin-bottom: 0.6rem;
 }
@@ -535,9 +535,9 @@ onUnmounted(() => {
 }
 
 .incoming-text {
-    background: var(--bg-color, transparent);
+    background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.4rem 0.5rem;
     font-size: 0.78rem;
     color: var(--font-color);

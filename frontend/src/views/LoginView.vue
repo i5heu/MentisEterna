@@ -12,6 +12,7 @@
                         :label="getHintLabel('show-shortcuts')"
                     />
                 </span>
+                <div class="brand-sub">NOTE TERMINAL // LOCAL-FIRST // VS</div>
             </div>
 
             <!-- Passkey login: primary, always visible -->
@@ -358,28 +359,47 @@ async function registerPasskey() {
     align-items: center;
     justify-content: center;
     padding: 1rem;
+    background:
+        radial-gradient(
+            ellipse at 50% 28%,
+            rgba(63, 224, 207, 0.05),
+            transparent 55%
+        ),
+        var(--body-bg);
 }
 
 .login-card {
     background: var(--panel-bg);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 4px;
     padding: 2.5rem 2rem;
     width: 100%;
     max-width: 400px;
+    box-shadow:
+        0 0 0 1px rgba(3, 11, 20, 0.9),
+        0 0 44px rgba(63, 224, 207, 0.07),
+        0 18px 50px var(--shadow-color);
 }
 
 .brand {
     text-align: center;
-    margin-bottom: 2rem;
+    margin-bottom: 0.35rem;
 }
 
 .brand-name {
     display: inline-block;
-    font-size: 1.6rem;
-    font-weight: 700;
+    font-size: 1.55rem;
+    font-weight: 500;
     color: var(--header-title-color);
-    letter-spacing: 0.03em;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+}
+
+.brand-sub {
+    font-size: 0.62rem;
+    color: var(--font-color-secondary);
+    letter-spacing: 0.28em;
+    margin: 0.5rem 0 1.75rem;
 }
 
 /* --- Passkey primary button --- */
@@ -387,8 +407,8 @@ async function registerPasskey() {
 .btn-passkey {
     width: 100%;
     padding: 0.7rem 1rem;
-    font-size: 1rem;
-    border-radius: 8px;
+    font-size: 0.88rem;
+    border-radius: 3px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -396,6 +416,7 @@ async function registerPasskey() {
     transition:
         background 0.15s,
         border-color 0.15s,
+        box-shadow 0.15s,
         transform 0.1s;
 }
 .btn-passkey:active:not(:disabled) {
@@ -404,28 +425,33 @@ async function registerPasskey() {
 
 .btn-passkey-primary {
     background: var(--accent-teal);
-    color: #fff;
+    color: #03140f;
     border: 1px solid var(--accent-teal);
-    font-weight: 600;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 .btn-passkey-primary:hover:not(:disabled) {
-    background: var(--accent-teal-dim);
-    border-color: var(--accent-teal-dim);
+    background: #5fe9da;
+    border-color: #5fe9da;
+    box-shadow: 0 0 14px rgba(63, 224, 207, 0.35);
 }
 
 .btn-passkey-register {
-    background: var(--category-bg-color);
-    border: 1px solid var(--accent-teal);
+    background: rgba(63, 224, 207, 0.08);
+    border: 1px solid rgba(63, 224, 207, 0.5);
     color: var(--accent-teal);
-    font-weight: 600;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 .btn-passkey-register:hover:not(:disabled) {
-    background: var(--accent-teal);
-    color: #fff;
+    background: rgba(63, 224, 207, 0.2);
+    box-shadow: 0 0 14px rgba(63, 224, 207, 0.25);
 }
 
 .passkey-icon {
-    font-size: 1.3rem;
+    font-size: 1.15rem;
 }
 
 /* --- Divider --- */
@@ -436,9 +462,9 @@ async function registerPasskey() {
     gap: 0.75rem;
     margin: 1.25rem 0;
     color: var(--font-color-secondary);
-    font-size: 0.75rem;
+    font-size: 0.68rem;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.18em;
 }
 .divider::before,
 .divider::after {
@@ -452,17 +478,19 @@ async function registerPasskey() {
 
 .password-section {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     overflow: hidden;
 }
 .password-toggle {
     display: block;
     padding: 0.6rem 1rem;
-    font-size: 0.85rem;
+    font-size: 0.74rem;
     color: var(--font-color-secondary);
     cursor: pointer;
     user-select: none;
     list-style: none;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
 }
 .password-toggle::-webkit-details-marker {
     display: none;
@@ -486,10 +514,10 @@ async function registerPasskey() {
     margin-bottom: 1rem;
 }
 .field label {
-    font-size: 0.8rem;
+    font-size: 0.68rem;
     color: var(--font-color-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.16em;
 }
 .field input {
     width: 100%;

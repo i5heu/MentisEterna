@@ -193,7 +193,7 @@ watch(localMode, () => {
     margin-bottom: 0.75rem;
     padding: 0.5rem;
     background: var(--raised-bg);
-    border-radius: 6px;
+    border-radius: 3px;
 }
 
 .config-row {
@@ -236,7 +236,7 @@ watch(localMode, () => {
 
 .index-entry {
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     overflow: hidden;
 }
 
@@ -313,7 +313,7 @@ watch(localMode, () => {
 .index-source-badge {
     display: inline-flex;
     align-items: center;
-    border-radius: 999px;
+    border-radius: 2px;
     border: 1px solid var(--border-color);
     padding: 0.1rem 0.45rem;
     font-size: 0.68rem;

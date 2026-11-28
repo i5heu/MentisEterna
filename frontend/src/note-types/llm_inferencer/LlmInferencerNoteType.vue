@@ -988,7 +988,7 @@ async function clearApiKey() {
 .infx-badge {
     font-size: 0.72rem;
     padding: 2px 10px;
-    border-radius: 999px;
+    border-radius: 2px;
     background: rgba(127, 127, 127, 0.14);
     white-space: nowrap;
 }
@@ -1038,7 +1038,7 @@ async function clearApiKey() {
 .infx-select {
     background: var(--bg-2, #1d1f24);
     border: 1px solid rgba(127, 127, 127, 0.3);
-    border-radius: 6px;
+    border-radius: 3px;
     color: inherit;
     padding: 6px 10px;
     font-size: 0.85rem;
@@ -1090,7 +1090,7 @@ async function clearApiKey() {
 .infx-tag {
     font-size: 0.65rem;
     padding: 1px 7px;
-    border-radius: 999px;
+    border-radius: 2px;
     background: rgba(127, 127, 127, 0.16);
     text-transform: none;
 }

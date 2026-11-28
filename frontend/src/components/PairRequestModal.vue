@@ -70,9 +70,9 @@ function respond(requestId, accepted) {
 }
 
 .pair-modal {
-    background: var(--panel-bg, #061320);
-    border: 1px solid var(--border-color, #7e7567);
-    border-radius: 12px;
+    background: var(--panel-bg, #041019);
+    border: 1px solid var(--border-color, #143c46);
+    border-radius: 4px;
     width: 100%;
     max-width: 420px;
     box-shadow: 0 8px 30px var(--shadow-color, rgba(0, 0, 0, 0.6));
@@ -83,7 +83,7 @@ function respond(requestId, accepted) {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color, #7e7567);
+    border-bottom: 1px solid var(--border-color, #143c46);
 }
 
 .modal-header h2 {
@@ -107,7 +107,7 @@ function respond(requestId, accepted) {
 .pair-hint {
     margin: 0.75rem 0 1rem;
     font-size: 0.85rem;
-    color: var(--font-color-secondary, #a5b0ad);
+    color: var(--font-color-secondary, #7aa695);
     line-height: 1.5;
 }
 
@@ -126,10 +126,10 @@ function respond(requestId, accepted) {
 }
 
 .status-label {
-    color: var(--font-color-secondary, #a5b0ad);
+    color: var(--font-color-secondary, #7aa695);
 }
 
 .status-value {
-    color: var(--font-color, #e0e8e4);
+    color: var(--font-color, #cbe8dc);
 }
 </style>

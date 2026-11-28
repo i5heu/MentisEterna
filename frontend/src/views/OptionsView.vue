@@ -1734,7 +1734,7 @@ onMounted(async () => {
 .options-card {
     background: var(--panel-bg);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 4px;
     padding: 2rem;
     width: 100%;
     max-width: 700px;
@@ -1798,7 +1798,7 @@ onMounted(async () => {
     margin-top: 0.75rem;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.75rem 1rem;
 }
 
@@ -1925,7 +1925,7 @@ onMounted(async () => {
     gap: 0.65rem;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.75rem 1rem;
 }
 
@@ -1982,7 +1982,7 @@ onMounted(async () => {
 /* Devices & Teleport */
 .device-card {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.75rem 0.9rem;
     margin-bottom: 0.9rem;
 }
@@ -2004,9 +2004,9 @@ onMounted(async () => {
 .device-name-input {
     flex: 1;
     max-width: 220px;
-    background: var(--bg-color, transparent);
+    background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     color: var(--font-color);
     font-size: 0.8rem;
     padding: 0.3rem 0.5rem;
@@ -2030,15 +2030,15 @@ onMounted(async () => {
     height: 256px;
     margin-top: 0.6rem;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
 }
 
 .pair-code-input {
     width: 100%;
     box-sizing: border-box;
-    background: var(--bg-color, transparent);
+    background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     color: var(--font-color);
     font-size: 0.8rem;
     padding: 0.4rem 0.5rem;

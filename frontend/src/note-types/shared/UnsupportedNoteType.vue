@@ -25,7 +25,7 @@ defineProps({
 .unsupported-type {
     padding: 0.75rem;
     border: 1px dashed var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     background: var(--raised-bg);
 }
 

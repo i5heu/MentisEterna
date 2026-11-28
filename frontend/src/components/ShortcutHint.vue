@@ -21,7 +21,7 @@ const positionClass = computed(() => `shortcut-hint--${props.position}`);
     z-index: 30;
     min-width: 1.5rem;
     padding: 0.15rem 0.35rem;
-    border-radius: 999px;
+    border-radius: 2px;
     border: 1px solid rgba(255, 191, 89, 0.85);
     background: rgba(1, 16, 31, 0.96);
     color: var(--tag-bg-color);

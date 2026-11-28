@@ -240,12 +240,12 @@ const publishedLabel = computed(() => {
 <style scoped>
 .rss-item {
     border: 1px solid var(--border-color, rgba(127, 127, 127, 0.25));
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.55rem 0.7rem;
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
-    background: var(--bg-color, transparent);
+    background: var(--raised-bg);
 }
 
 .rss-item-dimmed {
@@ -292,8 +292,8 @@ const publishedLabel = computed(() => {
 .rss-badge {
     font-size: 0.72rem;
     padding: 0.05rem 0.45rem;
-    border-radius: 99px;
-    background: var(--bg-color-secondary, rgba(127, 127, 127, 0.15));
+    border-radius: 2px;
+    background: rgba(63, 224, 207, 0.1);
     color: var(--font-color-secondary);
     cursor: default;
 }
@@ -349,7 +349,7 @@ const publishedLabel = computed(() => {
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
-    border-left: 2px solid var(--accent-teal, rgba(109, 148, 132, 0.6));
+    border-left: 2px solid var(--accent-teal);
     padding-left: 0.55rem;
 }
 

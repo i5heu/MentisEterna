@@ -1245,15 +1245,15 @@ function feedChipTitle(f) {
 .rss-progressbar {
     position: relative;
     height: 1.15rem;
-    border: 1px solid var(--border-color, #7e7567);
-    border-radius: 99px;
-    background: rgba(109, 148, 132, 0.12);
+    border: 1px solid var(--border-color, #143c46);
+    border-radius: 2px;
+    background: rgba(63, 224, 207, 0.12);
     overflow: hidden;
 }
 
 .rss-progressfill {
     height: 100%;
-    background: var(--accent-teal, #6d9484);
+    background: var(--accent-teal, #3fe0cf);
     transition: width 0.4s ease;
 }
 
@@ -1265,7 +1265,7 @@ function feedChipTitle(f) {
     justify-content: center;
     font-size: 0.72rem;
     letter-spacing: 0.02em;
-    color: var(--font-color, #e0e8e4);
+    color: var(--font-color, #cbe8dc);
     mix-blend-mode: difference;
 }
 
@@ -1282,8 +1282,8 @@ function feedChipTitle(f) {
     gap: 0.25rem;
     font-size: 0.78rem;
     padding: 0.15rem 0.5rem;
-    border-radius: 99px;
-    background: var(--bg-color-secondary, rgba(127, 127, 127, 0.15));
+    border-radius: 2px;
+    background: rgba(63, 224, 207, 0.1);
     color: var(--font-color-secondary);
     cursor: default;
 }
@@ -1383,9 +1383,9 @@ function feedChipTitle(f) {
 .rss-hint-code {
     white-space: pre;
     font-family: var(--font-mono, monospace);
-    background: var(--bg-color-secondary, rgba(127, 127, 127, 0.1));
+    background: rgba(63, 224, 207, 0.08);
     padding: 0.5rem;
-    border-radius: 6px;
+    border-radius: 3px;
     font-size: 0.78rem;
 }
 
@@ -1419,10 +1419,10 @@ function feedChipTitle(f) {
 }
 
 .rss-modal {
-    background: var(--panel-bg, #061320);
-    color: var(--font-color, #e0e8e4);
-    border: 1px solid var(--border-color, #7e7567);
-    border-radius: 10px;
+    background: var(--panel-bg, #041019);
+    color: var(--font-color, #cbe8dc);
+    border: 1px solid var(--border-color, #143c46);
+    border-radius: 3px;
     width: min(760px, 100%);
     max-height: min(86vh, 100%);
     display: flex;
@@ -1449,7 +1449,7 @@ function feedChipTitle(f) {
     flex-wrap: wrap;
     gap: 0.3rem;
     padding: 0 1rem 0.6rem;
-    border-bottom: 1px solid var(--border-color, #7e7567);
+    border-bottom: 1px solid var(--border-color, #143c46);
 }
 
 .rss-chip-quality {
@@ -1466,7 +1466,7 @@ function feedChipTitle(f) {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
-    border-left: 3px solid var(--accent-teal, #6d9484);
+    border-left: 3px solid var(--accent-teal, #3fe0cf);
     padding: 0.35rem 0.8rem;
 }
 
@@ -1504,12 +1504,12 @@ function feedChipTitle(f) {
     font-family: inherit;
     font-size: 0.95rem;
     line-height: 1.6;
-    color: var(--font-color, #e0e8e4);
+    color: var(--font-color, #cbe8dc);
 }
 
 .rss-modal-hint a,
 .rss-modal-body a {
-    color: var(--accent-teal, #6d9484);
+    color: var(--accent-teal, #3fe0cf);
 }
 
 .rss-modal-hint {
@@ -1523,6 +1523,6 @@ function feedChipTitle(f) {
     flex-wrap: wrap;
     gap: 0.4rem;
     padding: 0.6rem 1rem;
-    border-top: 1px solid var(--border-color, #7e7567);
+    border-top: 1px solid var(--border-color, #143c46);
 }
 </style>

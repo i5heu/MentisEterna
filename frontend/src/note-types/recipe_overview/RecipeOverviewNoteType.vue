@@ -1780,7 +1780,7 @@ function viewRecipeFromModal(recipeNoteId) {
 .action-preview {
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.75rem;
 }
 
@@ -1830,13 +1830,13 @@ function viewRecipeFromModal(recipeNoteId) {
     padding: 0.45rem 0.6rem;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
 }
 
 .recipe-thumbnail {
     width: 7rem;
     height: 4.5rem;
-    border-radius: 6px;
+    border-radius: 3px;
     object-fit: cover;
     flex-shrink: 0;
     border: 1px solid var(--border-color);
@@ -2026,7 +2026,7 @@ function viewRecipeFromModal(recipeNoteId) {
 
 .past-list-card {
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.5rem;
     margin-bottom: 0.5rem;
     background: var(--raised-bg);
@@ -2140,7 +2140,7 @@ function viewRecipeFromModal(recipeNoteId) {
     overflow-y: auto;
     background: var(--raised-bg);
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 3px;
     padding: 1rem 1.25rem;
 }
 
@@ -2182,7 +2182,7 @@ function viewRecipeFromModal(recipeNoteId) {
     align-items: flex-start;
     gap: 0.65rem;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.7rem 0.8rem;
     background: var(--html-bg);
     cursor: pointer;
@@ -2228,7 +2228,7 @@ function viewRecipeFromModal(recipeNoteId) {
 
 .unvalid-item {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 3px;
     padding: 0.7rem 0.8rem;
     background: var(--html-bg);
 }

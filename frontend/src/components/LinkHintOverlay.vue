@@ -55,7 +55,7 @@ function badgeClass(label) {
     right: 1rem;
     min-width: 2.25rem;
     padding: 0.3rem 0.65rem;
-    border-radius: 999px;
+    border-radius: 2px;
     border: 1px solid rgba(255, 191, 89, 0.85);
     background: rgba(1, 16, 31, 0.96);
     color: var(--tag-bg-color);
@@ -72,7 +72,7 @@ function badgeClass(label) {
     transform: translateY(-70%);
     min-width: 1.7rem;
     padding: 0.18rem 0.45rem;
-    border-radius: 999px;
+    border-radius: 2px;
     border: 1px solid rgba(255, 191, 89, 0.85);
     background: rgba(1, 16, 31, 0.96);
     color: var(--tag-bg-color);

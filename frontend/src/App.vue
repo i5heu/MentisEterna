@@ -129,39 +129,43 @@ onUnmounted(() => {
     min-height: 100vh;
     display: grid;
     place-items: center;
-    color: var(--font-color, #e0e8e4);
+    color: var(--font-color, #cbe8dc);
 }
 
 :root {
     color-scheme: dark;
 
-    /* Background Foundations */
-    --html-bg: #01101f;
-    --body-bg: #051b2e;
+    /* Background Foundations — near-black with cold blue-green depth */
+    --html-bg: #01070c;
+    --body-bg: #021219;
 
     /* Typography */
-    --font-color: #e0e8e4;
-    --font-color-secondary: #a5b0ad;
-    --header-title-color: #ffbf59;
-    --heading-color: #bf0604;
-    --pre-text-color: #ffcf8a;
-    --date-color: #6d9484;
+    --font-color: #cbe8dc;
+    --font-color-secondary: #7aa695;
+    --header-title-color: #ffb347;
+    --heading-color: #ff5c33;
+    --pre-text-color: #ffd28a;
+    --date-color: #45cfc0;
 
     /* UI Elements & Accents */
-    --border-color: #7e7567;
-    --accent-teal: #6d9484;
-    --category-bg-color: #162a22;
-    --tag-bg-color: #ffbf59;
-    --content-type-bg-color: #960c05;
+    --border-color: #143c46;
+    --accent-teal: #3fe0cf;
+    --category-bg-color: #06231d;
+    --tag-bg-color: #ffb347;
+    --content-type-bg-color: #b23a1a;
 
     /* Effects */
-    --shadow-color: rgba(0, 0, 0, 0.6);
-    --showBorder-color: #01101f;
+    --shadow-color: rgba(3, 16, 20, 0.75);
+    --showBorder-color: #01070c;
 
     /* Surface Layers */
-    --panel-bg: #061320;
-    --raised-bg: #0a1d2d;
-    --accent-teal-dim: #4e6e61;
+    --panel-bg: #041019;
+    --raised-bg: #082029;
+    --accent-teal-dim: #27968a;
+
+    /* System font — terminal mono everywhere */
+    --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "Cascadia Code",
+        "IBM Plex Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
 
     font-size: 15px;
 }
@@ -174,19 +178,43 @@ html {
 body {
     background: var(--body-bg);
     color: var(--font-color);
-    font-family: "Segoe UI", system-ui, sans-serif;
+    font-family: var(--font-mono);
+    letter-spacing: 0.01em;
     min-height: 100vh;
+}
+
+/* CRT scanlines over the whole screen (subtle, click-transparent) */
+body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.18) 0,
+        rgba(0, 0, 0, 0.18) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    opacity: 0.3;
+}
+
+::selection {
+    background: rgba(63, 224, 207, 0.28);
+    color: var(--font-color);
 }
 
 button {
     cursor: pointer;
     border: none;
-    border-radius: 6px;
-    font-size: 0.9rem;
+    border-radius: 3px;
+    font-size: 0.82rem;
     font-family: inherit;
     padding: 0.45rem 1rem;
     transition:
         background 0.15s,
+        border-color 0.15s,
+        box-shadow 0.15s,
         opacity 0.15s;
 }
 
@@ -198,19 +226,21 @@ button:disabled {
 input,
 textarea {
     font-family: inherit;
-    font-size: 0.95rem;
-    background: var(--raised-bg);
+    font-size: 0.92rem;
+    background: #030b14;
     color: var(--font-color);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.5rem 0.75rem;
     outline: none;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 input:focus,
 textarea:focus {
     border-color: var(--accent-teal);
+    box-shadow: 0 0 0 1px rgba(63, 224, 207, 0.25),
+        0 0 14px rgba(63, 224, 207, 0.18);
 }
 
 textarea {
@@ -219,42 +249,55 @@ textarea {
 }
 
 .btn-primary {
-    background: var(--accent-teal);
-    color: #fff;
+    background: rgba(63, 224, 207, 0.12);
+    color: var(--accent-teal);
+    border: 1px solid rgba(63, 224, 207, 0.45);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 .btn-primary:hover:not(:disabled) {
-    background: var(--accent-teal-dim);
+    background: rgba(63, 224, 207, 0.22);
+    border-color: var(--accent-teal);
+    box-shadow: 0 0 12px rgba(63, 224, 207, 0.25);
 }
 
 .btn-amber {
     background: var(--tag-bg-color);
     color: var(--html-bg);
-    font-weight: 600;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
 }
 .btn-amber:hover:not(:disabled) {
-    background: #e8ac47;
+    background: #ffc167;
 }
 
 .btn-danger {
     background: var(--heading-color);
-    color: #fff;
+    color: #170502;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
 }
 .btn-danger:hover:not(:disabled) {
-    background: var(--content-type-bg-color);
+    background: #ff744d;
 }
 
 .btn-ghost {
     background: transparent;
     color: var(--font-color-secondary);
     border: 1px solid var(--border-color);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 .btn-ghost:hover:not(:disabled) {
     background: var(--raised-bg);
     color: var(--font-color);
+    border-color: var(--accent-teal-dim);
 }
 
 .btn-sm {
     padding: 0.2rem 0.5rem;
-    font-size: 0.85rem;
+    font-size: 0.78rem;
 }
 </style>
