@@ -3,6 +3,7 @@ package builtins
 
 import (
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/example"
+	_ "github.com/i5heu/MentisEterna/pkg/notetype/gridfinity"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/home"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/index"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/llminferencer"
@@ -12,4 +13,5 @@ import (
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/rss"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/task"
 	_ "github.com/i5heu/MentisEterna/pkg/notetype/taskoverview"
+	_ "github.com/i5heu/MentisEterna/pkg/notetype/want"
 )

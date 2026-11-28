@@ -27,12 +27,20 @@
 import { defineAsyncComponent } from "vue";
 import { fetchNoteTypes } from "../api.js";
 import { normalizeUsages as normalizeUsageBindings } from "./llm_inferencer/usages.js";
+import { normalizeGridfinityData } from "./gridfinity/normalize.js";
 
 // ---------------------------------------------------------------------------
 // Standard helpers used by several types
 // ---------------------------------------------------------------------------
 
 const NULL_DATA = () => null;
+
+// numberOrNull: finite number or null (unknown) — used by note types whose
+// numeric fields distinguish "unset" from zero.
+const numberOrNull = (v) =>
+    v === null || v === undefined || v === "" || !Number.isFinite(Number(v))
+        ? null
+        : Number(v);
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -394,6 +402,58 @@ const registry = [
             };
         },
         supportsSchemaFallback: false,
+    },
+
+    {
+        id: "gridfinity",
+        label: "Gridfinity",
+        component: defineAsyncComponent(
+            () => import("./gridfinity/GridfinityNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            items: [],
+            totals: {},
+        }),
+        normalizeCustomData(raw, _note) {
+            return normalizeGridfinityData(raw);
+        },
+        supportsSchemaFallback: false,
+        defaultChildType: "want",
+        lazyChildren: true,
+    },
+
+    {
+        id: "want",
+        label: "Wants & Wishes",
+        component: defineAsyncComponent(
+            () => import("./want/WantNoteType.vue"),
+        ),
+        emptyCustomData: () => ({
+            acquisition_cost: null,
+            operating_expenses_per_month: null,
+            disposal_costs: null,
+            potential_profit_per_month: null,
+            durability_years: null,
+            space_requirements_m3: null,
+        }),
+        normalizeCustomData(raw, _note) {
+            return {
+                acquisition_cost: numberOrNull(raw?.acquisition_cost),
+                operating_expenses_per_month: numberOrNull(
+                    raw?.operating_expenses_per_month,
+                ),
+                disposal_costs: numberOrNull(raw?.disposal_costs),
+                potential_profit_per_month: numberOrNull(
+                    raw?.potential_profit_per_month,
+                ),
+                durability_years: numberOrNull(raw?.durability_years),
+                space_requirements_m3: numberOrNull(
+                    raw?.space_requirements_m3,
+                ),
+            };
+        },
+        supportsSchemaFallback: false,
+        supportsActions: true,
     },
 
     {

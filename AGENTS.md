@@ -223,6 +223,8 @@ Tunnel (client side): `go test ./internal/mcptunnel/` and
 | `pkg/notetype/recipe/` | `recipe` | Ingredient table (name, amount, unit) + metadata fields | ConfigValidator, ConfigSaver, ConfigLoader |
 | `pkg/notetype/recipeoverview/` | `recipe_overview` | Dashboard aggregating all recipes + "Generate Grocery List" RPC action | ViewBuilder, ActionHandler |
 | `pkg/notetype/index/` | `index` | Tag-based note index (global or local scope) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder |
+| `pkg/notetype/want/` | `want` | "Wants & Wishes": one desired purchase per note — nullable cost fields (acquisition, operating/month, disposal, potential profit/month, durability years, space m³; NULL = unknown, never zero) in `ct_want_config` + an append-only urge log (`ct_want_log`) fed by the `log_want` ("Today I wanted this") action; `remove_want_log`/`clear_want_log` maintain it. Every action returns the fresh view (log aggregates + server-computed metrics: monthly net, lifetime, total cost of ownership, cost/month, payback — a metric is null whenever an input is unknown; math in `want.ComputeMetrics`) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler |
+| `pkg/notetype/gridfinity/` | `gridfinity` | Singleton overview dashboard aggregating **all** `want` notes (reads `ct_want_config`/`ct_want_log` directly, like recipe_overview reads recipe tables): per-item urge stats + metrics, summary totals (known values only); search/filter/sort happen client-side (`frontend/src/note-types/gridfinity/dashboard.js`, pure + unit-tested) | ViewBuilder |
 | `pkg/notetype/llminferencer/` | `llm_inferencer` | The app's single LLM inference provider note (singleton: OpenRouter / Mistral / any OpenAI-compatible endpoint) with big/middle/small/tiny tier models and usage mappings (`{tier}`/`{model}`/`{local: true}` pin to config.toml); write-only API key; `ResolveChat(db, usage)` resolves globally, falling back to config.toml (the per-usage system defaults are shown in the view); also owns the app-wide **LLM call statistics ledger** (`ct_llm_inferencer_stats`: per-call tokens/routing/model/latency/errors — 90-day retention cron, `clear_stats` action, aggregates + local↔remote split in the view) — see [docs/LLMInferencer.md](docs/LLMInferencer.md) §6 | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, CallStatsRecorder, CronJobs |
 | `pkg/notetype/rss/` | `rss` (+ marker type `rss_prompt`) | RSS reader: fetch + full-content extraction + LLM significance evaluation (significance / negativity / personal relevance / humans affected → **0–10 ranking points**) and a telegraph F/O/Q **summarizer** pass (what changed / why / implications, shown on cards); ban words / penalty points / `min_points` / `weights` rules typed in the reader note's body; points-ranked timeline, rejected bucket, `reclassify_all` / `evaluate_missing` / `summarize_missing`) — see [docs/RSSReader.md](docs/RSSReader.md) | ConfigValidator, ConfigSaver, ConfigLoader, ViewBuilder, ActionHandler, JobEnqueuer, ProgressReporter, CronJobs — see [docs/RSSReader.md](docs/RSSReader.md) |
 
@@ -416,8 +418,16 @@ frontend/src/note-types/
 ├── example/
 │   ├── ChecklistNoteType.vue            # Checklist editor
 │   └── index.js
-└── index/
-    ├── IndexNoteType.vue                # Tag index viewer
+├── gridfinity/
+│   ├── GridfinityNoteType.vue           # Wants dashboard (search/filter/sort)
+│   ├── dashboard.js                     # Pure filter/sort/format logic (unit-tested)
+│   ├── normalize.js                     # Server-payload normalization
+│   └── index.js
+├── index/
+│   ├── IndexNoteType.vue                # Tag index viewer
+│   └── index.js
+└── want/
+    ├── WantNoteType.vue                 # Cost fields + "Today I wanted this" log
     └── index.js
 ```
 
