@@ -168,9 +168,29 @@ fast_workers = 3   # dedicated pool for high-priority (interactive) jobs
 
 ## Testing
 
-`go test ./internal/jobs/` is hermetic (in-memory SQLite, no VSS/LLM):
-immediate wakeup, fast-lane isolation, max-parallel enforcement, progress
-persistence, auto-retry-with-backoff, watchdog timeouts, lost-claim cleanup,
-cron pile-up prevention, graceful shutdown, dedupe, cancel races, stats.
+`go test ./internal/jobs/` is hermetic (in-memory SQLite, no VSS/LLM) and
+mirrors the package layout — one test file per source file:
+
+| File | Focus |
+|---|---|
+| `jobs_test.go` | shared helpers + core behavior: wakeup, fast-lane isolation, max-parallel, progress persistence, auto-retry, watchdog, cancel races, dedupe |
+| `util_test.go` | timestamp round-trip (rapid PBT), log formatting, error wrap |
+| `lifecycle_test.go` | manager defaults, nil-receiver guards, janitor, Start error paths, Stop idempotency |
+| `queue_api_test.go` | Enqueue/RetryRun/CancelRun guards, ListRuns shape/limit, orphan-definition execution |
+| `scheduler_test.go` | schedule parsing (incl. `@every 0` rejection), tick bounds, ad-hoc registration, disabled/deleted definitions |
+| `progress_test.go` | progress clamps, throttle gates, drop-after-finalize |
+| `finalize_test.go` | exactly-once terminal writes, ledger-vs-model PBT, backoff bounds PBT, auto-retry policy |
+| `stats_test.go` | empty-DB snapshot, 24h window, per-definition ledger, busy split per lane, retry wakeups |
+| `faults_test.go` | fault propagation (missing tables, aborted UPDATE) |
+
+Property-based tests use `pgregory.net/rapid`; structural assertions use
+`github.com/google/go-cmp` (both already module dependencies). Run with
+`-race` before shipping changes:
+
+```bash
+go test ./internal/jobs/ -race -count=2
+go test ./internal/jobs/ -cover   # currently ~93% of statements
+```
+
 Migration coverage (v1 schema → v2 columns/ledger/backfill) lives in
 `internal/db/db_test.go`.

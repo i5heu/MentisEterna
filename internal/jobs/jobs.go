@@ -317,33 +317,43 @@ func (m *Manager) Start() error {
 		m.workers, m.fastWorker, m.registeredDefinitionCount())
 
 	// Launch a scheduler goroutine for every enabled cron definition.
+	// Two-phase (collect rows first, then process): keeps queries off
+	// the connection while the cursor is open — nested
+	// query-while-Rows-here deadlocks single-connection databases.
 	rows, err := m.db.Query(`SELECT id, schedule FROM job_definitions WHERE enabled = 1`)
 	if err != nil {
 		return fmtError("load job definitions", err)
 	}
-	defer rows.Close()
-
-	var wg sync.WaitGroup
+	type schedDef struct {
+		id       int64
+		schedule string
+	}
+	var cronDefs []schedDef
 	for rows.Next() {
-		var id int64
-		var schedule string
-		if err := rows.Scan(&id, &schedule); err != nil {
+		var sd schedDef
+		if err := rows.Scan(&sd.id, &sd.schedule); err != nil {
+			rows.Close()
 			return fmtError("scan job definition", err)
 		}
+		cronDefs = append(cronDefs, sd)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmtError("iterate job definitions", err)
+	}
+
+	var wg sync.WaitGroup
+	for _, sd := range cronDefs {
 		// Empty schedule means ad-hoc only (no cron), skip scheduler.
-		if schedule == "" {
+		if sd.schedule == "" {
 			continue
 		}
-		meta := m.lookupDefinition(id)
-		if !m.hasTask(id) {
-			log.Printf("jobs: scheduler skipped for unregistered definition %s schedule=%q", formatJobMeta(meta), schedule)
+		if !m.hasTask(sd.id) {
+			log.Printf("jobs: scheduler skipped for unregistered definition def_id=%d schedule=%q", sd.id, sd.schedule)
 			continue
 		}
 		wg.Add(1)
-		go m.runScheduler(id, schedule, &wg)
-	}
-	if err := rows.Err(); err != nil {
-		return fmtError("iterate job definitions", err)
+		go m.runScheduler(sd.id, sd.schedule, &wg)
 	}
 
 	// Watchdog: timeouts, lost claims, delayed-retry wakeups.

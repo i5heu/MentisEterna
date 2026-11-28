@@ -93,13 +93,15 @@ func (m *Manager) Stats() (*StatsResponse, error) {
 	resp.Workers.Idle = resp.Workers.Total - resp.Workers.Busy - resp.Workers.FastBusy
 	resp.Workers.FastIdle = resp.Workers.FastTotal - resp.Workers.FastBusy
 
-	// Queue depth.
+	// Queue depth. COALESCE: SUM over zero rows is NULL in SQLite, and
+	// scanning it into an int fails — a fresh install (or a fully
+	// pruned run history) must return zeros, not an error.
 	if err := m.db.QueryRow(
 		`SELECT
-		   SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
-		   SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
-		   SUM(CASE WHEN status = ? AND next_run_at IS NOT NULL
-		              AND next_run_at > strftime('%Y-%m-%dT%H:%M:%fZ','now') THEN 1 ELSE 0 END)
+		   COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		   COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		   COALESCE(SUM(CASE WHEN status = ? AND next_run_at IS NOT NULL
+		              AND next_run_at > strftime('%Y-%m-%dT%H:%M:%fZ','now') THEN 1 ELSE 0 END), 0)
 		 FROM job_runs`,
 		StatusPlanned, StatusRunning, StatusPlanned,
 	).Scan(&resp.Queue.Planned, &resp.Queue.Running, &resp.Queue.Delayed); err != nil {
@@ -180,8 +182,13 @@ func (m *Manager) Stats() (*StatsResponse, error) {
 		if attempted := ds.RunsDone + ds.RunsErrored; attempted > 0 {
 			ds.SuccessRate = float64(ds.RunsDone) / float64(attempted)
 		}
-		if ds.RunsDone > 0 {
-			ds.AvgDurationMS = ds.TotalDurationMS / int64(ds.RunsDone)
+		// The ledger's total_duration_ms sums every fold (done AND
+		// errored runs have real durations — timeouts especially), so
+		// the honest average is over done+errored attempts, not done
+		// alone (dividing by RunsDone would inflate jobs that fail
+		// slowly and report 0 for jobs that always fail).
+		if attempts := ds.RunsDone + ds.RunsErrored; attempts > 0 {
+			ds.AvgDurationMS = ds.TotalDurationMS / int64(attempts)
 		}
 		resp.Definitions = append(resp.Definitions, ds)
 	}

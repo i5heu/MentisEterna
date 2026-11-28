@@ -93,7 +93,10 @@ func parseSimpleSchedule(schedule string) (time.Duration, bool) {
 	switch {
 	case strings.HasPrefix(schedule, "@every "):
 		d, err := time.ParseDuration(strings.TrimPrefix(schedule, "@every "))
-		if err != nil {
+		// Non-positive intervals (e.g. "@every 0") would spin the
+		// scheduler in a hot loop hammering the DB checks — treat
+		// them as unsupported so the scheduler exits instead.
+		if err != nil || d <= 0 {
 			return 0, false
 		}
 		return d, true

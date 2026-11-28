@@ -15,7 +15,8 @@ import (
 
 // --- Test helpers ---
 
-func openTestDB(t *testing.T) *sql.DB {
+// openTestDB accepts testing.TB so rapid property tests can drive it too.
+func openTestDB(t testing.TB) *sql.DB {
 	t.Helper()
 	d, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
@@ -99,7 +100,7 @@ func migrateTestDB(d *sql.DB) error {
 
 // newTestManager returns a manager wired for hermetic tests: fast poll,
 // fast watchdog, short progress throttle.
-func newTestManager(t *testing.T, d *sql.DB) *Manager {
+func newTestManager(t testing.TB, d *sql.DB) *Manager {
 	t.Helper()
 	m := NewManager(d, 2, 1)
 	m.pollInterval = 20 * time.Millisecond
@@ -110,7 +111,7 @@ func newTestManager(t *testing.T, d *sql.DB) *Manager {
 }
 
 // startManager starts the manager and stops it on test cleanup.
-func startManager(t *testing.T, m *Manager) {
+func startManager(t testing.TB, m *Manager) {
 	t.Helper()
 	if err := m.Start(); err != nil {
 		t.Fatalf("start manager: %v", err)
@@ -131,7 +132,7 @@ func waitUntil(timeout time.Duration, cond func() bool) bool {
 }
 
 // runStatus loads a run row's status (+ optional error text).
-func fetchRun(t *testing.T, d *sql.DB, runID int64) (status string, errText string) {
+func fetchRun(t testing.TB, d *sql.DB, runID int64) (status string, errText string) {
 	t.Helper()
 	var errStr sql.NullString
 	if err := d.QueryRow(`SELECT status, COALESCE(error,'') FROM job_runs WHERE id = ?`, runID).Scan(&status, &errStr); err != nil {
@@ -140,7 +141,7 @@ func fetchRun(t *testing.T, d *sql.DB, runID int64) (status string, errText stri
 	return status, errStr.String
 }
 
-func runCountByStatus(t *testing.T, d *sql.DB, jobID int64) map[string]int {
+func runCountByStatus(t testing.TB, d *sql.DB, jobID int64) map[string]int {
 	t.Helper()
 	rows, err := d.Query(`SELECT status, COUNT(*) FROM job_runs WHERE job_id = ? GROUP BY status`, jobID)
 	if err != nil {
@@ -486,7 +487,7 @@ func TestProgressReportsPersistAndStream(t *testing.T) {
 	}
 }
 
-func statusDone(t *testing.T, d *sql.DB, runID int64) bool {
+func statusDone(t testing.TB, d *sql.DB, runID int64) bool {
 	status, _ := fetchRun(t, d, runID)
 	return status == StatusDone
 }
